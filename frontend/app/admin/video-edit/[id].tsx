@@ -20,6 +20,7 @@ import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { api } from "@/src/api/client";
 import { storage } from "@/src/utils/storage";
+import { showAlert } from "@/src/utils/dialog";
 import { colors, spacing, radii } from "@/src/theme";
 
 const BASE = process.env.EXPO_PUBLIC_BACKEND_URL || "";
@@ -85,7 +86,7 @@ export default function VideoEdit() {
           });
         }
       } catch (e: any) {
-        Alert.alert("Erreur", e.message);
+        showAlert("Erreur", e.message);
       } finally {
         setLoading(false);
       }
@@ -95,6 +96,7 @@ export default function VideoEdit() {
   const set = (k: keyof Form, v: any) => setForm((f) => ({ ...f, [k]: v }));
 
   const upload = async (target: "poster" | "trailer" | "full") => {
+    const startedAt = Date.now();
     try {
       let asset: { uri: string; name?: string; mimeType?: string; size?: number } | null = null;
       if (target === "poster") {
@@ -158,6 +160,10 @@ export default function VideoEdit() {
         xhr.send(fd as any);
       });
 
+      // Minimum 800ms visible so the user sees the gauge even for fast uploads
+      const elapsed = Date.now() - startedAt;
+      if (elapsed < 800) await new Promise((r) => setTimeout(r, 800 - elapsed));
+
       if (target === "poster") set("poster_url", result.url);
       else if (target === "trailer") set("trailer_url", result.url);
       else set("full_url", result.url);
@@ -165,7 +171,7 @@ export default function VideoEdit() {
       setProgress((p) => ({ ...p, [target]: 100 }));
       setUploadedStatus((s) => ({ ...s, [target]: true }));
     } catch (e: any) {
-      Alert.alert("Erreur d'upload", e.message || "Téléversement échoué. Vérifiez votre connexion ou essayez un fichier plus petit.");
+      showAlert("Erreur d'upload", e.message || "Téléversement échoué. Vérifiez votre connexion ou essayez un fichier plus petit.");
       setProgress((p) => ({ ...p, [target]: undefined }));
     } finally {
       setUploading(null);
@@ -174,7 +180,7 @@ export default function VideoEdit() {
 
   const save = async () => {
     if (!form.title.trim()) {
-      Alert.alert("Erreur", "Le titre est requis");
+      showAlert("Erreur", "Le titre est requis");
       return;
     }
     setSaving(true);
@@ -190,7 +196,7 @@ export default function VideoEdit() {
       }
       router.back();
     } catch (e: any) {
-      Alert.alert("Erreur", e.message);
+      showAlert("Erreur", e.message);
     } finally {
       setSaving(false);
     }
@@ -319,20 +325,25 @@ function UploadButton({ icon, label, uploading, progress, done, disabled, onPres
     return (
       <View style={styles.progressContainer} testID={`${testID}-progress`}>
         <View style={styles.progressHeader}>
-          <Ionicons name="cloud-upload" size={16} color={colors.gold} />
-          <Text style={styles.progressLabel}>Téléversement en cours… {pct}%</Text>
+          <ActivityIndicator size="small" color={colors.gold} />
+          <Text style={styles.progressLabel}>
+            {pct === 0 ? "Préparation du fichier…" : `Téléversement en cours… ${pct}%`}
+          </Text>
         </View>
         <View style={styles.progressTrack}>
-          <View style={[styles.progressFill, { width: `${pct}%` }]} />
+          <View style={[styles.progressFill, { width: `${Math.max(pct, 5)}%` }]} />
         </View>
+        <Text style={styles.progressHint}>
+          ⏳ Ne quittez pas cette page tant que la jauge n&apos;est pas verte.
+        </Text>
       </View>
     );
   }
   if (done) {
     return (
       <View style={styles.uploadDone} testID={`${testID}-done`}>
-        <Ionicons name="checkmark-circle" size={18} color={colors.success} />
-        <Text style={styles.uploadDoneTxt}>Fichier téléversé avec succès</Text>
+        <Ionicons name="checkmark-circle" size={20} color={colors.success} />
+        <Text style={styles.uploadDoneTxt}>Fichier téléversé ✓</Text>
         <TouchableOpacity onPress={onPress} disabled={disabled}>
           <Text style={styles.uploadReplaceTxt}>Remplacer</Text>
         </TouchableOpacity>
@@ -371,14 +382,15 @@ const styles = StyleSheet.create({
   posterPreview: { width: 100, height: 150, borderRadius: 6, marginBottom: 8 },
   uploadBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 8, paddingVertical: 12, borderRadius: radii.sm, borderWidth: 1, borderColor: colors.border, borderStyle: "dashed" },
   uploadTxt: { color: colors.gold, fontWeight: "600", fontSize: 13 },
-  progressContainer: { marginTop: 8, padding: 12, borderRadius: radii.sm, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.gold },
-  progressHeader: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 8 },
-  progressLabel: { color: colors.ivory, fontSize: 13, fontWeight: "600" },
-  progressTrack: { height: 8, backgroundColor: "rgba(255,255,255,0.08)", borderRadius: 4, overflow: "hidden" },
-  progressFill: { height: 8, backgroundColor: colors.gold, borderRadius: 4 },
-  uploadDone: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 8, padding: 12, borderRadius: radii.sm, backgroundColor: "rgba(46,125,50,0.12)", borderWidth: 1, borderColor: "rgba(46,125,50,0.5)" },
-  uploadDoneTxt: { color: colors.ivory, fontSize: 13, fontWeight: "600", flex: 1 },
-  uploadReplaceTxt: { color: colors.gold, fontSize: 12, fontWeight: "700", textDecorationLine: "underline" },
+  progressContainer: { marginTop: 8, padding: 14, borderRadius: radii.sm, backgroundColor: colors.surface, borderWidth: 1.5, borderColor: colors.gold },
+  progressHeader: { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 10 },
+  progressLabel: { color: colors.ivory, fontSize: 14, fontWeight: "700" },
+  progressTrack: { height: 10, backgroundColor: "rgba(255,255,255,0.08)", borderRadius: 5, overflow: "hidden" },
+  progressFill: { height: 10, backgroundColor: colors.gold, borderRadius: 5 },
+  progressHint: { color: colors.textSecondary, fontSize: 11, marginTop: 8, fontStyle: "italic" },
+  uploadDone: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 8, padding: 14, borderRadius: radii.sm, backgroundColor: "rgba(46,125,50,0.15)", borderWidth: 1.5, borderColor: colors.success },
+  uploadDoneTxt: { color: colors.ivory, fontSize: 14, fontWeight: "700", flex: 1 },
+  uploadReplaceTxt: { color: colors.gold, fontSize: 13, fontWeight: "700", textDecorationLine: "underline" },
   switchRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", backgroundColor: colors.surface, padding: spacing.md, borderRadius: radii.sm, marginBottom: spacing.sm },
   saveBtn: { backgroundColor: colors.gold, paddingVertical: 16, borderRadius: radii.sm, alignItems: "center", marginTop: spacing.lg },
   saveTxt: { color: "#0A0A0A", fontWeight: "700", fontSize: 15, letterSpacing: 0.5 },
