@@ -90,6 +90,18 @@ export default function ProfileScreen() {
           />
         </Section>
 
+        {user.is_admin && (
+          <Section title="Administration">
+            <Item
+              icon="shield-checkmark-outline"
+              label="Espace Admin"
+              onPress={() => router.push("/admin")}
+              testID="profile-admin-btn"
+              accent
+            />
+          </Section>
+        )}
+
         <Section title="Application">
           <Item icon="tv-outline" label="Version TV (bientôt)" disabled testID="profile-tv-btn" />
           <Item icon="information-circle-outline" label="À propos" disabled testID="profile-about-btn" />
