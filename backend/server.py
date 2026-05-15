@@ -312,41 +312,48 @@ async def my_library(current: dict = Depends(get_current_user)):
 # --- STRIPE SUBSCRIPTION ---
 @api_router.post("/billing/checkout")
 async def create_checkout(body: CheckoutRequest, current: dict = Depends(get_current_user)):
-    if not STRIPE_API_KEY:
-        raise HTTPException(status_code=503, detail="Stripe non configuré")
-    # ensure customer
-    customer_id = current.get("stripe_customer_id")
-    if not customer_id:
-        cust = stripe.Customer.create(email=current["email"], name=current.get("full_name", ""))
-        customer_id = cust.id
-        await db.users.update_one({"id": current["id"]}, {"$set": {"stripe_customer_id": customer_id}})
+    if not STRIPE_API_KEY or STRIPE_API_KEY == "sk_test_emergent":
+        raise HTTPException(
+            status_code=503,
+            detail="Stripe non configuré. Veuillez fournir une vraie clé Stripe sk_test_... dans STRIPE_API_KEY.",
+        )
+    try:
+        # ensure customer
+        customer_id = current.get("stripe_customer_id")
+        if not customer_id:
+            cust = stripe.Customer.create(email=current["email"], name=current.get("full_name", ""))
+            customer_id = cust.id
+            await db.users.update_one({"id": current["id"]}, {"$set": {"stripe_customer_id": customer_id}})
 
-    success_url = body.success_url or f"{APP_PUBLIC_URL}/subscription?status=success"
-    cancel_url = body.cancel_url or f"{APP_PUBLIC_URL}/subscription?status=cancel"
+        success_url = body.success_url or f"{APP_PUBLIC_URL}/subscription?status=success&session_id={{CHECKOUT_SESSION_ID}}"
+        cancel_url = body.cancel_url or f"{APP_PUBLIC_URL}/subscription?status=cancel"
 
-    session = stripe.checkout.Session.create(
-        mode="subscription",
-        customer=customer_id,
-        line_items=[{
-            "price_data": {
-                "currency": STRIPE_PRICE_CURRENCY,
-                "product_data": {"name": "Wedding Stream — Abonnement Premium"},
-                "recurring": {"interval": "month"},
-                "unit_amount": STRIPE_PRICE_AMOUNT,
-            },
-            "quantity": 1,
-        }],
-        success_url=success_url,
-        cancel_url=cancel_url,
-        metadata={"user_id": current["id"]},
-    )
-    await db.checkout_sessions.insert_one({
-        "session_id": session.id,
-        "user_id": current["id"],
-        "status": "pending",
-        "created_at": utcnow(),
-    })
-    return {"url": session.url, "session_id": session.id}
+        session = stripe.checkout.Session.create(
+            mode="subscription",
+            customer=customer_id,
+            line_items=[{
+                "price_data": {
+                    "currency": STRIPE_PRICE_CURRENCY,
+                    "product_data": {"name": "Wedding Stream — Abonnement Premium"},
+                    "recurring": {"interval": "month"},
+                    "unit_amount": STRIPE_PRICE_AMOUNT,
+                },
+                "quantity": 1,
+            }],
+            success_url=success_url,
+            cancel_url=cancel_url,
+            metadata={"user_id": current["id"]},
+        )
+        await db.checkout_sessions.insert_one({
+            "session_id": session.id,
+            "user_id": current["id"],
+            "status": "pending",
+            "created_at": utcnow(),
+        })
+        return {"url": session.url, "session_id": session.id}
+    except stripe.error.StripeError as e:  # type: ignore[attr-defined]
+        logging.warning(f"Stripe error: {e}")
+        raise HTTPException(status_code=502, detail=f"Erreur Stripe: {str(e)}")
 
 
 @api_router.get("/billing/status")
