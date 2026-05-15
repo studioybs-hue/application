@@ -86,6 +86,8 @@ class Video(BaseModel):
     is_featured: bool = False
     is_top_france: bool = False
     is_private: bool = True
+    client_id: Optional[str] = None  # groups videos belonging to the same wedding
+    client_name: Optional[str] = None
     created_at: datetime
 
 
@@ -156,6 +158,7 @@ def user_to_public(u: dict) -> UserPublic:
 
 
 def video_to_public(v: dict, include_full: bool = False) -> dict:
+    cid = v.get("client_id") or slugify(v.get("title", ""))
     return {
         "id": v["id"],
         "title": v["title"],
@@ -169,7 +172,23 @@ def video_to_public(v: dict, include_full: bool = False) -> dict:
         "is_featured": v.get("is_featured", False),
         "is_top_france": v.get("is_top_france", False),
         "is_private": v.get("is_private", True),
+        "client_id": cid,
+        "client_name": v.get("client_name") or v.get("title", ""),
     }
+
+
+def slugify(text: str) -> str:
+    import re
+    text = text.lower().strip()
+    text = re.sub(r"[àâäáã]", "a", text)
+    text = re.sub(r"[éèêë]", "e", text)
+    text = re.sub(r"[îï]", "i", text)
+    text = re.sub(r"[ôö]", "o", text)
+    text = re.sub(r"[ùûü]", "u", text)
+    text = re.sub(r"[ç]", "c", text)
+    text = re.sub(r"[^a-z0-9]+", "-", text)
+    text = re.sub(r"^-+|-+$", "", text)
+    return text or "wedding"
 
 
 async def get_current_user(
@@ -257,6 +276,139 @@ async def list_public_videos():
     # sort featured top-france first
     result["featured"].sort(key=lambda x: (not x["is_top_france"], x["title"]))
     return result
+
+
+# --- WEDDINGS (grouped by client_id) ---
+def _group_by_wedding(videos: list[dict]) -> dict:
+    by_client: dict[str, dict] = {}
+    for v in videos:
+        cid = v.get("client_id") or slugify(v.get("title", ""))
+        name = v.get("client_name") or v.get("title", "")
+        if cid not in by_client:
+            by_client[cid] = {
+                "client_id": cid,
+                "client_name": name,
+                "poster_url": v.get("poster_url", ""),
+                "hero_url": v.get("hero_url") or v.get("poster_url", ""),
+                "description": v.get("description", ""),
+                "is_featured": False,
+                "is_top_france": False,
+                "video_count": 0,
+                "total_minutes": 0,
+                "videos": [],
+            }
+        w = by_client[cid]
+        w["video_count"] += 1
+        w["total_minutes"] += int(v.get("duration_minutes", 0) or 0)
+        if v.get("is_featured"):
+            w["is_featured"] = True
+            w["poster_url"] = v.get("poster_url", w["poster_url"])
+            w["hero_url"] = v.get("hero_url") or v.get("poster_url", w["hero_url"])
+            w["description"] = v.get("description", w["description"])
+        if v.get("is_top_france"):
+            w["is_top_france"] = True
+    return by_client
+
+
+@api_router.get("/weddings/public")
+async def list_public_weddings():
+    """List of weddings (grouped from videos). Public — no full URLs."""
+    videos = await db.videos.find({}, {"_id": 0}).to_list(500)
+    grouped = _group_by_wedding(videos)
+    weddings = list(grouped.values())
+    weddings.sort(key=lambda w: (not w["is_top_france"], not w["is_featured"], w["client_name"]))
+    return {
+        "featured": [w for w in weddings if w["is_featured"]],
+        "weddings": weddings,
+    }
+
+
+@api_router.get("/weddings/{client_id}")
+async def get_wedding(client_id: str, current: Optional[dict] = Depends(get_optional_user)):
+    videos = await db.videos.find({}, {"_id": 0}).to_list(500)
+    # filter to this client
+    filtered = [v for v in videos if (v.get("client_id") or slugify(v.get("title", ""))) == client_id]
+    if not filtered:
+        raise HTTPException(status_code=404, detail="Mariage introuvable")
+    # check unlock status
+    unlocked = False
+    if current:
+        if current.get("is_admin") or current.get("is_subscribed"):
+            unlocked = True
+        else:
+            u = await db.user_unlocks.find_one({"user_id": current["id"], "client_id": client_id})
+            unlocked = bool(u)
+    grouped = _group_by_wedding(filtered)
+    wedding = next(iter(grouped.values()))
+    wedding["unlocked"] = unlocked
+    wedding["videos"] = [video_to_public(v, include_full=unlocked) for v in filtered]
+    # sort videos by category preferring chronological wedding day order
+    cat_order = {"À l'affiche": 0, "Cérémonies": 1, "Soirées": 2, "Best Of": 3}
+    wedding["videos"].sort(key=lambda x: cat_order.get(x.get("category", ""), 99))
+    return wedding
+
+
+@api_router.post("/weddings/unlock")
+async def unlock_wedding(body: UnlockRequest, current: dict = Depends(get_current_user)):
+    """Enter a code to unlock an entire wedding (all videos for that client)."""
+    code = body.code.strip().upper()
+    rec = await db.unlock_codes.find_one({"code": code, "is_active": True}, {"_id": 0})
+    if not rec:
+        raise HTTPException(status_code=404, detail="Code invalide")
+    if rec.get("expires_at") and rec["expires_at"] < utcnow():
+        raise HTTPException(status_code=410, detail="Code expiré")
+    if rec.get("max_uses") and rec.get("current_uses", 0) >= rec["max_uses"]:
+        raise HTTPException(status_code=429, detail="Code épuisé")
+
+    # Determine client_id from the code (new) or derive from video_id (backward compat)
+    client_id = rec.get("client_id")
+    if not client_id and rec.get("video_id"):
+        v = await db.videos.find_one({"id": rec["video_id"]}, {"_id": 0})
+        if v:
+            client_id = v.get("client_id") or slugify(v.get("title", ""))
+    if not client_id:
+        raise HTTPException(status_code=404, detail="Mariage introuvable")
+
+    # all videos in that wedding
+    all_videos = await db.videos.find({}, {"_id": 0}).to_list(500)
+    wedding_videos = [v for v in all_videos if (v.get("client_id") or slugify(v.get("title", ""))) == client_id]
+    if not wedding_videos:
+        raise HTTPException(status_code=404, detail="Aucune vidéo pour ce mariage")
+
+    # record wedding-level unlock
+    await db.user_unlocks.update_one(
+        {"user_id": current["id"], "client_id": client_id},
+        {"$set": {
+            "user_id": current["id"],
+            "client_id": client_id,
+            "code": code,
+            "unlocked_at": utcnow(),
+        }},
+        upsert=True,
+    )
+    # also record per-video for backward compat (library by-video)
+    for v in wedding_videos:
+        await db.user_unlocks.update_one(
+            {"user_id": current["id"], "video_id": v["id"]},
+            {"$set": {
+                "user_id": current["id"],
+                "video_id": v["id"],
+                "client_id": client_id,
+                "code": code,
+                "unlocked_at": utcnow(),
+            }},
+            upsert=True,
+        )
+
+    await db.unlock_codes.update_one({"code": code}, {"$inc": {"current_uses": 1}})
+
+    wedding_name = wedding_videos[0].get("client_name") or wedding_videos[0].get("title")
+    return {
+        "ok": True,
+        "client_id": client_id,
+        "client_name": wedding_name,
+        "video_count": len(wedding_videos),
+    }
 
 
 @api_router.get("/videos/{video_id}")
@@ -403,6 +555,8 @@ class VideoCreate(BaseModel):
     duration_minutes: int = 0
     is_featured: bool = False
     is_top_france: bool = False
+    client_id: Optional[str] = None
+    client_name: Optional[str] = None
 
 
 class VideoUpdate(BaseModel):
@@ -416,10 +570,13 @@ class VideoUpdate(BaseModel):
     duration_minutes: Optional[int] = None
     is_featured: Optional[bool] = None
     is_top_france: Optional[bool] = None
+    client_id: Optional[str] = None
+    client_name: Optional[str] = None
 
 
 class CodeCreateRequest(BaseModel):
-    video_id: str
+    client_id: Optional[str] = None  # new — preferred
+    video_id: Optional[str] = None   # legacy / fallback
     max_uses: Optional[int] = None
     expires_in_hours: Optional[int] = None
     label: Optional[str] = None  # nom du client
@@ -468,6 +625,11 @@ async def admin_list_videos(_: dict = Depends(require_admin)):
 async def admin_create_video(body: VideoCreate, _: dict = Depends(require_admin)):
     vid = str(uuid.uuid4())
     doc = body.model_dump()
+    # auto-derive client_id from client_name or title if missing
+    if not doc.get("client_id"):
+        doc["client_id"] = slugify(doc.get("client_name") or doc.get("title", ""))
+    if not doc.get("client_name"):
+        doc["client_name"] = doc.get("title", "")
     doc.update({"id": vid, "is_private": True, "created_at": utcnow()})
     if not doc.get("hero_url"):
         doc["hero_url"] = doc.get("poster_url")
@@ -525,14 +687,29 @@ async def admin_list_codes(_: dict = Depends(require_admin)):
 
 @api_router.post("/admin/codes")
 async def admin_create_code(body: CodeCreateRequest, _: dict = Depends(require_admin)):
-    v = await db.videos.find_one({"id": body.video_id}, {"_id": 0})
-    if not v:
-        raise HTTPException(status_code=404, detail="Vidéo introuvable")
+    client_id = body.client_id
+    video_title = None
+    if not client_id and body.video_id:
+        v = await db.videos.find_one({"id": body.video_id}, {"_id": 0})
+        if not v:
+            raise HTTPException(status_code=404, detail="Vidéo introuvable")
+        client_id = v.get("client_id") or slugify(v.get("title", ""))
+        video_title = v.get("client_name") or v.get("title")
+    if not client_id:
+        raise HTTPException(status_code=400, detail="client_id ou video_id requis")
+    # confirm at least one video exists for this client
+    all_v = await db.videos.find({}, {"_id": 0}).to_list(500)
+    matching = [v for v in all_v if (v.get("client_id") or slugify(v.get("title", ""))) == client_id]
+    if not matching:
+        raise HTTPException(status_code=404, detail="Aucun mariage pour ce client_id")
+    if not video_title:
+        video_title = matching[0].get("client_name") or matching[0].get("title")
     code = gen_unlock_code(8)
     expires_at = utcnow() + timedelta(hours=body.expires_in_hours) if body.expires_in_hours else None
     await db.unlock_codes.insert_one({
         "code": code,
-        "video_id": body.video_id,
+        "client_id": client_id,
+        "video_id": None,
         "label": body.label,
         "is_active": True,
         "max_uses": body.max_uses,
@@ -540,7 +717,7 @@ async def admin_create_code(body: CodeCreateRequest, _: dict = Depends(require_a
         "expires_at": expires_at,
         "created_at": utcnow(),
     })
-    return {"code": code, "video_title": v["title"]}
+    return {"code": code, "video_title": video_title, "client_id": client_id, "video_count": len(matching)}
 
 
 @api_router.delete("/admin/codes/{code}")

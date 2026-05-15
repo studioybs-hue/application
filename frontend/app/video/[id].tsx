@@ -64,7 +64,7 @@ export default function VideoScreen() {
   if (!video) return null;
 
   const isUnlocked = !!video.full_url;
-  const playableUrl = isUnlocked ? video.full_url! : video.trailer_url;
+  const playableUrl = (isUnlocked ? video.full_url : null) || video.trailer_url || video.full_url || "";
 
   const onCastPress = () => {
     setCast(!cast);

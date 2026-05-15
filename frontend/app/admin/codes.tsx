@@ -14,6 +14,7 @@ type Code = {
   code: string;
   video_id: string;
   video_title: string;
+  client_id?: string;
   label?: string;
   is_active: boolean;
   expired: boolean;
@@ -23,7 +24,7 @@ type Code = {
   created_at: string | null;
 };
 
-type Vid = { id: string; title: string };
+type Wedding = { client_id: string; client_name: string; video_count: number };
 
 export default function CodesScreen() {
   const router = useRouter();
@@ -89,16 +90,16 @@ export default function CodesScreen() {
   };
 
   const create = async () => {
-    if (!selectedVid) {
-      Alert.alert("Erreur", "Sélectionnez une vidéo");
+    if (!selectedClientId) {
+      Alert.alert("Erreur", "Sélectionnez un mariage");
       return;
     }
     setCreating(true);
     try {
-      const r = await api<{ code: string; video_title: string }>("/admin/codes", {
+      const r = await api<{ code: string; video_title: string; video_count: number }>("/admin/codes", {
         method: "POST",
         body: {
-          video_id: selectedVid,
+          client_id: selectedClientId,
           label: label || null,
           max_uses: maxUses ? parseInt(maxUses, 10) : null,
           expires_in_hours: expiresHours ? parseInt(expiresHours, 10) : null,
@@ -115,7 +116,7 @@ export default function CodesScreen() {
 
   const resetCreate = () => {
     setShowCreate(false);
-    setSelectedVid("");
+    setSelectedClientId("");
     setLabel("");
     setMaxUses("");
     setExpiresHours("");
@@ -212,21 +213,23 @@ export default function CodesScreen() {
                     </TouchableOpacity>
                   </View>
 
-                  <Text style={styles.modalLabel}>Vidéo</Text>
-                  <ScrollView style={{ maxHeight: 160 }}>
-                    {videos.map((v) => (
+                  <Text style={styles.modalLabel}>Mariage</Text>
+                  <ScrollView style={{ maxHeight: 200 }}>
+                    {weddings.map((w) => (
                       <TouchableOpacity
-                        key={v.id}
-                        style={[styles.vidPick, selectedVid === v.id && styles.vidPickActive]}
-                        onPress={() => setSelectedVid(v.id)}
+                        key={w.client_id}
+                        style={[styles.vidPick, selectedClientId === w.client_id && styles.vidPickActive]}
+                        onPress={() => setSelectedClientId(w.client_id)}
                       >
-                        <Text style={[styles.vidPickTxt, selectedVid === v.id && { color: "#0A0A0A", fontWeight: "700" }]}>{v.title}</Text>
+                        <Text style={[styles.vidPickTxt, selectedClientId === w.client_id && { color: "#0A0A0A", fontWeight: "700" }]}>
+                          {w.client_name}  ·  {w.video_count} vidéo{w.video_count > 1 ? "s" : ""}
+                        </Text>
                       </TouchableOpacity>
                     ))}
                   </ScrollView>
 
-                  <Text style={styles.modalLabel}>Nom du client (optionnel)</Text>
-                  <TextInput style={styles.modalInput} value={label} onChangeText={setLabel} placeholder="Camille & Antoine" placeholderTextColor={colors.textDisabled} />
+                  <Text style={styles.modalLabel}>Nom du destinataire (optionnel)</Text>
+                  <TextInput style={styles.modalInput} value={label} onChangeText={setLabel} placeholder="Famille Dupont" placeholderTextColor={colors.textDisabled} />
 
                   <View style={{ flexDirection: "row", gap: 12 }}>
                     <View style={{ flex: 1 }}>

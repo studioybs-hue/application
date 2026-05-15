@@ -45,12 +45,12 @@ export default function UnlockScreen() {
     }
     setLoading(true);
     try {
-      const r = await api<{ ok: boolean; video: any }>("/videos/unlock", {
+      const r = await api<{ ok: boolean; client_id: string; client_name: string; video_count: number }>("/weddings/unlock", {
         method: "POST",
         body: { code: clean },
       });
-      Alert.alert("✓ Débloqué", `« ${r.video.title} » est maintenant disponible dans votre bibliothèque.`, [
-        { text: "Voir maintenant", onPress: () => router.replace(`/video/${r.video.id}`) },
+      Alert.alert("✓ Mariage débloqué", `Vous avez accès aux ${r.video_count} vidéo${r.video_count > 1 ? "s" : ""} de « ${r.client_name} ».`, [
+        { text: "Voir maintenant", onPress: () => router.replace(`/wedding/${r.client_id}`) },
         { text: "Plus tard", style: "cancel", onPress: () => router.back() },
       ]);
     } catch (e: any) {

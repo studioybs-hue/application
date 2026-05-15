@@ -36,6 +36,7 @@ type Form = {
   duration_minutes: string;
   is_featured: boolean;
   is_top_france: boolean;
+  client_name: string;
 };
 
 const EMPTY: Form = {
@@ -49,6 +50,7 @@ const EMPTY: Form = {
   duration_minutes: "0",
   is_featured: false,
   is_top_france: false,
+  client_name: "",
 };
 
 export default function VideoEdit() {
@@ -210,8 +212,13 @@ export default function VideoEdit() {
         </View>
 
         <ScrollView contentContainerStyle={{ padding: spacing.md, paddingBottom: spacing.xl }}>
-          <Field label="Titre *">
-            <TextInput style={styles.input} value={form.title} onChangeText={(t) => set("title", t)} placeholder="Camille & Antoine" placeholderTextColor={colors.textDisabled} testID="video-title-input" />
+          <Field label="Titre de la vidéo *">
+            <TextInput style={styles.input} value={form.title} onChangeText={(t) => set("title", t)} placeholder="Ex: Cérémonie civile" placeholderTextColor={colors.textDisabled} testID="video-title-input" />
+          </Field>
+
+          <Field label="Nom du couple / mariage *">
+            <TextInput style={styles.input} value={form.client_name} onChangeText={(t) => set("client_name", t)} placeholder="Ex: Camille & Antoine" placeholderTextColor={colors.textDisabled} testID="video-client-name-input" />
+            <Text style={styles.hint}>📌 Toutes les vidéos avec le même nom forment un seul mariage. Le code unique débloque tout le mariage.</Text>
           </Field>
 
           <Field label="Description">
@@ -355,6 +362,7 @@ const styles = StyleSheet.create({
   header: { flexDirection: "row", alignItems: "center", paddingHorizontal: spacing.md, paddingVertical: spacing.sm, gap: spacing.md },
   title: { flex: 1, color: colors.ivory, fontSize: 18, fontWeight: "700", textAlign: "center" },
   label: { color: colors.textSecondary, fontSize: 12, marginBottom: 6, letterSpacing: 0.5, textTransform: "uppercase" },
+  hint: { color: colors.gold, fontSize: 11, marginTop: 6, fontStyle: "italic", lineHeight: 16 },
   input: { backgroundColor: colors.surface, color: colors.ivory, borderRadius: radii.sm, paddingHorizontal: spacing.md, paddingVertical: 14, fontSize: 14, borderWidth: 1, borderColor: "rgba(255,255,255,0.06)" },
   chips: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   chip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
