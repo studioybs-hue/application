@@ -92,9 +92,9 @@ export default function SubscriptionScreen() {
             <View style={styles.iconBubble}>
               <Ionicons name="star" size={32} color={colors.gold} />
             </View>
-            <Text style={styles.title}>Wedding Stream Premium</Text>
+            <Text style={styles.title}>CINÉMARIÉS Premium</Text>
             <Text style={styles.subtitle}>
-              La plateforme de streaming dédiée aux plus beaux mariages.
+              Le cinéma de votre plus beau jour, partout avec vous.
             </Text>
           </View>
 

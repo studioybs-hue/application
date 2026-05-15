@@ -42,7 +42,7 @@ stripe.api_key = STRIPE_API_KEY
 client = AsyncIOMotorClient(MONGO_URL)
 db = client[DB_NAME]
 
-app = FastAPI(title="Wedding Stream API")
+app = FastAPI(title="CINÉMARIÉS API")
 api_router = APIRouter(prefix="/api")
 security = HTTPBearer(auto_error=False)
 
@@ -200,7 +200,7 @@ async def get_optional_user(
 # ====== ROUTES ======
 @api_router.get("/")
 async def root():
-    return {"message": "Wedding Stream API", "status": "ok"}
+    return {"message": "CINÉMARIÉS API", "status": "ok"}
 
 
 # --- AUTH ---
@@ -340,7 +340,7 @@ async def create_checkout(body: CheckoutRequest, current: dict = Depends(get_cur
             line_items=[{
                 "price_data": {
                     "currency": STRIPE_PRICE_CURRENCY,
-                    "product_data": {"name": "Wedding Stream — Abonnement Premium"},
+                    "product_data": {"name": "CINÉMARIÉS — Premium"},
                     "recurring": {"interval": "month"},
                     "unit_amount": STRIPE_PRICE_AMOUNT,
                 },

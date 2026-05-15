@@ -16,9 +16,10 @@ export default function Index() {
 
   return (
     <View style={styles.container} testID="splash-screen">
-      <Text style={styles.brand}>WEDDING</Text>
-      <Text style={styles.brand2}>STREAM</Text>
+      <Text style={styles.brand}>CINÉMARIÉS</Text>
+      <Text style={styles.tagline}>Le cinéma de votre plus beau jour</Text>
       <ActivityIndicator color={colors.gold} style={{ marginTop: 24 }} />
+      <Text style={styles.footer}>by Creative Industry France</Text>
     </View>
   );
 }
@@ -31,16 +32,24 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   brand: {
-    color: colors.ivory,
-    fontSize: 32,
-    letterSpacing: 6,
-    fontWeight: "300",
-  },
-  brand2: {
     color: colors.gold,
-    fontSize: 32,
-    letterSpacing: 6,
+    fontSize: 36,
+    letterSpacing: 8,
     fontWeight: "700",
-    marginTop: 4,
+  },
+  tagline: {
+    color: colors.ivory,
+    fontSize: 13,
+    letterSpacing: 2,
+    fontStyle: "italic",
+    marginTop: 10,
+    opacity: 0.85,
+  },
+  footer: {
+    position: "absolute",
+    bottom: 40,
+    color: colors.textDisabled,
+    fontSize: 11,
+    letterSpacing: 1.5,
   },
 });

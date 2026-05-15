@@ -106,9 +106,10 @@ export default function HomeScreen() {
               />
               <SafeAreaView edges={["top"]} style={styles.heroTop}>
                 <View style={styles.brandRow}>
-                  <Text style={styles.brandTxt}>
-                    WEDDING<Text style={styles.brandAccent}> STREAM</Text>
-                  </Text>
+                  <View>
+                    <Text style={styles.brandTxt}>CINÉMARIÉS</Text>
+                    <Text style={styles.brandTagline}>Le cinéma de votre plus beau jour</Text>
+                  </View>
                   <TouchableOpacity
                     onPress={() => router.push("/unlock")}
                     style={styles.iconBtn}
@@ -247,7 +248,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
   },
-  brandTxt: { color: colors.ivory, fontSize: 18, letterSpacing: 3, fontWeight: "300" },
+  brandTxt: { color: colors.gold, fontSize: 20, letterSpacing: 4, fontWeight: "700" },
+  brandTagline: { color: colors.ivory, fontSize: 10, letterSpacing: 2, fontStyle: "italic", marginTop: 2, opacity: 0.85 },
   brandAccent: { color: colors.gold, fontWeight: "700" },
   iconBtn: {
     width: 40,

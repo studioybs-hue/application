@@ -53,9 +53,8 @@ export default function RegisterScreen() {
           <TouchableOpacity onPress={() => router.back()} style={styles.back} testID="register-back">
             <Ionicons name="chevron-back" size={26} color={colors.ivory} />
           </TouchableOpacity>
-          <Text style={styles.brand}>
-            WEDDING<Text style={{ color: colors.gold }}> STREAM</Text>
-          </Text>
+          <Text style={styles.brand}>CINÉMARIÉS</Text>
+          <Text style={styles.tagline}>Le cinéma de votre plus beau jour</Text>
           <Text style={styles.title}>Créer un compte</Text>
           <Text style={styles.sub}>Rejoignez la plateforme de streaming dédiée aux mariages</Text>
 
@@ -117,7 +116,8 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
   scroll: { padding: spacing.md, paddingTop: spacing.lg },
   back: { width: 40, height: 40, alignItems: "flex-start", justifyContent: "center" },
-  brand: { color: colors.ivory, fontSize: 20, letterSpacing: 4, fontWeight: "300", marginTop: spacing.lg },
+  brand: { color: colors.gold, fontSize: 24, letterSpacing: 6, fontWeight: "700", marginTop: spacing.lg },
+  tagline: { color: colors.ivory, fontSize: 11, letterSpacing: 2, fontStyle: "italic", marginTop: 4, opacity: 0.8 },
   title: { color: colors.ivory, fontSize: 30, fontWeight: "700", marginTop: spacing.md },
   sub: { color: colors.textSecondary, fontSize: 14, marginTop: 4, marginBottom: spacing.xl },
   field: {

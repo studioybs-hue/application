@@ -112,7 +112,8 @@ export default function ProfileScreen() {
           <Text style={styles.logoutTxt}>Déconnexion</Text>
         </TouchableOpacity>
 
-        <Text style={styles.footerTxt}>Wedding Stream · v1.0</Text>
+        <Text style={styles.footerTxt}>CINÉMARIÉS · v1.0</Text>
+        <Text style={styles.footerSub}>by Creative Industry France</Text>
       </ScrollView>
     </SafeAreaView>
   );
@@ -222,5 +223,6 @@ const styles = StyleSheet.create({
     borderColor: "rgba(211,47,47,0.4)",
   },
   logoutTxt: { color: colors.error, fontWeight: "600" },
-  footerTxt: { color: colors.textDisabled, fontSize: 11, textAlign: "center", marginTop: spacing.lg, marginBottom: spacing.md },
+  footerTxt: { color: colors.textDisabled, fontSize: 11, textAlign: "center", marginTop: spacing.lg, letterSpacing: 1 },
+  footerSub: { color: colors.textDisabled, fontSize: 10, textAlign: "center", marginTop: 4, marginBottom: spacing.md, fontStyle: "italic", opacity: 0.7 },
 });

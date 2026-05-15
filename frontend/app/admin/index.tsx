@@ -53,7 +53,7 @@ export default function AdminDashboard() {
         </TouchableOpacity>
         <View>
           <Text style={styles.brand}>ADMIN</Text>
-          <Text style={styles.brandSub}>Wedding Stream</Text>
+          <Text style={styles.brandSub}>CINÉMARIÉS</Text>
         </View>
         <View style={{ width: 26 }} />
       </View>

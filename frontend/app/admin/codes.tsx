@@ -66,7 +66,7 @@ export default function CodesScreen() {
   const shareCode = async (c: Code) => {
     try {
       await Share.share({
-        message: `Votre code Wedding Stream pour « ${c.video_title} » : ${c.code}\n\nOuvrez l'application Wedding Stream et entrez ce code pour débloquer votre film de mariage.`,
+        message: `Votre code CINÉMARIÉS pour « ${c.video_title} » : ${c.code}\n\nOuvrez l'application CINÉMARIÉS et entrez ce code pour débloquer votre film de mariage.`,
       });
     } catch {}
   };
