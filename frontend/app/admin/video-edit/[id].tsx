@@ -59,6 +59,8 @@ export default function VideoEdit() {
   const [loading, setLoading] = useState(!isNew);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState<"poster" | "trailer" | "full" | null>(null);
+  const [progress, setProgress] = useState<{ poster?: number; trailer?: number; full?: number }>({});
+  const [uploadedStatus, setUploadedStatus] = useState<{ poster?: boolean; trailer?: boolean; full?: boolean }>({});
 
   useEffect(() => {
     if (isNew) return;
@@ -92,39 +94,77 @@ export default function VideoEdit() {
 
   const upload = async (target: "poster" | "trailer" | "full") => {
     try {
-      let asset: { uri: string; name?: string; mimeType?: string } | null = null;
+      let asset: { uri: string; name?: string; mimeType?: string; size?: number } | null = null;
       if (target === "poster") {
         const r = await ImagePicker.launchImageLibraryAsync({
           mediaTypes: ImagePicker.MediaTypeOptions.Images,
           quality: 0.9,
         });
         if (r.canceled || !r.assets?.[0]) return;
-        asset = { uri: r.assets[0].uri, name: r.assets[0].fileName || "poster.jpg", mimeType: r.assets[0].mimeType };
+        asset = { uri: r.assets[0].uri, name: r.assets[0].fileName || "poster.jpg", mimeType: r.assets[0].mimeType, size: r.assets[0].fileSize };
       } else {
         const r = await DocumentPicker.getDocumentAsync({ type: "video/*", copyToCacheDirectory: true });
         if (r.canceled || !r.assets?.[0]) return;
-        asset = { uri: r.assets[0].uri, name: r.assets[0].name, mimeType: r.assets[0].mimeType };
+        asset = { uri: r.assets[0].uri, name: r.assets[0].name, mimeType: r.assets[0].mimeType, size: r.assets[0].size };
       }
       setUploading(target);
+      setProgress((p) => ({ ...p, [target]: 0 }));
+      setUploadedStatus((s) => ({ ...s, [target]: false }));
+
       const token = await storage.secureGet<string>("ws_token", "");
       const fd = new FormData();
       fd.append("kind", target === "poster" ? "image" : "video");
-      // RN FormData file
-      // @ts-ignore
-      fd.append("file", { uri: asset.uri, name: asset.name || "file", type: asset.mimeType || "application/octet-stream" });
-      const res = await fetch(`${BASE}/api/admin/upload`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-        body: fd,
+      if (Platform.OS === "web") {
+        // On web, fetch the URI as a Blob
+        const blob = await (await fetch(asset.uri)).blob();
+        fd.append("file", blob, asset.name || "file");
+      } else {
+        // @ts-ignore - RN FormData accepts {uri,name,type}
+        fd.append("file", { uri: asset.uri, name: asset.name || "file", type: asset.mimeType || "application/octet-stream" });
+      }
+
+      // Use XMLHttpRequest for real upload progress
+      const url = `${BASE}/api/admin/upload`;
+      const result = await new Promise<{ url: string }>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", url);
+        xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+        xhr.upload.onprogress = (e: any) => {
+          if (e.lengthComputable) {
+            const pct = Math.round((e.loaded / e.total) * 100);
+            setProgress((p) => ({ ...p, [target]: pct }));
+          }
+        };
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            try {
+              resolve(JSON.parse(xhr.responseText));
+            } catch (e) {
+              reject(new Error("Réponse invalide du serveur"));
+            }
+          } else {
+            try {
+              const err = JSON.parse(xhr.responseText);
+              reject(new Error(err.detail || `HTTP ${xhr.status}`));
+            } catch {
+              reject(new Error(`Erreur ${xhr.status}`));
+            }
+          }
+        };
+        xhr.onerror = () => reject(new Error("Erreur réseau pendant l'upload"));
+        xhr.ontimeout = () => reject(new Error("Timeout de l'upload"));
+        xhr.send(fd as any);
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || "Erreur upload");
-      if (target === "poster") set("poster_url", data.url);
-      else if (target === "trailer") set("trailer_url", data.url);
-      else set("full_url", data.url);
-      Alert.alert("✓ Fichier envoyé", "L'URL a été remplie automatiquement.");
+
+      if (target === "poster") set("poster_url", result.url);
+      else if (target === "trailer") set("trailer_url", result.url);
+      else set("full_url", result.url);
+
+      setProgress((p) => ({ ...p, [target]: 100 }));
+      setUploadedStatus((s) => ({ ...s, [target]: true }));
     } catch (e: any) {
-      Alert.alert("Erreur", e.message);
+      Alert.alert("Erreur d'upload", e.message || "Téléversement échoué. Vérifiez votre connexion ou essayez un fichier plus petit.");
+      setProgress((p) => ({ ...p, [target]: undefined }));
     } finally {
       setUploading(null);
     }
@@ -196,9 +236,16 @@ export default function VideoEdit() {
           <Field label="Poster (image)">
             {form.poster_url ? <Image source={{ uri: form.poster_url }} style={styles.posterPreview} contentFit="cover" /> : null}
             <TextInput style={styles.input} value={form.poster_url} onChangeText={(t) => set("poster_url", t)} placeholder="URL du poster" placeholderTextColor={colors.textDisabled} autoCapitalize="none" />
-            <TouchableOpacity style={styles.uploadBtn} onPress={() => upload("poster")} disabled={uploading === "poster"} testID="upload-poster">
-              {uploading === "poster" ? <ActivityIndicator color={colors.gold} /> : <><Ionicons name="cloud-upload-outline" size={16} color={colors.gold} /><Text style={styles.uploadTxt}>Téléverser une image</Text></>}
-            </TouchableOpacity>
+            <UploadButton
+              icon="cloud-upload-outline"
+              label="Téléverser une image"
+              uploading={uploading === "poster"}
+              progress={progress.poster}
+              done={uploadedStatus.poster}
+              disabled={uploading !== null && uploading !== "poster"}
+              onPress={() => upload("poster")}
+              testID="upload-poster"
+            />
           </Field>
 
           <Field label="Hero (image grand format)">
@@ -207,16 +254,30 @@ export default function VideoEdit() {
 
           <Field label="Bande-annonce (publique)">
             <TextInput style={styles.input} value={form.trailer_url} onChangeText={(t) => set("trailer_url", t)} placeholder="URL du trailer .mp4" placeholderTextColor={colors.textDisabled} autoCapitalize="none" />
-            <TouchableOpacity style={styles.uploadBtn} onPress={() => upload("trailer")} disabled={uploading === "trailer"} testID="upload-trailer">
-              {uploading === "trailer" ? <ActivityIndicator color={colors.gold} /> : <><Ionicons name="film-outline" size={16} color={colors.gold} /><Text style={styles.uploadTxt}>Téléverser le trailer</Text></>}
-            </TouchableOpacity>
+            <UploadButton
+              icon="film-outline"
+              label="Téléverser le trailer"
+              uploading={uploading === "trailer"}
+              progress={progress.trailer}
+              done={uploadedStatus.trailer}
+              disabled={uploading !== null && uploading !== "trailer"}
+              onPress={() => upload("trailer")}
+              testID="upload-trailer"
+            />
           </Field>
 
           <Field label="Vidéo complète (privée)">
             <TextInput style={styles.input} value={form.full_url} onChangeText={(t) => set("full_url", t)} placeholder="URL du film complet .mp4" placeholderTextColor={colors.textDisabled} autoCapitalize="none" />
-            <TouchableOpacity style={styles.uploadBtn} onPress={() => upload("full")} disabled={uploading === "full"} testID="upload-full">
-              {uploading === "full" ? <ActivityIndicator color={colors.gold} /> : <><Ionicons name="lock-closed-outline" size={16} color={colors.gold} /><Text style={styles.uploadTxt}>Téléverser le film</Text></>}
-            </TouchableOpacity>
+            <UploadButton
+              icon="lock-closed-outline"
+              label="Téléverser le film"
+              uploading={uploading === "full"}
+              progress={progress.full}
+              done={uploadedStatus.full}
+              disabled={uploading !== null && uploading !== "full"}
+              onPress={() => upload("full")}
+              testID="upload-full"
+            />
           </Field>
 
           <Field label="Durée (minutes)">
@@ -232,12 +293,50 @@ export default function VideoEdit() {
             <Switch value={form.is_top_france} onValueChange={(v) => set("is_top_france", v)} trackColor={{ true: colors.wine }} testID="switch-top" />
           </View>
 
-          <TouchableOpacity style={styles.saveBtn} onPress={save} disabled={saving} testID="save-video-btn">
-            {saving ? <ActivityIndicator color="#0A0A0A" /> : <Text style={styles.saveTxt}>{isNew ? "Créer la vidéo" : "Enregistrer"}</Text>}
+          <TouchableOpacity style={[styles.saveBtn, uploading && { opacity: 0.5 }]} onPress={save} disabled={saving || uploading !== null} testID="save-video-btn">
+            {saving ? <ActivityIndicator color="#0A0A0A" /> : (
+              uploading ? <Text style={styles.saveTxt}>Upload en cours…</Text> : <Text style={styles.saveTxt}>{isNew ? "Créer la vidéo" : "Enregistrer"}</Text>
+            )}
           </TouchableOpacity>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
+  );
+}
+
+function UploadButton({ icon, label, uploading, progress, done, disabled, onPress, testID }: {
+  icon: any; label: string; uploading: boolean; progress?: number; done?: boolean; disabled?: boolean; onPress: () => void; testID: string;
+}) {
+  if (uploading) {
+    const pct = Math.max(0, Math.min(100, progress ?? 0));
+    return (
+      <View style={styles.progressContainer} testID={`${testID}-progress`}>
+        <View style={styles.progressHeader}>
+          <Ionicons name="cloud-upload" size={16} color={colors.gold} />
+          <Text style={styles.progressLabel}>Téléversement en cours… {pct}%</Text>
+        </View>
+        <View style={styles.progressTrack}>
+          <View style={[styles.progressFill, { width: `${pct}%` }]} />
+        </View>
+      </View>
+    );
+  }
+  if (done) {
+    return (
+      <View style={styles.uploadDone} testID={`${testID}-done`}>
+        <Ionicons name="checkmark-circle" size={18} color={colors.success} />
+        <Text style={styles.uploadDoneTxt}>Fichier téléversé avec succès</Text>
+        <TouchableOpacity onPress={onPress} disabled={disabled}>
+          <Text style={styles.uploadReplaceTxt}>Remplacer</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+  return (
+    <TouchableOpacity style={[styles.uploadBtn, disabled && { opacity: 0.4 }]} onPress={onPress} disabled={disabled} testID={testID}>
+      <Ionicons name={icon} size={16} color={colors.gold} />
+      <Text style={styles.uploadTxt}>{label}</Text>
+    </TouchableOpacity>
   );
 }
 
@@ -264,6 +363,14 @@ const styles = StyleSheet.create({
   posterPreview: { width: 100, height: 150, borderRadius: 6, marginBottom: 8 },
   uploadBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 8, paddingVertical: 12, borderRadius: radii.sm, borderWidth: 1, borderColor: colors.border, borderStyle: "dashed" },
   uploadTxt: { color: colors.gold, fontWeight: "600", fontSize: 13 },
+  progressContainer: { marginTop: 8, padding: 12, borderRadius: radii.sm, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.gold },
+  progressHeader: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 8 },
+  progressLabel: { color: colors.ivory, fontSize: 13, fontWeight: "600" },
+  progressTrack: { height: 8, backgroundColor: "rgba(255,255,255,0.08)", borderRadius: 4, overflow: "hidden" },
+  progressFill: { height: 8, backgroundColor: colors.gold, borderRadius: 4 },
+  uploadDone: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 8, padding: 12, borderRadius: radii.sm, backgroundColor: "rgba(46,125,50,0.12)", borderWidth: 1, borderColor: "rgba(46,125,50,0.5)" },
+  uploadDoneTxt: { color: colors.ivory, fontSize: 13, fontWeight: "600", flex: 1 },
+  uploadReplaceTxt: { color: colors.gold, fontSize: 12, fontWeight: "700", textDecorationLine: "underline" },
   switchRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", backgroundColor: colors.surface, padding: spacing.md, borderRadius: radii.sm, marginBottom: spacing.sm },
   saveBtn: { backgroundColor: colors.gold, paddingVertical: 16, borderRadius: radii.sm, alignItems: "center", marginTop: spacing.lg },
   saveTxt: { color: "#0A0A0A", fontWeight: "700", fontSize: 15, letterSpacing: 0.5 },
