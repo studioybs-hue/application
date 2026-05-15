@@ -324,7 +324,7 @@ async def list_public_weddings():
 
 
 @api_router.get("/weddings/{client_id}")
-async def get_wedding(client_id: str, current: Optional[dict] = Depends(get_optional_user)):
+async def get_wedding(client_id: str, code: Optional[str] = None, current: Optional[dict] = Depends(get_optional_user)):
     videos = await db.videos.find({}, {"_id": 0}).to_list(500)
     # filter to this client
     filtered = [v for v in videos if (v.get("client_id") or slugify(v.get("title", ""))) == client_id]
@@ -338,6 +338,20 @@ async def get_wedding(client_id: str, current: Optional[dict] = Depends(get_opti
         else:
             u = await db.user_unlocks.find_one({"user_id": current["id"], "client_id": client_id})
             unlocked = bool(u)
+    # anonymous unlock via code query param
+    if not unlocked and code:
+        clean = code.strip().upper()
+        rec = await db.unlock_codes.find_one({"code": clean, "is_active": True}, {"_id": 0})
+        if rec:
+            rec_cid = rec.get("client_id")
+            if not rec_cid and rec.get("video_id"):
+                vv = await db.videos.find_one({"id": rec["video_id"]}, {"_id": 0})
+                if vv:
+                    rec_cid = vv.get("client_id") or slugify(vv.get("title", ""))
+            if rec_cid == client_id:
+                if not (rec.get("expires_at") and rec["expires_at"] < utcnow()):
+                    if not (rec.get("max_uses") and rec.get("current_uses", 0) >= rec["max_uses"]):
+                        unlocked = True
     grouped = _group_by_wedding(filtered)
     wedding = next(iter(grouped.values()))
     wedding["unlocked"] = unlocked
@@ -349,8 +363,9 @@ async def get_wedding(client_id: str, current: Optional[dict] = Depends(get_opti
 
 
 @api_router.post("/weddings/unlock")
-async def unlock_wedding(body: UnlockRequest, current: dict = Depends(get_current_user)):
-    """Enter a code to unlock an entire wedding (all videos for that client)."""
+async def unlock_wedding(body: UnlockRequest, current: Optional[dict] = Depends(get_optional_user)):
+    """Enter a code to unlock an entire wedding. Works anonymously (no login required).
+    If user is logged in, the unlock is persisted to their account."""
     code = body.code.strip().upper()
     rec = await db.unlock_codes.find_one({"code": code, "is_active": True}, {"_id": 0})
     if not rec:
@@ -375,39 +390,42 @@ async def unlock_wedding(body: UnlockRequest, current: dict = Depends(get_curren
     if not wedding_videos:
         raise HTTPException(status_code=404, detail="Aucune vidéo pour ce mariage")
 
-    # record wedding-level unlock
-    await db.user_unlocks.update_one(
-        {"user_id": current["id"], "client_id": client_id},
-        {"$set": {
-            "user_id": current["id"],
-            "client_id": client_id,
-            "code": code,
-            "unlocked_at": utcnow(),
-        }},
-        upsert=True,
-    )
-    # also record per-video for backward compat (library by-video)
-    for v in wedding_videos:
+    # record wedding-level unlock if user is logged in
+    if current:
         await db.user_unlocks.update_one(
-            {"user_id": current["id"], "video_id": v["id"]},
+            {"user_id": current["id"], "client_id": client_id},
             {"$set": {
                 "user_id": current["id"],
-                "video_id": v["id"],
                 "client_id": client_id,
                 "code": code,
                 "unlocked_at": utcnow(),
             }},
             upsert=True,
         )
+        for v in wedding_videos:
+            await db.user_unlocks.update_one(
+                {"user_id": current["id"], "video_id": v["id"]},
+                {"$set": {
+                    "user_id": current["id"],
+                    "video_id": v["id"],
+                    "client_id": client_id,
+                    "code": code,
+                    "unlocked_at": utcnow(),
+                }},
+                upsert=True,
+            )
 
     await db.unlock_codes.update_one({"code": code}, {"$inc": {"current_uses": 1}})
 
     wedding_name = wedding_videos[0].get("client_name") or wedding_videos[0].get("title")
+    # also return the full videos so client can play immediately
+    full_videos = [video_to_public(v, include_full=True) for v in wedding_videos]
     return {
         "ok": True,
         "client_id": client_id,
         "client_name": wedding_name,
         "video_count": len(wedding_videos),
+        "videos": full_videos,
     }
 
 

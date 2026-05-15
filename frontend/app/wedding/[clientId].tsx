@@ -1,6 +1,6 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity, ImageBackground,
+  View, Text, StyleSheet, ScrollView, TouchableOpacity,
   ActivityIndicator, Alert, TextInput, KeyboardAvoidingView, Platform, Modal,
 } from "react-native";
 import { Image } from "expo-image";
@@ -8,7 +8,9 @@ import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { WebView } from "react-native-webview";
 import { api } from "@/src/api/client";
+import { storage } from "@/src/utils/storage";
 import { colors, spacing, radii } from "@/src/theme";
 import { useAuth } from "@/src/auth/AuthContext";
 
@@ -37,6 +39,25 @@ type Wedding = {
   videos: Video[];
 };
 
+const CODES_KEY = "ws_unlocked_codes"; // JSON-stringified map of client_id -> code
+
+async function getStoredCode(clientId: string): Promise<string | null> {
+  const raw = await storage.getItem<string>(CODES_KEY, "{}");
+  try {
+    const map = JSON.parse(raw || "{}") as Record<string, string>;
+    return map[clientId] || null;
+  } catch {
+    return null;
+  }
+}
+async function saveCode(clientId: string, code: string) {
+  const raw = await storage.getItem<string>(CODES_KEY, "{}");
+  let map: Record<string, string> = {};
+  try { map = JSON.parse(raw || "{}"); } catch {}
+  map[clientId] = code;
+  await storage.setItem(CODES_KEY, JSON.stringify(map));
+}
+
 export default function WeddingScreen() {
   const router = useRouter();
   const { clientId } = useLocalSearchParams<{ clientId: string }>();
@@ -50,30 +71,21 @@ export default function WeddingScreen() {
 
   const load = useCallback(async () => {
     try {
-      const d = await api<Wedding>(`/weddings/${clientId}`);
+      const storedCode = await getStoredCode(clientId);
+      const path = storedCode ? `/weddings/${clientId}?code=${encodeURIComponent(storedCode)}` : `/weddings/${clientId}`;
+      const d = await api<Wedding>(path);
       setWedding(d);
-      // Open the code modal automatically if not unlocked and user logged in
-      if (!d.unlocked && user) {
-        setCodeModal(true);
-      }
     } catch (e: any) {
       Alert.alert("Erreur", e.message);
     } finally {
       setLoading(false);
     }
-  }, [clientId, user]);
+  }, [clientId]);
 
   useEffect(() => { load(); }, [load]);
 
   const submitCode = async () => {
     setError("");
-    if (!user) {
-      Alert.alert("Connexion requise", "Vous devez être connecté pour utiliser un code.", [
-        { text: "Annuler", style: "cancel" },
-        { text: "Se connecter", onPress: () => router.push("/auth/login") },
-      ]);
-      return;
-    }
     const clean = code.trim().toUpperCase();
     if (clean.length < 4) {
       setError("Code invalide");
@@ -90,10 +102,10 @@ export default function WeddingScreen() {
         setSubmitting(false);
         return;
       }
+      await saveCode(clientId, clean);
       setCodeModal(false);
       setCode("");
       await load();
-      Alert.alert("✓ Mariage débloqué", `Vous avez accès aux ${r.video_count} vidéo${r.video_count > 1 ? "s" : ""} de « ${r.client_name} »`);
     } catch (e: any) {
       setError(e.message || "Code invalide");
     } finally {
@@ -106,17 +118,60 @@ export default function WeddingScreen() {
   }
   if (!wedding) return null;
 
+  const teaserUrl = wedding.videos[0]?.trailer_url;
+  const teaserHtml = teaserUrl ? `
+    <html><head><meta name="viewport" content="width=device-width,initial-scale=1"/>
+    <style>html,body{margin:0;padding:0;background:#0A0A0A;height:100%;}
+    video{width:100%;height:100%;object-fit:cover;background:#0A0A0A;}</style>
+    </head><body>
+    <video src="${teaserUrl}" autoplay muted loop playsinline></video>
+    </body></html>
+  ` : "";
+
   return (
     <View style={styles.root}>
       <ScrollView showsVerticalScrollIndicator={false}>
-        <ImageBackground source={{ uri: wedding.hero_url || wedding.poster_url }} style={styles.hero} imageStyle={{ resizeMode: "cover" }}>
-          <LinearGradient colors={["rgba(10,10,10,0.4)", "rgba(10,10,10,0.6)", "rgba(10,10,10,1)"]} style={StyleSheet.absoluteFillObject} />
+        {/* TEASER HERO */}
+        <View style={styles.hero}>
+          {teaserUrl ? (
+            Platform.OS === "web" ? (
+              // eslint-disable-next-line react-native/no-raw-text
+              // @ts-ignore
+              <video
+                src={teaserUrl}
+                autoPlay
+                muted
+                loop
+                playsInline
+                style={{ width: "100%", height: "100%", objectFit: "cover", backgroundColor: "#0A0A0A" }}
+              />
+            ) : (
+              <WebView
+                source={{ html: teaserHtml }}
+                style={StyleSheet.absoluteFillObject}
+                allowsInlineMediaPlayback
+                mediaPlaybackRequiresUserAction={false}
+              />
+            )
+          ) : (
+            <Image source={{ uri: wedding.hero_url || wedding.poster_url }} style={StyleSheet.absoluteFillObject} contentFit="cover" />
+          )}
+          <LinearGradient
+            colors={["rgba(10,10,10,0.4)", "rgba(10,10,10,0.2)", "rgba(10,10,10,1)"]}
+            locations={[0, 0.5, 1]}
+            style={StyleSheet.absoluteFillObject}
+            pointerEvents="none"
+          />
           <SafeAreaView edges={["top"]} style={styles.heroTop}>
             <TouchableOpacity onPress={() => router.back()} style={styles.iconBtn} testID="wedding-back">
               <Ionicons name="chevron-back" size={26} color={colors.ivory} />
             </TouchableOpacity>
+            <View style={styles.teaserBadge}>
+              <Ionicons name="play" size={12} color={colors.ivory} />
+              <Text style={styles.teaserBadgeTxt}>TEASER</Text>
+            </View>
           </SafeAreaView>
-          <View style={styles.heroBottom}>
+          <View style={styles.heroBottom} pointerEvents="box-none">
             {wedding.is_top_france && (
               <View style={styles.topBadge}><Text style={styles.topBadgeTxt}>N°1 EN FRANCE</Text></View>
             )}
@@ -127,9 +182,9 @@ export default function WeddingScreen() {
                 {wedding.video_count} vidéo{wedding.video_count > 1 ? "s" : ""} · {wedding.total_minutes} min
               </Text>
             </View>
-            {wedding.description ? <Text style={styles.desc}>{wedding.description}</Text> : null}
+            {wedding.description ? <Text style={styles.desc} numberOfLines={2}>{wedding.description}</Text> : null}
           </View>
-        </ImageBackground>
+        </View>
 
         {!wedding.unlocked ? (
           <View style={styles.lockedSection} testID="wedding-locked">
@@ -140,10 +195,14 @@ export default function WeddingScreen() {
             <Text style={styles.lockedSub}>
               Ce mariage est réservé aux invités. Entrez le code unique que les mariés vous ont fourni pour découvrir leurs {wedding.video_count} vidéo{wedding.video_count > 1 ? "s" : ""}.
             </Text>
-            <TouchableOpacity style={styles.unlockBtn} onPress={() => user ? setCodeModal(true) : router.push("/auth/login")} testID="wedding-unlock-btn">
+            <TouchableOpacity style={styles.unlockBtn} onPress={() => setCodeModal(true)} testID="wedding-unlock-btn">
               <Ionicons name="key" size={18} color="#0A0A0A" />
-              <Text style={styles.unlockTxt}>{user ? "Entrer mon code" : "Se connecter"}</Text>
+              <Text style={styles.unlockTxt}>Entrer le code</Text>
             </TouchableOpacity>
+
+            <Text style={styles.helpTxt}>
+              {user ? "" : "Pas besoin de compte : entrez simplement votre code."}
+            </Text>
 
             <View style={styles.previewSection}>
               <Text style={styles.previewLabel}>APERÇU</Text>
@@ -231,13 +290,15 @@ export default function WeddingScreen() {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
   loading: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: colors.bg },
-  hero: { width: "100%", height: 360, justifyContent: "flex-end" },
-  heroTop: { position: "absolute", top: 0, left: 0, right: 0 },
-  iconBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: "rgba(0,0,0,0.5)", alignItems: "center", justifyContent: "center", margin: spacing.sm },
+  hero: { width: "100%", height: 380, backgroundColor: "#000", position: "relative", justifyContent: "flex-end" },
+  heroTop: { position: "absolute", top: 0, left: 0, right: 0, flexDirection: "row", justifyContent: "space-between", padding: spacing.sm },
+  iconBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: "rgba(0,0,0,0.6)", alignItems: "center", justifyContent: "center" },
+  teaserBadge: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 4, backgroundColor: "rgba(212,175,55,0.85)" },
+  teaserBadgeTxt: { color: "#0A0A0A", fontSize: 11, fontWeight: "700", letterSpacing: 1.5 },
   heroBottom: { padding: spacing.md, paddingBottom: spacing.lg },
   topBadge: { alignSelf: "flex-start", backgroundColor: colors.wine, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 4, marginBottom: spacing.sm },
   topBadgeTxt: { color: colors.ivory, fontWeight: "700", fontSize: 11, letterSpacing: 1.5 },
-  title: { color: colors.ivory, fontSize: 30, fontWeight: "700" },
+  title: { color: colors.ivory, fontSize: 30, fontWeight: "700", textShadowColor: "rgba(0,0,0,0.7)", textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 6 },
   meta: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 6 },
   metaTxt: { color: colors.textSecondary, fontSize: 13 },
   desc: { color: colors.textSecondary, fontSize: 14, marginTop: 8, lineHeight: 20 },
@@ -247,6 +308,7 @@ const styles = StyleSheet.create({
   lockedSub: { color: colors.textSecondary, fontSize: 14, textAlign: "center", marginTop: 8, lineHeight: 20, marginBottom: spacing.lg },
   unlockBtn: { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: colors.gold, paddingHorizontal: 28, paddingVertical: 14, borderRadius: radii.sm },
   unlockTxt: { color: "#0A0A0A", fontWeight: "700", fontSize: 15 },
+  helpTxt: { color: colors.textDisabled, fontSize: 11, marginTop: 8, fontStyle: "italic" },
   previewSection: { width: "100%", marginTop: spacing.xl },
   previewLabel: { color: colors.textSecondary, fontSize: 11, letterSpacing: 2, marginBottom: spacing.sm },
   previewRow: { flexDirection: "row", alignItems: "center", backgroundColor: colors.surface, padding: 10, borderRadius: radii.sm, marginBottom: 8 },
