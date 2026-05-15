@@ -1,0 +1,164 @@
+{
+  "project_name": "Wedding Stream (Netflix for Weddings)",
+  "app_type": "Expo React Native",
+  "theme": "Dark Theme",
+  "archetype": "5 (Jewel & Luxury)",
+  "colors": {
+    "background": {
+      "main": "#0A0A0A",
+      "surface": "#141414",
+      "surface_elevated": "#1F1F1F"
+    },
+    "text": {
+      "primary": "#FFFFF0",
+      "secondary": "#A1A1AA",
+      "disabled": "#52525B"
+    },
+    "brand": {
+      "champagne_gold": "#D4AF37",
+      "wine_red": "#722F37",
+      "deep_burgundy": "#4A0E17",
+      "ivory": "#FFFFF0"
+    },
+    "status": {
+      "success": "#2E7D32",
+      "error": "#D32F2F"
+    }
+  },
+  "typography": {
+    "fonts": {
+      "heading": "PlayfairDisplay_600SemiBold",
+      "body": "Manrope_400Regular",
+      "accent": "Manrope_600SemiBold"
+    },
+    "sizes": {
+      "h1": {
+        "fontSize": 32,
+        "lineHeight": 40,
+        "letterSpacing": -0.5
+      },
+      "h2": {
+        "fontSize": 24,
+        "lineHeight": 32,
+        "letterSpacing": -0.3
+      },
+      "h3": {
+        "fontSize": 20,
+        "lineHeight": 28,
+        "letterSpacing": 0
+      },
+      "body": {
+        "fontSize": 16,
+        "lineHeight": 24
+      },
+      "small": {
+        "fontSize": 14,
+        "lineHeight": 20
+      }
+    }
+  },
+  "spacing_and_layout": {
+    "screen_padding": 16,
+    "section_gap": 32,
+    "element_gap": 16,
+    "poster_aspect_ratio": "2:3",
+    "hero_aspect_ratio": "16:9"
+  },
+  "components": {
+    "HeroBanner": {
+      "type": "ImageBackground",
+      "height": "60%",
+      "overlay": "LinearGradient from transparent to #0A0A0A",
+      "content": "Centered Title, Play Button (Champagne Gold), Info text"
+    },
+    "MoviePoster": {
+      "type": "Pressable",
+      "borderRadius": 8,
+      "width": 120,
+      "height": 180,
+      "shadow": "Subtle dark shadow"
+    },
+    "Top1Badge": {
+      "type": "View",
+      "backgroundColor": "#722F37",
+      "padding": "4px 8px",
+      "borderRadius": 4,
+      "text": "N°1 en France (Ivory, uppercase, small, bold)"
+    },
+    "ButtonPrimary": {
+      "type": "Pressable",
+      "backgroundColor": "#D4AF37",
+      "borderRadius": 4,
+      "padding": 16,
+      "alignItems": "center"
+    },
+    "ButtonSecondary": {
+      "type": "Pressable",
+      "backgroundColor": "rgba(255, 255, 240, 0.1)",
+      "borderRadius": 4,
+      "padding": 16,
+      "alignItems": "center"
+    },
+    "Input": {
+      "type": "TextInput",
+      "backgroundColor": "#141414",
+      "borderColor": "#1F1F1F",
+      "color": "#FFFFF0",
+      "padding": 16,
+      "borderRadius": 4
+    }
+  },
+  "screens": {
+    "Home": {
+      "description": "Public catalog. Hero banner at top, followed by horizontal scroll views.",
+      "sections": [
+        "Hero Banner",
+        "À l'affiche (Trending/N°1 en France)",
+        "Cérémonies",
+        "Soirées",
+        "Best Of"
+      ]
+    },
+    "UnlockCode": {
+      "description": "Minimalist screen asking for client unique code to unlock their full video.",
+      "layout": "Centered input, large elegant title, lock icon."
+    },
+    "Library": {
+      "description": "Private library showing videos unlocked by the client.",
+      "layout": "Grid of posters."
+    },
+    "Player": {
+      "description": "Fullscreen video player.",
+      "features": [
+        "Video Component",
+        "Chromecast Mockup Button (Top Right)",
+        "Play/Pause/Scrub controls"
+      ]
+    },
+    "Subscription": {
+      "description": "Stripe payment page for 1.99€/month.",
+      "layout": "Pricing card, value props, Subscribe button."
+    },
+    "Auth": {
+      "description": "Email/password login and signup.",
+      "layout": "Standard auth form with luxury styling."
+    }
+  },
+  "media": {
+    "hero_banner": "https://static.prod-images.emergentagent.com/jobs/4362e1b1-52b7-4479-8fd2-92fb85709661/images/d5b4c495fdac5d60a3a99b8cd75e011119d272f44816d597bdcd7ac8a8615e2a.png",
+    "posters": [
+      "https://static.prod-images.emergentagent.com/jobs/4362e1b1-52b7-4479-8fd2-92fb85709661/images/b6f2b9862750337775217387cffe63a11740507034fc6a22a6f975d07c8d1911.png",
+      "https://static.prod-images.emergentagent.com/jobs/4362e1b1-52b7-4479-8fd2-92fb85709661/images/21c1e6f2bcba0558d6575b191a1518f10ddbeb4f6a0e0979abd185543e639515.png",
+      "https://images.unsplash.com/photo-1704584592205-7fac1784d5ce?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2MDV8MHwxfHNlYXJjaHw0fHxjaW5lbWF0aWMlMjB3ZWRkaW5nJTIwZGFya3xlbnwwfHx8fDE3Nzg4NTM3MDF8MA&ixlib=rb-4.1.0&q=85",
+      "https://images.unsplash.com/photo-1707194225411-833f136437a1?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2MDV8MHwxfHNlYXJjaHwzfHxjaW5lbWF0aWMlMjB3ZWRkaW5nJTIwZGFya3xlbnwwfHx8fDE3Nzg4NTM3MDF8MA&ixlib=rb-4.1.0&q=85"
+    ]
+  },
+  "instructions_to_main_agent": [
+    "Use standard JavaScript (.js) for all React Native components, NOT TypeScript (.tsx).",
+    "Do not use generic blue/purple colors. Stick exclusively to the deep black, wine red, and champagne gold palette to maintain the Jewel & Luxury archetype.",
+    "Implement the UI with standard React Native Core components (View, Text, Pressable, Image, ScrollView) combined with StyleSheet.",
+    "All text must be readable against the dark background. Use Ivory (#FFFFF0) instead of pure white for a softer, premium feel.",
+    "Ensure the 'N°1 en France' badge is prominently displayed on the featured movie poster.",
+    "All interactive and key informational elements MUST include a data-testid attribute in kebab-case."
+  ]
+}
