@@ -1,13 +1,14 @@
 import { useEffect, useState, useCallback } from "react";
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator,
-  Modal, TextInput, Alert, Share, RefreshControl, KeyboardAvoidingView, Platform,
+  Modal, TextInput, Share, RefreshControl, KeyboardAvoidingView, Platform,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Clipboard from "expo-clipboard";
 import { api } from "@/src/api/client";
+import { confirmAction, showAlert } from "@/src/utils/dialog";
 import { colors, spacing, radii } from "@/src/theme";
 
 type Code = {
@@ -61,7 +62,7 @@ export default function CodesScreen() {
 
   const copy = async (text: string) => {
     await Clipboard.setStringAsync(text);
-    Alert.alert("Copié", `Code ${text} copié dans le presse-papier.`);
+    showAlert("Copié", `Code ${text} copié dans le presse-papier.`);
   };
 
   const shareCode = async (c: Code) => {
@@ -73,25 +74,24 @@ export default function CodesScreen() {
   };
 
   const revoke = (code: string) => {
-    Alert.alert("Révoquer ce code ?", `Le code ${code} sera désactivé.`, [
-      { text: "Annuler", style: "cancel" },
-      {
-        text: "Révoquer", style: "destructive",
-        onPress: async () => {
-          try {
-            await api(`/admin/codes/${code}`, { method: "DELETE" });
-            await load();
-          } catch (e: any) {
-            Alert.alert("Erreur", e.message);
-          }
-        },
+    confirmAction(
+      "Révoquer ce code ?",
+      `Le code ${code} sera désactivé.`,
+      async () => {
+        try {
+          await api(`/admin/codes/${code}`, { method: "DELETE" });
+          await load();
+        } catch (e: any) {
+          showAlert("Erreur", e.message);
+        }
       },
-    ]);
+      { confirmText: "Révoquer", destructive: true }
+    );
   };
 
   const create = async () => {
     if (!selectedClientId) {
-      Alert.alert("Erreur", "Sélectionnez un mariage");
+      showAlert("Erreur", "Sélectionnez un mariage");
       return;
     }
     setCreating(true);
@@ -108,7 +108,7 @@ export default function CodesScreen() {
       setCreatedCode(r.code);
       await load();
     } catch (e: any) {
-      Alert.alert("Erreur", e.message);
+      showAlert("Erreur", e.message);
     } finally {
       setCreating(false);
     }

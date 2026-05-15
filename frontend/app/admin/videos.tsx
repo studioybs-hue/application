@@ -6,7 +6,6 @@ import {
   ScrollView,
   TouchableOpacity,
   ActivityIndicator,
-  Alert,
   RefreshControl,
 } from "react-native";
 import { Image } from "expo-image";
@@ -14,6 +13,7 @@ import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { api } from "@/src/api/client";
+import { confirmAction, showAlert } from "@/src/utils/dialog";
 import { colors, spacing, radii } from "@/src/theme";
 
 type V = {
@@ -47,21 +47,19 @@ export default function AdminVideosList() {
   useEffect(() => { load(); }, [load]);
 
   const onDelete = (v: V) => {
-    Alert.alert("Supprimer la vidéo ?", `« ${v.title} » sera définitivement supprimée.`, [
-      { text: "Annuler", style: "cancel" },
-      {
-        text: "Supprimer",
-        style: "destructive",
-        onPress: async () => {
-          try {
-            await api(`/admin/videos/${v.id}`, { method: "DELETE" });
-            setVideos((prev) => prev.filter((x) => x.id !== v.id));
-          } catch (e: any) {
-            Alert.alert("Erreur", e.message);
-          }
-        },
+    confirmAction(
+      "Supprimer la vidéo ?",
+      `« ${v.title} » sera définitivement supprimée.`,
+      async () => {
+        try {
+          await api(`/admin/videos/${v.id}`, { method: "DELETE" });
+          setVideos((prev) => prev.filter((x) => x.id !== v.id));
+        } catch (e: any) {
+          showAlert("Erreur", e.message);
+        }
       },
-    ]);
+      { confirmText: "Supprimer", destructive: true }
+    );
   };
 
   return (
