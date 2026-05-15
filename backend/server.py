@@ -478,7 +478,7 @@ async def unlock_video(body: UnlockRequest, current: dict = Depends(get_current_
 @api_router.get("/library")
 async def my_library(current: dict = Depends(get_current_user)):
     unlocks = await db.user_unlocks.find({"user_id": current["id"]}, {"_id": 0}).to_list(500)
-    video_ids = [u["video_id"] for u in unlocks]
+    video_ids = [u["video_id"] for u in unlocks if u.get("video_id")]
     if not video_ids:
         return {"videos": []}
     videos = await db.videos.find({"id": {"$in": video_ids}}, {"_id": 0}).to_list(500)

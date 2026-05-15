@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert } from "react-native";
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, Platform } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -32,16 +32,19 @@ export default function ProfileScreen() {
   }
 
   const onLogout = () => {
+    const doLogout = async () => {
+      await logout();
+      router.replace("/(tabs)/home");
+    };
+    if (Platform.OS === "web") {
+      // eslint-disable-next-line no-alert
+      const ok = typeof window !== "undefined" && window.confirm("Voulez-vous vraiment vous déconnecter ?");
+      if (ok) doLogout();
+      return;
+    }
     Alert.alert("Déconnexion", "Voulez-vous vraiment vous déconnecter ?", [
       { text: "Annuler", style: "cancel" },
-      {
-        text: "Déconnexion",
-        style: "destructive",
-        onPress: async () => {
-          await logout();
-          router.replace("/(tabs)/home");
-        },
-      },
+      { text: "Déconnexion", style: "destructive", onPress: doLogout },
     ]);
   };
 
