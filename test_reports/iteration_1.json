@@ -1,0 +1,58 @@
+{
+  "summary": "Backend-only testing for Wedding Stream API. Created pytest suite covering auth (register/login/me), public catalog, video detail (locked/unlocked), unlock-by-code, library, and billing. 18/19 tests PASS. Only the Stripe checkout endpoint fails because the configured STRIPE_API_KEY ('sk_test_emergent') is a placeholder rejected by Stripe with AuthenticationError, and the endpoint surfaces this as a raw 500 instead of a graceful error.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "POST /api/billing/checkout",
+        "issue": "Returns 500 (Stripe AuthenticationError: 'Invalid API Key provided: sk_test_****gent'). STRIPE_API_KEY in /app/backend/.env is a placeholder (`sk_test_emergent`), not a real Stripe test key. Additionally, server.py only guards `if not STRIPE_API_KEY` but does not wrap `stripe.Customer.create(...)` / `stripe.checkout.Session.create(...)` in try/except, so any Stripe failure leaks a 500 to the client.",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "POST /api/videos/unlock",
+        "issue": "When called without a token, FastAPI HTTPBearer returns 403 in some configs; here it correctly returns 401 (HTTPBearer auto_error=False + manual raise). Verified OK — no change needed."
+      },
+      {
+        "endpoint": "GET /api/videos/public",
+        "issue": "Featured list is sorted by (not is_top_france, title). Currently only one is_top_france video exists; sort works but logic should be reviewed if multiple featured videos share the flag."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_wedding_backend.py",
+    "/app/backend/tests/conftest.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Configure a real Stripe TEST secret key in /app/backend/.env (STRIPE_API_KEY=sk_test_...). The current value `sk_test_emergent` is rejected by Stripe.",
+    "Wrap Stripe SDK calls in /api/billing/checkout (stripe.Customer.create, stripe.checkout.Session.create) with try/except stripe.error.StripeError -> raise HTTPException(status_code=502, detail='Stripe error: ...') so the API doesn't return raw 500s.",
+    "Consider validating Stripe key on startup (e.g., stripe.Account.retrieve()) and logging a clear warning if invalid, so this fails fast.",
+    "Optional: prefer EXPO_PUBLIC_BACKEND_URL naming consistency (frontend/.env uses EXPO_PUBLIC_BACKEND_URL; test_credentials and review_request reference EXPO_BACKEND_URL — clarify in docs)."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 464 lines — acceptable but borderline; consider splitting routes/models/seed into modules if it grows.",
+    "Good: _id excluded everywhere via projection {'_id': 0} and the video_to_public/user_to_public mappers.",
+    "Good: bcrypt + JWT auth, unique indexes (email, video id, unlock code, user_unlocks compound).",
+    "Bug: /api/billing/checkout has no try/except around Stripe calls; any Stripe error becomes a 500.",
+    "Minor: gen_unlock_code is only used during seed; demo codes are logged at INFO level (OK for dev, but should not run in production builds without a flag).",
+    "Minor: /api/admin/seed uses JWT_SECRET[:16] as auth — works for dev but should be a proper admin role check long-term."
+  ],
+  "updated_files": [
+    "/app/backend/tests/__init__.py (new)",
+    "/app/backend/tests/conftest.py (new)",
+    "/app/backend/tests/test_wedding_backend.py (new)"
+  ],
+  "success_rate": {"backend": "94.7% (18/19)", "frontend": "not tested"},
+  "seed_data_creation": "No new seed data. Existing seeded test user (test@wedding.fr/test1234) and demo codes (3DPX2G57, 4BQZRLAS) were used. Tests create TEST_*@wedding.fr ephemeral users for register/billing-status flows (not cleaned up — recommend cleanup script in future iterations).",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "All endpoints in the review request work except POST /api/billing/checkout. The Stripe failure is a config issue (placeholder API key) plus a missing try/except. Once a real test key is set and the endpoint is hardened, re-run /app/backend/tests/test_wedding_backend.py — full suite should reach 19/19. The test suite is idempotent across runs (unlock upsert + duplicate-email test uses a fresh uuid email each run).",
+  "rca_of_issue": "RCA for /api/billing/checkout 500: STRIPE_API_KEY is set to the placeholder string 'sk_test_emergent' which Stripe rejects with stripe._error.AuthenticationError. Backend traceback (backend.err.log): `stripe.Customer.create(...)` → `AuthenticationError: Invalid API Key provided: sk_test_****gent`. Reproduction: POST /api/billing/checkout with valid Bearer token → 500. Mitigation: (1) replace STRIPE_API_KEY with a real sk_test_... key in /app/backend/.env, (2) wrap Stripe calls in try/except stripe.error.StripeError and return a meaningful 502/503 with the error message instead of leaking a 500, (3) optionally validate the key at startup."
+}
