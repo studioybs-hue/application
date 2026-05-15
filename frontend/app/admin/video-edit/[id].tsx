@@ -8,7 +8,6 @@ import {
   TextInput,
   Switch,
   ActivityIndicator,
-  Alert,
   KeyboardAvoidingView,
   Platform,
 } from "react-native";
