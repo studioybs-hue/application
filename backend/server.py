@@ -804,17 +804,38 @@ async def admin_delete_video(video_id: str, _: dict = Depends(require_admin)):
 @api_router.get("/admin/codes")
 async def admin_list_codes(_: dict = Depends(require_admin)):
     codes = await db.unlock_codes.find({}, {"_id": 0}).sort("created_at", -1).to_list(2000)
-    # enrich with video titles
-    ids = list({c["video_id"] for c in codes})
-    vids = await db.videos.find({"id": {"$in": ids}}, {"_id": 0, "id": 1, "title": 1}).to_list(2000)
-    title_map = {v["id"]: v["title"] for v in vids}
+    # Build maps to resolve titles by video_id OR by client_id (new codes are tied to a wedding)
+    video_ids = list({c["video_id"] for c in codes if c.get("video_id")})
+    client_ids = list({c.get("client_id") for c in codes if c.get("client_id")})
+
+    title_by_video: dict[str, str] = {}
+    if video_ids:
+        vids = await db.videos.find({"id": {"$in": video_ids}}, {"_id": 0, "id": 1, "title": 1, "client_name": 1}).to_list(2000)
+        title_by_video = {v["id"]: (v.get("client_name") or v.get("title", "?")) for v in vids}
+
+    title_by_client: dict[str, str] = {}
+    if client_ids:
+        # Some videos may not have client_id stored; resolve via slugify(title) too
+        all_v = await db.videos.find({}, {"_id": 0, "title": 1, "client_id": 1, "client_name": 1}).to_list(2000)
+        for v in all_v:
+            cid = v.get("client_id") or slugify(v.get("client_name") or v.get("title", ""))
+            if cid in client_ids and cid not in title_by_client:
+                title_by_client[cid] = v.get("client_name") or v.get("title", "?")
+
     out = []
     for c in codes:
         expired = bool(c.get("expires_at") and c["expires_at"] < utcnow())
+        # Resolve a human-readable title
+        title = "?"
+        if c.get("video_id") and c["video_id"] in title_by_video:
+            title = title_by_video[c["video_id"]]
+        elif c.get("client_id") and c["client_id"] in title_by_client:
+            title = title_by_client[c["client_id"]]
         out.append({
             "code": c["code"],
-            "video_id": c["video_id"],
-            "video_title": title_map.get(c["video_id"], "?"),
+            "video_id": c.get("video_id"),
+            "client_id": c.get("client_id"),
+            "video_title": title,
             "label": c.get("label"),
             "is_active": c.get("is_active", True) and not expired,
             "expired": expired,

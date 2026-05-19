@@ -32,12 +32,12 @@ export default function CodesScreen() {
   const router = useRouter();
   const confirm = useConfirm();
   const [codes, setCodes] = useState<Code[]>([]);
-  const [videos, setVideos] = useState<Vid[]>([]);
+  const [weddings, setWeddings] = useState<Wedding[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
 
-  const [selectedVid, setSelectedVid] = useState<string>("");
+  const [selectedClientId, setSelectedClientId] = useState<string>("");
   const [label, setLabel] = useState("");
   const [maxUses, setMaxUses] = useState("");
   const [expiresHours, setExpiresHours] = useState("");
@@ -48,10 +48,23 @@ export default function CodesScreen() {
     try {
       const [c, v] = await Promise.all([
         api<{ codes: Code[] }>("/admin/codes"),
-        api<{ videos: Vid[] }>("/admin/videos"),
+        api<{ videos: any[] }>("/admin/videos"),
       ]);
       setCodes(c.codes);
-      setVideos(v.videos);
+      // Group videos by client_id to build weddings list
+      const map = new Map<string, Wedding>();
+      for (const vid of v.videos || []) {
+        const cid = vid.client_id || vid.title;
+        if (!map.has(cid)) {
+          map.set(cid, {
+            client_id: cid,
+            client_name: vid.client_name || vid.title,
+            video_count: 0,
+          });
+        }
+        map.get(cid)!.video_count += 1;
+      }
+      setWeddings(Array.from(map.values()).sort((a, b) => a.client_name.localeCompare(b.client_name)));
     } catch (e) {
       console.error(e);
     } finally {
