@@ -123,6 +123,7 @@ class HostingRequestCreate(BaseModel):
     description: Optional[str] = Field(None, max_length=2000)
     drive_link: Optional[str] = Field(None, max_length=500)
     notes: Optional[str] = Field(None, max_length=1000)
+    delivery_method: Optional[str] = Field("upload_link", description="upload_link | external_link | usb_office")
 
 
 class UnlockCodeInfo(BaseModel):
@@ -603,6 +604,7 @@ async def client_revoke_code(code: str, current: dict = Depends(get_current_user
 
 # --- HOSTING REQUESTS (one-time 90€ fee to host a wedding) ---
 def hosting_to_public(h: dict) -> dict:
+    upload_token = h.get("upload_token")
     return {
         "id": h["id"],
         "user_id": h.get("user_id"),
@@ -615,6 +617,10 @@ def hosting_to_public(h: dict) -> dict:
         "description": h.get("description"),
         "drive_link": h.get("drive_link"),
         "notes": h.get("notes"),
+        "delivery_method": h.get("delivery_method", "external_link"),
+        "upload_token": upload_token,
+        "upload_url": f"{APP_PUBLIC_URL}/u/{upload_token}" if upload_token else None,
+        "uploaded_files": h.get("uploaded_files", []),
         "status": h.get("status", "pending_payment"),
         "amount": h.get("amount", HOSTING_FEE_AMOUNT),
         "currency": h.get("currency", "eur"),
@@ -632,6 +638,10 @@ async def create_hosting_request(body: HostingRequestCreate, current: dict = Dep
     if not STRIPE_API_KEY:
         raise HTTPException(status_code=503, detail="Le service de paiement n'est pas encore configuré.")
     rid = str(uuid.uuid4())
+    delivery_method = (body.delivery_method or "upload_link").lower()
+    if delivery_method not in ("upload_link", "external_link", "usb_office"):
+        delivery_method = "upload_link"
+    upload_token = secrets.token_urlsafe(16) if delivery_method == "upload_link" else None
     doc = {
         "id": rid,
         "user_id": current["id"],
@@ -644,6 +654,9 @@ async def create_hosting_request(body: HostingRequestCreate, current: dict = Dep
         "description": (body.description or "").strip(),
         "drive_link": (body.drive_link or "").strip(),
         "notes": (body.notes or "").strip(),
+        "delivery_method": delivery_method,
+        "upload_token": upload_token,
+        "uploaded_files": [],
         "status": "pending_payment",
         "amount": HOSTING_FEE_AMOUNT,
         "currency": STRIPE_PRICE_CURRENCY,
@@ -724,6 +737,107 @@ async def hosting_request_status(request_id: str, session_id: Optional[str] = No
             logging.warning(f"Stripe retrieve error (hosting): {e}")
     r = await db.hosting_requests.find_one({"id": request_id}, {"_id": 0})
     return hosting_to_public(r) if r else {}
+
+
+# --- PUBLIC UPLOAD via secure token (used by the videographer / couple to send raw videos) ---
+@api_router.get("/hosting/upload/{token}")
+async def hosting_upload_info(token: str):
+    """Public endpoint: returns info about an upload session (no auth, token-protected)."""
+    r = await db.hosting_requests.find_one({"upload_token": token}, {"_id": 0})
+    if not r:
+        raise HTTPException(status_code=404, detail="Lien invalide ou expiré.")
+    # Only allow uploads if payment is confirmed
+    if r.get("status") == "pending_payment":
+        return {
+            "ok": False,
+            "couple_name": r.get("couple_name"),
+            "status": r.get("status"),
+            "message": "Cette demande est en attente de paiement. L'upload sera activé une fois le paiement reçu.",
+            "uploaded_files": r.get("uploaded_files", []),
+        }
+    return {
+        "ok": True,
+        "couple_name": r.get("couple_name"),
+        "status": r.get("status"),
+        "uploaded_files": r.get("uploaded_files", []),
+    }
+
+
+@api_router.post("/hosting/upload/{token}/file")
+async def hosting_upload_file(token: str, file: UploadFile = File(...)):
+    """Public endpoint: accepts a single file upload for a specific hosting request token."""
+    r = await db.hosting_requests.find_one({"upload_token": token}, {"_id": 0})
+    if not r:
+        raise HTTPException(status_code=404, detail="Lien invalide.")
+    if r.get("status") == "pending_payment":
+        raise HTTPException(status_code=402, detail="Paiement requis avant l'envoi des fichiers.")
+    if r.get("status") in ("rejected",):
+        raise HTTPException(status_code=400, detail="Cette demande a été rejetée.")
+
+    # Determine the storage subdir for this hosting request
+    hosting_dir = UPLOAD_DIR / f"hosting_{r['id']}"
+    hosting_dir.mkdir(exist_ok=True)
+
+    # Generate a safe filename keeping the original extension
+    orig_name = (file.filename or "fichier").replace("/", "_").replace("\\", "_")
+    ext = ""
+    if "." in orig_name:
+        ext = "." + orig_name.rsplit(".", 1)[-1].lower()[:10]
+    safe_id = secrets.token_hex(8)
+    saved_name = f"{safe_id}{ext}"
+    dest = hosting_dir / saved_name
+
+    # Stream-write to disk
+    size = 0
+    with open(dest, "wb") as f_out:
+        while True:
+            chunk = await file.read(2 * 1024 * 1024)
+            if not chunk:
+                break
+            f_out.write(chunk)
+            size += len(chunk)
+
+    file_entry = {
+        "name": orig_name,
+        "stored_as": saved_name,
+        "size": size,
+        "url": f"/api/uploads/hosting_{r['id']}/{saved_name}",
+        "uploaded_at": utcnow().isoformat(),
+    }
+    await db.hosting_requests.update_one(
+        {"upload_token": token},
+        {"$push": {"uploaded_files": file_entry}},
+    )
+    # If status was "paid", advance to in_progress now that files are coming in
+    if r.get("status") == "paid":
+        await db.hosting_requests.update_one(
+            {"upload_token": token},
+            {"$set": {"status": "in_progress"}},
+        )
+    return {"ok": True, "file": file_entry}
+
+
+@api_router.delete("/hosting/upload/{token}/file/{stored_as}")
+async def hosting_upload_delete_file(token: str, stored_as: str):
+    """Public endpoint: lets the uploader remove a file they just uploaded (token-protected)."""
+    r = await db.hosting_requests.find_one({"upload_token": token}, {"_id": 0})
+    if not r:
+        raise HTTPException(status_code=404, detail="Lien invalide.")
+    files = r.get("uploaded_files", [])
+    new_files = [f for f in files if f.get("stored_as") != stored_as]
+    if len(new_files) == len(files):
+        raise HTTPException(status_code=404, detail="Fichier introuvable")
+    # Delete file from disk (best-effort)
+    try:
+        path = UPLOAD_DIR / f"hosting_{r['id']}" / stored_as
+        if path.exists():
+            path.unlink()
+    except Exception as e:
+        logging.warning(f"Could not delete file {stored_as}: {e}")
+    await db.hosting_requests.update_one({"upload_token": token}, {"$set": {"uploaded_files": new_files}})
+    return {"ok": True}
+
+
 
 
 # --- ADMIN HOSTING ENDPOINTS are defined further below (after require_admin is declared) ---

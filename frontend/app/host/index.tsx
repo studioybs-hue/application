@@ -26,6 +26,7 @@ export default function HostScreen() {
   const [description, setDescription] = useState("");
   const [driveLink, setDriveLink] = useState("");
   const [notes, setNotes] = useState("");
+  const [deliveryMethod, setDeliveryMethod] = useState<"upload_link" | "external_link" | "usb_office">("upload_link");
 
   const [submitting, setSubmitting] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
@@ -89,8 +90,9 @@ export default function HostScreen() {
           contact_email: contactEmail.trim(),
           contact_phone: contactPhone.trim(),
           description: description.trim(),
-          drive_link: driveLink.trim(),
+          drive_link: deliveryMethod === "external_link" ? driveLink.trim() : "",
           notes: notes.trim(),
+          delivery_method: deliveryMethod,
         },
       });
       if (Platform.OS === "web") {
@@ -197,12 +199,72 @@ export default function HostScreen() {
                   placeholder="Quelques mots sur votre journée (visible sur la page du mariage)…"
                   multiline
                 />
-                <Field
-                  label="Lien Drive / WeTransfer des vidéos brutes"
-                  value={driveLink}
-                  onChangeText={setDriveLink}
-                  placeholder="https://drive.google.com/…"
-                />
+
+                {/* DELIVERY METHOD SELECTOR */}
+                <View style={{ marginBottom: 14 }}>
+                  <Text style={styles.label}>Comment livrer vos vidéos brutes ? *</Text>
+
+                  <DeliveryOption
+                    selected={deliveryMethod === "upload_link"}
+                    onPress={() => setDeliveryMethod("upload_link")}
+                    icon="cloud-upload"
+                    badge="RECOMMANDÉ"
+                    title="Lien d'upload sécurisé"
+                    subtitle="On vous génère automatiquement un lien chiffré pour déposer vos fichiers (jusqu'à 50 Go, multi-fichiers)"
+                  />
+
+                  <DeliveryOption
+                    selected={deliveryMethod === "external_link"}
+                    onPress={() => setDeliveryMethod("external_link")}
+                    icon="link"
+                    title="WeTransfer / Google Drive"
+                    subtitle="Vous nous envoyez votre propre lien de transfert"
+                  />
+
+                  <DeliveryOption
+                    selected={deliveryMethod === "usb_office"}
+                    onPress={() => setDeliveryMethod("usb_office")}
+                    icon="business"
+                    title="Dépôt clé USB au bureau"
+                    subtitle="36 rue du Génie, 13003 Marseille — sur rdv uniquement"
+                  />
+
+                  {deliveryMethod === "external_link" && (
+                    <View style={{ marginTop: 10 }}>
+                      <Text style={styles.label}>Collez votre lien ici</Text>
+                      <TextInput
+                        style={styles.input}
+                        value={driveLink}
+                        onChangeText={setDriveLink}
+                        placeholder="https://wetransfer.com/… ou https://drive.google.com/…"
+                        placeholderTextColor={colors.textDisabled}
+                        autoCapitalize="none"
+                      />
+                    </View>
+                  )}
+
+                  {deliveryMethod === "upload_link" && (
+                    <View style={styles.infoCard}>
+                      <Ionicons name="information-circle" size={16} color={colors.gold} />
+                      <Text style={styles.infoTxt}>
+                        Après paiement, vous recevrez un lien sécurisé personnel à partager avec votre vidéaste pour déposer les fichiers.
+                      </Text>
+                    </View>
+                  )}
+
+                  {deliveryMethod === "usb_office" && (
+                    <View style={styles.infoCard}>
+                      <Ionicons name="location" size={16} color={colors.gold} />
+                      <Text style={styles.infoTxt}>
+                        <Text style={{ fontWeight: "700", color: colors.ivory }}>CREATIVINDUSTRY FRANCE{"\n"}</Text>
+                        36 rue du Génie{"\n"}
+                        13003 Marseille{"\n\n"}
+                        <Text style={{ fontStyle: "italic" }}>Sur rdv uniquement</Text> — nous vous contacterons après paiement pour fixer un rendez-vous.
+                      </Text>
+                    </View>
+                  )}
+                </View>
+
                 <Field
                   label="Notes pour l'équipe"
                   value={notes}
@@ -279,6 +341,33 @@ function Field({
   );
 }
 
+function DeliveryOption({
+  selected, onPress, icon, title, subtitle, badge,
+}: {
+  selected: boolean; onPress: () => void; icon: any;
+  title: string; subtitle: string; badge?: string;
+}) {
+  return (
+    <TouchableOpacity
+      style={[styles.deliveryCard, selected && styles.deliveryCardActive]}
+      onPress={onPress}
+      activeOpacity={0.85}
+    >
+      <View style={[styles.deliveryRadio, selected && styles.deliveryRadioActive]}>
+        {selected && <View style={styles.deliveryRadioDot} />}
+      </View>
+      <Ionicons name={icon} size={22} color={selected ? colors.gold : colors.textSecondary} />
+      <View style={{ flex: 1 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+          <Text style={[styles.deliveryTitle, selected && { color: colors.gold }]}>{title}</Text>
+          {badge && <View style={styles.deliveryBadge}><Text style={styles.deliveryBadgeTxt}>{badge}</Text></View>}
+        </View>
+        <Text style={styles.deliverySub}>{subtitle}</Text>
+      </View>
+    </TouchableOpacity>
+  );
+}
+
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
   loading: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: colors.bg },
@@ -331,4 +420,25 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.gold,
   },
+  deliveryCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    backgroundColor: colors.surface,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    borderRadius: radii.md,
+    padding: 12,
+    marginBottom: 8,
+  },
+  deliveryCardActive: { borderColor: colors.gold, backgroundColor: "rgba(212,175,55,0.06)" },
+  deliveryRadio: { width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: colors.border, alignItems: "center", justifyContent: "center" },
+  deliveryRadioActive: { borderColor: colors.gold },
+  deliveryRadioDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: colors.gold },
+  deliveryTitle: { color: colors.ivory, fontSize: 14, fontWeight: "700" },
+  deliverySub: { color: colors.textSecondary, fontSize: 11, marginTop: 2, lineHeight: 15 },
+  deliveryBadge: { backgroundColor: colors.gold, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 3 },
+  deliveryBadgeTxt: { color: "#0A0A0A", fontSize: 8, fontWeight: "800", letterSpacing: 0.8 },
+  infoCard: { flexDirection: "row", alignItems: "flex-start", gap: 8, backgroundColor: "rgba(212,175,55,0.08)", borderWidth: 1, borderColor: colors.gold, borderRadius: 8, padding: 12, marginTop: 8 },
+  infoTxt: { color: colors.textSecondary, fontSize: 12, flex: 1, lineHeight: 18 },
 });
