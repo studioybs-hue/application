@@ -22,10 +22,13 @@ import { showAlert, confirmAction } from "@/src/utils/dialog";
 export default function SubscriptionScreen() {
   const router = useRouter();
   const { user, refresh } = useAuth();
-  const params = useLocalSearchParams<{ status?: string; session_id?: string }>();
+  const params = useLocalSearchParams<{ status?: string; session_id?: string; tier?: string }>();
   const [loading, setLoading] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [canceling, setCanceling] = useState(false);
+  const [selectedTier, setSelectedTier] = useState<"basic" | "unlimited">(
+    (params.tier as any) === "unlimited" ? "unlimited" : "basic"
+  );
 
   useEffect(() => {
     if (params.status === "success") {
@@ -55,7 +58,7 @@ export default function SubscriptionScreen() {
     try {
       const r = await api<{ url: string }>("/billing/checkout", {
         method: "POST",
-        body: {},
+        body: { tier: selectedTier },
       });
       if (Platform.OS === "web") {
         // Linking is more reliable on web
@@ -121,11 +124,41 @@ export default function SubscriptionScreen() {
             </Text>
           </View>
 
-          <View style={styles.priceCard}>
-            <Text style={styles.priceBig}>
-              1,99€ <Text style={styles.priceSmall}>/ mois</Text>
-            </Text>
-            <Text style={styles.priceNote}>Sans engagement, résiliable à tout moment</Text>
+          <View style={styles.tiersWrap}>
+            <TouchableOpacity
+              style={[styles.tierCard, selectedTier === "basic" && styles.tierCardActive]}
+              onPress={() => setSelectedTier("basic")}
+              testID="tier-basic"
+              activeOpacity={0.85}
+            >
+              <View style={styles.tierHeader}>
+                <Ionicons name="star" size={20} color={selectedTier === "basic" ? colors.gold : colors.textSecondary} />
+                <Text style={[styles.tierName, selectedTier === "basic" && { color: colors.gold }]}>Premium</Text>
+                {selectedTier === "basic" && <Ionicons name="checkmark-circle" size={20} color={colors.gold} style={{ marginLeft: "auto" }} />}
+              </View>
+              <Text style={styles.tierPrice}>1,99€<Text style={styles.tierUnit}> /mois</Text></Text>
+              <Text style={styles.tierBullet}>• Jusqu'à 3 codes d'invitation</Text>
+              <Text style={styles.tierBullet}>• 1 code = 1 appareil</Text>
+              <Text style={styles.tierBullet}>• Sans engagement</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.tierCard, selectedTier === "unlimited" && styles.tierCardActive]}
+              onPress={() => setSelectedTier("unlimited")}
+              testID="tier-unlimited"
+              activeOpacity={0.85}
+            >
+              <View style={styles.tierHeader}>
+                <Ionicons name="infinite" size={20} color={selectedTier === "unlimited" ? colors.gold : colors.textSecondary} />
+                <Text style={[styles.tierName, selectedTier === "unlimited" && { color: colors.gold }]}>Premium Illimité</Text>
+                {selectedTier === "unlimited" && <Ionicons name="checkmark-circle" size={20} color={colors.gold} style={{ marginLeft: "auto" }} />}
+              </View>
+              <View style={styles.bestBadge}><Text style={styles.bestBadgeTxt}>RECOMMANDÉ</Text></View>
+              <Text style={styles.tierPrice}>2,30€<Text style={styles.tierUnit}> /mois</Text></Text>
+              <Text style={styles.tierBullet}>• Codes ILLIMITÉS</Text>
+              <Text style={styles.tierBullet}>• 1 code = 1 appareil (sécurité)</Text>
+              <Text style={styles.tierBullet}>• Invitez tous vos proches</Text>
+            </TouchableOpacity>
           </View>
 
           <View style={styles.featureList}>
@@ -169,7 +202,9 @@ export default function SubscriptionScreen() {
                 <ActivityIndicator color="#0A0A0A" />
               ) : (
                 <>
-                  <Text style={styles.ctaTxt}>S&apos;abonner — 1,99€/mois</Text>
+                  <Text style={styles.ctaTxt}>
+                    {selectedTier === "unlimited" ? "S'abonner — 2,30€/mois" : "S'abonner — 1,99€/mois"}
+                  </Text>
                   <Ionicons name="arrow-forward" size={18} color="#0A0A0A" />
                 </>
               )}
@@ -221,6 +256,23 @@ const styles = StyleSheet.create({
   priceBig: { color: colors.gold, fontSize: 48, fontWeight: "800", letterSpacing: -1 },
   priceSmall: { color: colors.ivory, fontSize: 18, fontWeight: "400" },
   priceNote: { color: colors.textSecondary, fontSize: 12, marginTop: 6 },
+  tiersWrap: { gap: 12, marginVertical: spacing.lg },
+  tierCard: {
+    backgroundColor: colors.surface,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    borderRadius: radii.lg,
+    padding: spacing.md,
+    position: "relative",
+  },
+  tierCardActive: { borderColor: colors.gold, backgroundColor: "rgba(212,175,55,0.06)" },
+  tierHeader: { flexDirection: "row", alignItems: "center", gap: 8 },
+  tierName: { color: colors.ivory, fontSize: 16, fontWeight: "700" },
+  tierPrice: { color: colors.gold, fontSize: 30, fontWeight: "800", marginTop: 10, letterSpacing: -1 },
+  tierUnit: { color: colors.textSecondary, fontSize: 14, fontWeight: "400" },
+  tierBullet: { color: colors.textSecondary, fontSize: 12, marginTop: 4 },
+  bestBadge: { position: "absolute", top: -8, right: 12, backgroundColor: colors.gold, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 4 },
+  bestBadgeTxt: { color: "#0A0A0A", fontSize: 9, fontWeight: "800", letterSpacing: 1 },
   featureList: { marginBottom: spacing.lg },
   featureRow: { flexDirection: "row", alignItems: "center", paddingVertical: 10 },
   featureIcon: {

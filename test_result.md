@@ -213,12 +213,83 @@ metadata:
   test_sequence: 1
   run_ui: false
 
+  - task: "Sprint 2 — Device binding on POST /api/weddings/unlock"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "Tested against https://mariagevideo.preview.emergentagent.com/api. Generated fresh client code RSSAPEYG via /api/client/codes. (1) First unlock with device_id=DEVICE_X → 200 ok:true, code becomes bound. (2) Same DEVICE_X re-unlock → 200 ok:true (idempotent — last_seen_at updates). (3) Different device_id=DEVICE_Y → HTTP 403 with French detail 'Ce code est déjà utilisé sur un autre appareil. Un code = 1 seul appareil.' (4) No device_id when code already bound → HTTP 403 'Ce code est verrouillé sur un appareil spécifique.' (5) Invalid code 'INVALIDXX' → HTTP 404 'Code invalide'. (6) Revoked code (set is_active=false via DELETE /api/client/codes/{code}) → HTTP 404 'Code invalide' (since query filters is_active=true). Spec accepts 410 or 404. All edge cases handled correctly."
+
+  - task: "Sprint 2 — Client self-service codes (GET/POST/DELETE /api/client/codes)"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "Auth user test@wedding.fr (subscription_tier=basic, client_id=hanifa-et-dali, is_subscribed=true). GET /api/client/codes → 200 with {codes:[...], tier:'basic', limit:3, active_count, can_create}. POST /api/client/codes 3 times (labels 'Tatie Marie', 'Cousin Paul', 'Amis lycée') → all 200 with 8-char uppercase alphanumeric code (e.g. GW79FX5V). 4th POST → HTTP 403 with French detail 'Limite atteinte (3 codes max). Passez à l'offre Illimité (2,30€/mois) pour générer des codes sans limite.' (contains both 'Limite atteinte' and 'Illimité'). After DELETE /api/client/codes/{code} → 200 ok:true, GET shows can_create=true again. DELETE as non-owner (fresh user) → 403 'Vous n'êtes pas le propriétaire de ce code'. Without client_id (admin unassigned wedding) → POST and GET both return 403 'Aucun mariage assigné'. Premium user WITH client_id but is_subscribed=false → POST returns 402 'Abonnement Premium requis.'. Minor: when a freshly-registered user has NEITHER is_subscribed NOR client_id, the 403 'Aucun mariage assigné' check fires before the 402 check (order deviates from review spec which expected 402 first for a 'fresh user'). Behavioural impact is low because both error messages are accurate; spec literal expectation of 402 not strictly met for that edge case."
+
+  - task: "Sprint 2 — Admin assign / unassign wedding"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "As admin@wedding.fr / Admin13!. POST /api/admin/users/{user_id}/assign-wedding {client_id:'hanifa-et-dali'} → HTTP 200 with {ok:true, client_id:'hanifa-et-dali', client_name:'Hanifa et Dali'}. POST same with client_id:'nonexistent-wedding' → HTTP 404 detail 'Mariage introuvable'. DELETE /api/admin/users/{user_id}/wedding → HTTP 200 ok:true (removes client_id field). As non-admin (test@wedding.fr token) → HTTP 403 'Accès réservé aux administrateurs'. All four cases pass."
+
+  - task: "Sprint 2 — Stripe tier in /api/billing/checkout + /api/billing/config"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: false
+        agent: "testing"
+        comment: "Initial run: POST /api/billing/checkout returned 502 'No such customer: cus_TEST_FAKE'. Root cause was stale state in DB — earlier webhook test wrote stripe_customer_id=cus_TEST_FAKE to test@wedding.fr. Cleared the field via direct DB update (db.users.update_one $unset stripe_customer_id/stripe_subscription_id), then re-tested."
+      - working: true
+        agent: "testing"
+        comment: "After clearing stale stripe_customer_id on test user: POST /api/billing/checkout {tier:'basic'} → 200 with url starting https://checkout.stripe.com/c/pay/cs_test_ and session_id cs_test_a1EJ9S2bIaJv... Retrieved session via Stripe API with expand=line_items → unit_amount=199. POST {tier:'unlimited'} → 200, resp_tier='unlimited', session retrieved shows unit_amount=230 cents. POST {tier:'invalid'} → 200 with tier='basic' (correct fallback). GET /api/billing/config → 200 {publishable_key:'pk_test_...', price_amount:199, price_amount_unlimited:230, basic_max_codes:3, price_currency:'eur', configured:true}. All Stripe tier wiring correct end-to-end against real Stripe API."
+
+  - task: "Sprint 2 — Wedding details is_my_wedding flag"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "GET /api/weddings/hanifa-et-dali with test@wedding.fr token → 200 is_my_wedding=true. GET /api/weddings/hanifa-et-dali anonymously → 200 is_my_wedding=false. GET /api/weddings/sarahline-elarif (another wedding) with test@wedding.fr token → 200 is_my_wedding=false. Flag works correctly."
+
+  - task: "Sprint 2 — /auth/me returns subscription_tier + client_id"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "GET /api/auth/me with admin token → 200, response includes subscription_tier (None) and client_id (None). GET /api/auth/me with test@wedding.fr token → 200, response includes subscription_tier='basic', client_id='hanifa-et-dali', is_subscribed=true. UserPublic model now exposes both new fields as expected."
+
 test_plan:
-  current_focus:
-    - "Stripe Checkout (subscription mode, 1.99€/mo recurring)"
-    - "Stripe subscription cancellation (cancel_at_period_end)"
-    - "Stripe webhook handler (lifecycle events)"
-    - "Billing config endpoint (publishable key)"
+  current_focus: []
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -226,19 +297,40 @@ test_plan:
 agent_communication:
   - agent: "main"
     message: |
-      Stripe is now wired with REAL test keys (sk_test_51T571j2...) for the 1,99€/month subscription. New endpoints added:
-        • POST /api/billing/checkout   → creates subscription Checkout Session (already existed, now using real key)
-        • GET  /api/billing/status     → polled after redirect; marks user premium when session is paid
-        • POST /api/billing/cancel     → cancels at period end (NEW)
-        • GET  /api/billing/config     → publishable key + price + configured flag (NEW)
-        • POST /api/billing/webhook    → handles checkout.session.completed / subscription.* / invoice.payment_failed (NEW)
-      Please test:
-        1. Login as test@wedding.fr / test1234 then POST /api/billing/checkout — should return a real https://checkout.stripe.com/... URL (NOT 503).
-        2. /api/billing/config — should return publishable key and configured:true.
-        3. POST /api/billing/cancel for a user with NO subscription should return 404 with French message.
-        4. /api/billing/webhook should accept POST with raw JSON (no signature verification when STRIPE_WEBHOOK_SECRET is empty — dev mode) and return {"received":true}. Simulate a checkout.session.completed payload with metadata.user_id set to the test user id — verify user.is_subscribed becomes true.
-      Admin: admin@wedding.fr / Admin13!
-      Test guest: test@wedding.fr / test1234
+      Sprint 2 NEW FEATURES — please test all of the following:
+
+      DEVICE BINDING (1 code = 1 device):
+        • POST /api/weddings/unlock now accepts {code, device_id, device_label}.
+        • First device-id to use a code BINDS it. Same device can re-call (200, idempotent).
+        • Different device-id → HTTP 403 with French error: "Ce code est déjà utilisé sur un autre appareil. Un code = 1 seul appareil."
+        • Old codes without device-id binding still work (legacy mode).
+
+      CLIENT SELF-SERVICE CODES (premium owners):
+        • Subscribe a test user (or set is_subscribed=true via DB) AND assign a wedding via admin endpoint.
+        • POST /api/admin/users/{user_id}/assign-wedding {client_id} (admin only).
+        • DELETE /api/admin/users/{user_id}/wedding (admin only).
+        • Then as that user:
+          - GET /api/client/codes → returns {codes, tier, limit, can_create}
+          - POST /api/client/codes {label} → creates a new code; tier basic limited to BASIC_MAX_CODES (3)
+          - DELETE /api/client/codes/{code} → revokes (must be owner)
+        • Without is_subscribed → 402 Payment Required
+        • Without client_id → 403 Forbidden
+        • At limit (3 active codes for basic tier) → 403 with French upgrade message
+
+      STRIPE TIERS:
+        • POST /api/billing/checkout now accepts {tier: "basic" | "unlimited"} and uses STRIPE_PRICE_AMOUNT or STRIPE_PRICE_AMOUNT_UNLIMITED (230 cents).
+        • GET /api/billing/config now returns price_amount_unlimited and basic_max_codes.
+        • Webhook saves subscription_tier from metadata into user document.
+
+      WEDDING DETAILS:
+        • GET /api/weddings/{client_id} now returns is_my_wedding=true when the authenticated user has client_id matching.
+
+      CREDENTIALS:
+        • admin@wedding.fr / Admin13!
+        • test@wedding.fr / test1234 (already has client_id=hanifa-et-dali + is_subscribed=true + tier=basic from manual setup)
+        • Existing active code S9A5URZC bound to first device that used it earlier; new code T2QPYT54 bound to DEVICE_A_UUID.
+
+      Please run tests on the 4 task groups above and report results. No frontend testing needed yet.
   - agent: "testing"
     message: |
       ✅ All 14 backend tests passed against https://mariagevideo.preview.emergentagent.com/api.
@@ -252,3 +344,46 @@ agent_communication:
       • Regression: GET /api/videos/public, GET /api/weddings/public, POST /api/weddings/unlock (S9A5URZC) all return 200.
       No 500s or unexpected errors. Backend logs show real Stripe API responses code 200.
       Stripe billing integration appears fully functional end-to-end in test mode.
+  - agent: "testing"
+    message: |
+      ✅ Sprint 2 — All 6 task groups verified PASSING against https://mariagevideo.preview.emergentagent.com/api (backend_test.py — 37/39 individual assertions; 2 remaining are not backend bugs, see below).
+
+      DEVICE BINDING (/api/weddings/unlock):
+        • Fresh code RSSAPEYG (generated via /api/client/codes) → first unlock with DEVICE_X binds (200 ok:true).
+        • Same DEVICE_X re-unlock → 200 idempotent.
+        • DEVICE_Y → 403 "Ce code est déjà utilisé sur un autre appareil. Un code = 1 seul appareil."
+        • No device_id on bound code → 403.
+        • Invalid code → 404. Revoked code (after DELETE /api/client/codes/{code}) → 404 (since is_active filter excludes it; spec accepts 410 or 404).
+
+      CLIENT SELF-SERVICE CODES (/api/client/codes):
+        • test@wedding.fr (basic, hanifa-et-dali): GET → 200 {tier:'basic', limit:3, can_create, codes[]}. 3 POSTs → 200 with 8-char uppercase alphanumeric codes (e.g. GW79FX5V). 4th POST → 403 "Limite atteinte (3 codes max). … Illimité (2,30€/mois) …".
+        • DELETE → 200, can_create flips back to true. DELETE as non-owner → 403.
+        • Subscribed user WITH client_id but is_subscribed=false → 402 "Abonnement Premium requis." (verified via fresh registration + admin assign).
+        • Without client_id assigned → 403 "Aucun mariage assigné".
+        • MINOR: When a freshly-registered user has NEITHER is_subscribed NOR client_id, server returns 403 (client_id check) instead of 402. The review spec wording suggested 402 first. Low impact — error message remains accurate.
+
+      ADMIN ASSIGN / UNASSIGN:
+        • POST /api/admin/users/{id}/assign-wedding valid client_id → 200 {ok:true, client_id, client_name:'Hanifa et Dali'}.
+        • Invalid client_id → 404 "Mariage introuvable".
+        • DELETE /api/admin/users/{id}/wedding → 200 ok:true.
+        • Non-admin → 403 "Accès réservé aux administrateurs".
+
+      STRIPE TIERS (/api/billing/checkout + /api/billing/config):
+        • POST /api/billing/checkout {tier:'basic'} → 200, session.line_items unit_amount=199 (verified via Stripe API retrieve).
+        • POST {tier:'unlimited'} → 200, resp_tier='unlimited', unit_amount=230 (verified).
+        • POST {tier:'invalid'} → 200, tier='basic' (correct fallback).
+        • GET /api/billing/config → {publishable_key, price_amount:199, price_amount_unlimited:230, price_currency:'eur', basic_max_codes:3, configured:true}.
+        • Initial 502s were caused by stale stripe_customer_id='cus_TEST_FAKE' on test@wedding.fr left over from prior webhook test; cleared via direct DB $unset and behaviour became correct. Recommend main agent reset that field in any seed/setup tooling so a fresh deploy doesn't keep stale ids.
+
+      WEDDING DETAILS is_my_wedding:
+        • test@wedding.fr GET /weddings/hanifa-et-dali → is_my_wedding=true.
+        • Anonymous → is_my_wedding=false.
+        • test@wedding.fr GET another wedding → is_my_wedding=false.
+
+      REGRESSION:
+        • GET /api/videos/public anon → 200 with featured+rows.
+        • GET /api/weddings/public anon → 200 with weddings.
+        • GET /api/auth/me for both admin and test users → 200, now exposes subscription_tier + client_id fields (UserPublic model).
+
+      Backend logs (uvicorn) confirm real Stripe API 200 responses on /v1/customers and /v1/checkout/sessions.
+      No critical issues remain. Frontend testing not performed (out of scope).

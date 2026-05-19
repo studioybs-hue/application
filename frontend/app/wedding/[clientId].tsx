@@ -1,7 +1,7 @@
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback } from "react";
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  ActivityIndicator, Alert, TextInput, KeyboardAvoidingView, Platform, Modal,
+  ActivityIndicator, TextInput, KeyboardAvoidingView, Platform, Modal, Share,
 } from "react-native";
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
@@ -9,10 +9,13 @@ import { Ionicons } from "@expo/vector-icons";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
+import * as Clipboard from "expo-clipboard";
 import { api } from "@/src/api/client";
 import { storage } from "@/src/utils/storage";
 import { colors, spacing, radii } from "@/src/theme";
 import { useAuth } from "@/src/auth/AuthContext";
+import { getDeviceId, getDeviceLabel } from "@/src/utils/deviceId";
+import { showAlert } from "@/src/utils/dialog";
 
 type Video = {
   id: string;
@@ -36,7 +39,18 @@ type Wedding = {
   video_count: number;
   total_minutes: number;
   unlocked: boolean;
+  is_my_wedding?: boolean;
   videos: Video[];
+};
+
+type ClientCode = {
+  code: string;
+  label?: string | null;
+  is_active: boolean;
+  bound_device_id?: string | null;
+  bound_device_label?: string | null;
+  bound_at?: string | null;
+  created_at?: string | null;
 };
 
 const CODES_KEY = "ws_unlocked_codes"; // JSON-stringified map of client_id -> code
@@ -69,6 +83,16 @@ export default function WeddingScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
+  // Invite (premium client) state
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [inviteCodes, setInviteCodes] = useState<ClientCode[]>([]);
+  const [inviteTier, setInviteTier] = useState<string>("basic");
+  const [inviteLimit, setInviteLimit] = useState<number | null>(3);
+  const [inviteCanCreate, setInviteCanCreate] = useState(true);
+  const [inviteLabel, setInviteLabel] = useState("");
+  const [inviteGenerating, setInviteGenerating] = useState(false);
+  const [inviteLoading, setInviteLoading] = useState(false);
+
   const load = useCallback(async () => {
     try {
       const storedCode = await getStoredCode(clientId);
@@ -76,7 +100,7 @@ export default function WeddingScreen() {
       const d = await api<Wedding>(path);
       setWedding(d);
     } catch (e: any) {
-      Alert.alert("Erreur", e.message);
+      showAlert("Erreur", e.message);
     } finally {
       setLoading(false);
     }
@@ -93,9 +117,11 @@ export default function WeddingScreen() {
     }
     setSubmitting(true);
     try {
+      const device_id = await getDeviceId();
+      const device_label = getDeviceLabel();
       const r = await api<{ ok: boolean; client_id: string; client_name: string; video_count: number }>(
         "/weddings/unlock",
-        { method: "POST", body: { code: clean } }
+        { method: "POST", body: { code: clean, device_id, device_label } }
       );
       if (r.client_id !== clientId) {
         setError(`Ce code est pour « ${r.client_name} », pas pour ce mariage.`);
@@ -110,6 +136,69 @@ export default function WeddingScreen() {
       setError(e.message || "Code invalide");
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const loadInviteCodes = useCallback(async () => {
+    setInviteLoading(true);
+    try {
+      const r = await api<{ codes: ClientCode[]; tier: string; limit: number | null; can_create: boolean }>("/client/codes");
+      setInviteCodes(r.codes);
+      setInviteTier(r.tier);
+      setInviteLimit(r.limit);
+      setInviteCanCreate(r.can_create);
+    } catch (e: any) {
+      showAlert("Erreur", e.message);
+    } finally {
+      setInviteLoading(false);
+    }
+  }, []);
+
+  const openInvite = async () => {
+    setInviteOpen(true);
+    await loadInviteCodes();
+  };
+
+  const generateCode = async () => {
+    setInviteGenerating(true);
+    try {
+      const r = await api<{ code: string }>("/client/codes", {
+        method: "POST",
+        body: { label: inviteLabel.trim() },
+      });
+      setInviteLabel("");
+      await loadInviteCodes();
+      showAlert("✓ Code généré", `Votre nouveau code : ${r.code}\n\nIl est valable UNE SEULE FOIS sur UN SEUL appareil. Copiez-le et partagez-le avec votre invité.`);
+    } catch (e: any) {
+      showAlert("Erreur", e.message || "Impossible de générer le code");
+    } finally {
+      setInviteGenerating(false);
+    }
+  };
+
+  const copyCode = async (c: string) => {
+    await Clipboard.setStringAsync(c);
+    showAlert("Copié", `Code ${c} copié dans le presse-papier.`);
+  };
+
+  const shareInvite = async (c: ClientCode) => {
+    try {
+      const link = typeof window !== "undefined" ? `${window.location.origin}/wedding/${clientId}` : "";
+      const msg = `Je vous invite à découvrir notre mariage sur CINÉMARIÉS 💍\n\nVotre code unique : ${c.code}\n${link ? `\nLien direct : ${link}` : ""}\n\n(Ce code ne fonctionne que sur UN seul appareil — le premier à l'utiliser.)`;
+      if (Platform.OS === "web" && (navigator as any).share) {
+        await (navigator as any).share({ title: "Mon mariage CINÉMARIÉS", text: msg });
+      } else {
+        await Share.share({ message: msg });
+      }
+    } catch {}
+  };
+
+  const revokeCode = async (c: string) => {
+    try {
+      await api(`/client/codes/${c}`, { method: "DELETE" });
+      await loadInviteCodes();
+    } catch (e: any) {
+      showAlert("Erreur", e.message);
     }
   };
 
@@ -224,6 +313,18 @@ export default function WeddingScreen() {
               <Ionicons name="checkmark-circle" size={18} color={colors.success} />
               <Text style={styles.unlockedBannerTxt}>Espace privé débloqué — bonnes émotions !</Text>
             </View>
+
+            {wedding.is_my_wedding && (
+              <TouchableOpacity style={styles.inviteBtn} onPress={openInvite} testID="invite-friends-btn">
+                <Ionicons name="people" size={20} color="#0A0A0A" />
+                <View style={{ flex: 1, marginLeft: 12 }}>
+                  <Text style={styles.inviteBtnTitle}>Inviter mes proches</Text>
+                  <Text style={styles.inviteBtnSub}>Générez des codes uniques à partager (1 code = 1 appareil)</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={20} color="#0A0A0A" />
+              </TouchableOpacity>
+            )}
+
             <Text style={styles.sectionTitle}>Films de ce mariage</Text>
             {wedding.videos.map((v) => (
               <TouchableOpacity
@@ -283,6 +384,100 @@ export default function WeddingScreen() {
           </View>
         </KeyboardAvoidingView>
       </Modal>
+      {/* Invite Friends Modal (premium clients only) */}
+      <Modal visible={inviteOpen} animationType="slide" transparent onRequestClose={() => setInviteOpen(false)}>
+        <KeyboardAvoidingView style={styles.modalBg} behavior={Platform.OS === "ios" ? "padding" : "height"}>
+          <View style={[styles.modal, { maxHeight: "92%" }]}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Inviter mes proches</Text>
+              <TouchableOpacity onPress={() => setInviteOpen(false)}>
+                <Ionicons name="close" size={26} color={colors.ivory} />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.modalSub}>
+              Générez des codes uniques pour vos invités. <Text style={{ color: colors.gold, fontWeight: "700" }}>1 code = 1 appareil</Text> (le premier qui l'utilise le verrouille).
+            </Text>
+
+            {/* Plan badge */}
+            <View style={styles.planBadge}>
+              <Ionicons name={inviteTier === "unlimited" ? "infinite" : "star"} size={14} color={colors.gold} />
+              <Text style={styles.planBadgeTxt}>
+                {inviteTier === "unlimited"
+                  ? "Premium Illimité — codes illimités"
+                  : `Premium — ${inviteCodes.filter(c => c.is_active).length}/${inviteLimit ?? 3} codes actifs`}
+              </Text>
+            </View>
+
+            {/* New code form */}
+            {inviteCanCreate ? (
+              <View style={{ marginTop: spacing.md }}>
+                <Text style={styles.modalLabel}>Pour qui ? (optionnel)</Text>
+                <TextInput
+                  style={styles.modalInput}
+                  value={inviteLabel}
+                  onChangeText={setInviteLabel}
+                  placeholder="Ex : Tatie Jeanne"
+                  placeholderTextColor={colors.textDisabled}
+                  maxLength={60}
+                />
+                <TouchableOpacity style={styles.submitBtn} onPress={generateCode} disabled={inviteGenerating} testID="generate-invite-code">
+                  {inviteGenerating ? <ActivityIndicator color="#0A0A0A" /> : (
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                      <Ionicons name="add-circle" size={18} color="#0A0A0A" />
+                      <Text style={styles.submitTxt}>Générer un nouveau code</Text>
+                    </View>
+                  )}
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <View style={styles.upsellCard}>
+                <Ionicons name="infinite" size={24} color={colors.gold} />
+                <Text style={styles.upsellTitle}>Limite atteinte</Text>
+                <Text style={styles.upsellSub}>Passez à l'offre Illimité pour 2,30€/mois et créez autant de codes que vous voulez.</Text>
+                <TouchableOpacity style={styles.upsellBtn} onPress={() => { setInviteOpen(false); router.push("/subscription?tier=unlimited"); }}>
+                  <Text style={styles.upsellBtnTxt}>Passer à l'Illimité — 2,30€/mois</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {/* List */}
+            <Text style={[styles.modalLabel, { marginTop: spacing.lg }]}>Mes codes</Text>
+            <ScrollView style={{ maxHeight: 260 }}>
+              {inviteLoading ? (
+                <ActivityIndicator color={colors.gold} style={{ marginTop: 20 }} />
+              ) : inviteCodes.length === 0 ? (
+                <Text style={styles.emptyTxt}>Aucun code généré pour l'instant.</Text>
+              ) : (
+                inviteCodes.map((c) => (
+                  <View key={c.code} style={[styles.codeRow, !c.is_active && { opacity: 0.5 }]}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.codeRowCode}>{c.code}</Text>
+                      <Text style={styles.codeRowMeta}>
+                        {c.label ? `${c.label} · ` : ""}
+                        {c.bound_device_id
+                          ? `🔒 Activé sur ${c.bound_device_label || "un appareil"}`
+                          : "⌛ Non activé"}
+                      </Text>
+                    </View>
+                    <TouchableOpacity onPress={() => copyCode(c.code)} style={styles.smallBtn}>
+                      <Ionicons name="copy-outline" size={16} color={colors.gold} />
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => shareInvite(c)} style={styles.smallBtn}>
+                      <Ionicons name="share-outline" size={16} color={colors.gold} />
+                    </TouchableOpacity>
+                    {c.is_active && (
+                      <TouchableOpacity onPress={() => revokeCode(c.code)} style={styles.smallBtn}>
+                        <Ionicons name="trash-outline" size={16} color={colors.error} />
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                ))
+              )}
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </View>
   );
 }
@@ -336,4 +531,28 @@ const styles = StyleSheet.create({
   submitBtn: { backgroundColor: colors.gold, paddingVertical: 16, borderRadius: radii.sm, alignItems: "center", marginTop: spacing.md },
   submitTxt: { color: "#0A0A0A", fontWeight: "700", fontSize: 15, letterSpacing: 0.5 },
   help: { color: colors.textDisabled, fontSize: 11, textAlign: "center", marginTop: spacing.md, fontStyle: "italic" },
+  inviteBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.gold,
+    padding: spacing.md,
+    borderRadius: radii.md,
+    marginBottom: spacing.lg,
+  },
+  inviteBtnTitle: { color: "#0A0A0A", fontWeight: "700", fontSize: 15 },
+  inviteBtnSub: { color: "rgba(0,0,0,0.7)", fontSize: 11, marginTop: 2 },
+  modalLabel: { color: colors.textSecondary, fontSize: 11, letterSpacing: 1, textTransform: "uppercase", marginBottom: 6 },
+  modalInput: { backgroundColor: colors.bg, color: colors.ivory, padding: 14, borderRadius: 8, fontSize: 14, marginBottom: spacing.md, borderWidth: 1, borderColor: colors.border },
+  planBadge: { flexDirection: "row", alignItems: "center", gap: 6, alignSelf: "flex-start", backgroundColor: "rgba(212,175,55,0.12)", borderWidth: 1, borderColor: colors.gold, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6 },
+  planBadgeTxt: { color: colors.gold, fontSize: 12, fontWeight: "600" },
+  emptyTxt: { color: colors.textSecondary, fontStyle: "italic", textAlign: "center", paddingVertical: spacing.md },
+  codeRow: { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: colors.bg, padding: 12, borderRadius: 8, marginBottom: 8, borderWidth: 1, borderColor: colors.border },
+  codeRowCode: { color: colors.gold, fontSize: 17, fontWeight: "800", letterSpacing: 2 },
+  codeRowMeta: { color: colors.textSecondary, fontSize: 11, marginTop: 2 },
+  smallBtn: { width: 32, height: 32, borderRadius: 6, borderWidth: 1, borderColor: colors.border, alignItems: "center", justifyContent: "center" },
+  upsellCard: { marginTop: spacing.md, padding: spacing.md, backgroundColor: "rgba(212,175,55,0.08)", borderWidth: 1, borderColor: colors.gold, borderRadius: radii.md, alignItems: "center" },
+  upsellTitle: { color: colors.ivory, fontWeight: "700", fontSize: 16, marginTop: 8 },
+  upsellSub: { color: colors.textSecondary, fontSize: 13, textAlign: "center", marginTop: 6, marginBottom: spacing.md, lineHeight: 18 },
+  upsellBtn: { backgroundColor: colors.gold, paddingHorizontal: 18, paddingVertical: 12, borderRadius: 8 },
+  upsellBtnTxt: { color: "#0A0A0A", fontWeight: "700", fontSize: 14 },
 });

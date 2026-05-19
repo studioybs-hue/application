@@ -31,7 +31,10 @@ STRIPE_API_KEY = os.environ.get('STRIPE_API_KEY', '')
 STRIPE_PUBLISHABLE_KEY = os.environ.get('STRIPE_PUBLISHABLE_KEY', '')
 STRIPE_WEBHOOK_SECRET = os.environ.get('STRIPE_WEBHOOK_SECRET', '')
 STRIPE_PRICE_AMOUNT = int(os.environ.get('STRIPE_PRICE_AMOUNT', '199'))
+STRIPE_PRICE_AMOUNT_UNLIMITED = int(os.environ.get('STRIPE_PRICE_AMOUNT_UNLIMITED', '230'))
 STRIPE_PRICE_CURRENCY = os.environ.get('STRIPE_PRICE_CURRENCY', 'eur')
+# Plan limits: Basic = 3 codes max (1 device each), Unlimited = unlimited codes
+BASIC_MAX_CODES = int(os.environ.get('BASIC_MAX_CODES', '3'))
 APP_PUBLIC_URL = os.environ.get('APP_PUBLIC_URL', '')
 ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', 'admin@wedding.fr')
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'Admin13!')
@@ -56,6 +59,8 @@ class UserPublic(BaseModel):
     full_name: str
     is_subscribed: bool = False
     is_admin: bool = False
+    subscription_tier: Optional[str] = None  # "basic" | "unlimited" | None
+    client_id: Optional[str] = None
     created_at: datetime
 
 
@@ -95,6 +100,16 @@ class Video(BaseModel):
 
 class UnlockRequest(BaseModel):
     code: str
+    device_id: Optional[str] = None
+    device_label: Optional[str] = None
+
+
+class ClientCodeCreate(BaseModel):
+    label: str = Field("", description="Nom du destinataire (ex: 'Tatie Jeanne')")
+
+
+class AssignWeddingRequest(BaseModel):
+    client_id: str
 
 
 class UnlockCodeInfo(BaseModel):
@@ -106,6 +121,7 @@ class UnlockCodeInfo(BaseModel):
 class CheckoutRequest(BaseModel):
     success_url: Optional[str] = None
     cancel_url: Optional[str] = None
+    tier: Optional[str] = "basic"  # "basic" (1,99€) or "unlimited" (2,30€)
 
 
 # ====== UTILITIES ======
@@ -155,6 +171,8 @@ def user_to_public(u: dict) -> UserPublic:
         full_name=u.get("full_name", ""),
         is_subscribed=u.get("is_subscribed", False),
         is_admin=u.get("is_admin", False),
+        subscription_tier=u.get("subscription_tier"),
+        client_id=u.get("client_id"),
         created_at=u.get("created_at", utcnow()),
     )
 
@@ -357,6 +375,8 @@ async def get_wedding(client_id: str, code: Optional[str] = None, current: Optio
     grouped = _group_by_wedding(filtered)
     wedding = next(iter(grouped.values()))
     wedding["unlocked"] = unlocked
+    # Owner flag — premium clients see "Invite friends" button on their own wedding
+    wedding["is_my_wedding"] = bool(current and current.get("client_id") == client_id)
     wedding["videos"] = [video_to_public(v, include_full=unlocked) for v in filtered]
     # sort videos by category preferring chronological wedding day order
     cat_order = {"À l'affiche": 0, "Cérémonies": 1, "Soirées": 2, "Best Of": 3}
@@ -365,17 +385,31 @@ async def get_wedding(client_id: str, code: Optional[str] = None, current: Optio
 
 
 @api_router.post("/weddings/unlock")
-async def unlock_wedding(body: UnlockRequest, current: Optional[dict] = Depends(get_optional_user)):
+async def unlock_wedding(body: UnlockRequest, request: Request, current: Optional[dict] = Depends(get_optional_user)):
     """Enter a code to unlock an entire wedding. Works anonymously (no login required).
-    If user is logged in, the unlock is persisted to their account."""
+    Each code is locked to ONE device (the first device that uses it).
+    The same device can re-unlock with the code as many times as needed."""
     code = body.code.strip().upper()
     rec = await db.unlock_codes.find_one({"code": code, "is_active": True}, {"_id": 0})
     if not rec:
         raise HTTPException(status_code=404, detail="Code invalide")
     if rec.get("expires_at") and rec["expires_at"] < utcnow():
         raise HTTPException(status_code=410, detail="Code expiré")
-    if rec.get("max_uses") and rec.get("current_uses", 0) >= rec["max_uses"]:
-        raise HTTPException(status_code=429, detail="Code épuisé")
+
+    # DEVICE BINDING: 1 code = 1 device. First device that uses it wins.
+    device_id = (body.device_id or "").strip()
+    bound_device = rec.get("bound_device_id")
+
+    if bound_device:
+        if not device_id:
+            raise HTTPException(status_code=403, detail="Ce code est verrouillé sur un appareil spécifique. Veuillez utiliser ce même appareil.")
+        if bound_device != device_id:
+            raise HTTPException(status_code=403, detail="Ce code est déjà utilisé sur un autre appareil. Un code = 1 seul appareil.")
+    else:
+        # First use: bind to this device (if provided)
+        # Also respect max_uses for legacy codes (still useful for admin "limit by use count" model)
+        if rec.get("max_uses") and rec.get("current_uses", 0) >= rec["max_uses"]:
+            raise HTTPException(status_code=429, detail="Code épuisé")
 
     # Determine client_id from the code (new) or derive from video_id (backward compat)
     client_id = rec.get("client_id")
@@ -417,7 +451,30 @@ async def unlock_wedding(body: UnlockRequest, current: Optional[dict] = Depends(
                 upsert=True,
             )
 
-    await db.unlock_codes.update_one({"code": code}, {"$inc": {"current_uses": 1}})
+    # Bind to device on first activation (or refresh activation timestamp if same device)
+    if device_id:
+        ip = (request.client.host if request.client else "") or ""
+        ua = (request.headers.get("user-agent") or "")[:300]
+        if not bound_device:
+            await db.unlock_codes.update_one(
+                {"code": code},
+                {"$set": {
+                    "bound_device_id": device_id,
+                    "bound_device_label": body.device_label or "Appareil",
+                    "bound_device_ip": ip,
+                    "bound_device_ua": ua,
+                    "bound_at": utcnow(),
+                }, "$inc": {"current_uses": 1}},
+            )
+        else:
+            # Same device re-unlocking — update last seen
+            await db.unlock_codes.update_one(
+                {"code": code},
+                {"$set": {"last_seen_at": utcnow()}},
+            )
+    else:
+        # No device id provided (legacy) — bump usage count
+        await db.unlock_codes.update_one({"code": code}, {"$inc": {"current_uses": 1}})
 
     wedding_name = wedding_videos[0].get("client_name") or wedding_videos[0].get("title")
     # also return the full videos so client can play immediately
@@ -429,6 +486,108 @@ async def unlock_wedding(body: UnlockRequest, current: Optional[dict] = Depends(
         "video_count": len(wedding_videos),
         "videos": full_videos,
     }
+
+
+# --- CLIENT SELF-SERVICE CODES (premium owners can generate codes for their own wedding) ---
+def code_to_public(c: dict) -> dict:
+    expired = bool(c.get("expires_at") and c["expires_at"] < utcnow())
+    return {
+        "code": c["code"],
+        "client_id": c.get("client_id"),
+        "label": c.get("label"),
+        "is_active": c.get("is_active", True) and not expired,
+        "expired": expired,
+        "current_uses": c.get("current_uses", 0),
+        "max_uses": c.get("max_uses"),
+        "bound_device_id": c.get("bound_device_id"),
+        "bound_device_label": c.get("bound_device_label"),
+        "bound_at": c.get("bound_at").isoformat() if c.get("bound_at") else None,
+        "created_at": c.get("created_at").isoformat() if c.get("created_at") else None,
+    }
+
+
+@api_router.get("/client/codes")
+async def client_list_codes(current: dict = Depends(get_current_user)):
+    """List codes generated by the current client for their assigned wedding."""
+    if not current.get("client_id"):
+        raise HTTPException(status_code=403, detail="Aucun mariage assigné à votre compte. Contactez l'administrateur.")
+    if not (current.get("is_subscribed") or current.get("is_admin")):
+        raise HTTPException(status_code=402, detail="Abonnement Premium requis pour générer des codes.")
+    codes = await db.unlock_codes.find(
+        {"client_id": current["client_id"], "owner_user_id": current["id"]},
+        {"_id": 0}
+    ).sort("created_at", -1).to_list(200)
+    tier = current.get("subscription_tier") or "basic"
+    limit = None if tier == "unlimited" or current.get("is_admin") else BASIC_MAX_CODES
+    active_count = sum(1 for c in codes if c.get("is_active", True))
+    return {
+        "codes": [code_to_public(c) for c in codes],
+        "tier": tier,
+        "limit": limit,
+        "active_count": active_count,
+        "can_create": (limit is None) or (active_count < limit),
+    }
+
+
+@api_router.post("/client/codes")
+async def client_create_code(body: ClientCodeCreate, current: dict = Depends(get_current_user)):
+    """Generate a new code (1 code = 1 device). Limit depends on subscription tier."""
+    if not current.get("client_id"):
+        raise HTTPException(status_code=403, detail="Aucun mariage assigné. Contactez l'administrateur.")
+    if not (current.get("is_subscribed") or current.get("is_admin")):
+        raise HTTPException(status_code=402, detail="Abonnement Premium requis.")
+
+    tier = current.get("subscription_tier") or "basic"
+    if tier != "unlimited" and not current.get("is_admin"):
+        # Count active codes owned by this user for this wedding
+        active = await db.unlock_codes.count_documents({
+            "owner_user_id": current["id"],
+            "client_id": current["client_id"],
+            "is_active": True,
+        })
+        if active >= BASIC_MAX_CODES:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Limite atteinte ({BASIC_MAX_CODES} codes max). Passez à l'offre Illimité (2,30€/mois) pour générer des codes sans limite.",
+            )
+
+    # Make sure the wedding actually exists
+    all_v = await db.videos.find({}, {"_id": 0}).to_list(500)
+    matching = [v for v in all_v if (v.get("client_id") or slugify(v.get("title", ""))) == current["client_id"]]
+    if not matching:
+        raise HTTPException(status_code=404, detail="Mariage introuvable")
+
+    code = gen_unlock_code(8)
+    await db.unlock_codes.insert_one({
+        "code": code,
+        "client_id": current["client_id"],
+        "video_id": None,
+        "label": (body.label or "").strip() or None,
+        "owner_user_id": current["id"],
+        "owner_email": current.get("email"),
+        "source": "client",
+        "is_active": True,
+        "max_uses": 1,  # 1 device per code; max_uses kept for legacy display
+        "current_uses": 0,
+        "expires_at": None,
+        "bound_device_id": None,
+        "created_at": utcnow(),
+    })
+    return {"ok": True, "code": code, "client_id": current["client_id"]}
+
+
+@api_router.delete("/client/codes/{code}")
+async def client_revoke_code(code: str, current: dict = Depends(get_current_user)):
+    code = code.strip().upper()
+    rec = await db.unlock_codes.find_one({"code": code}, {"_id": 0})
+    if not rec:
+        raise HTTPException(status_code=404, detail="Code introuvable")
+    if rec.get("owner_user_id") != current["id"] and not current.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Vous n'êtes pas le propriétaire de ce code")
+    await db.unlock_codes.update_one({"code": code}, {"$set": {"is_active": False}})
+    return {"ok": True}
+
+
 
 
 @api_router.get("/videos/{video_id}")
@@ -506,29 +665,36 @@ async def create_checkout(body: CheckoutRequest, current: dict = Depends(get_cur
         success_url = body.success_url or f"{APP_PUBLIC_URL}/subscription?status=success&session_id={{CHECKOUT_SESSION_ID}}"
         cancel_url = body.cancel_url or f"{APP_PUBLIC_URL}/subscription?status=cancel"
 
+        tier = (body.tier or "basic").lower()
+        if tier not in ("basic", "unlimited"):
+            tier = "basic"
+        price_amount = STRIPE_PRICE_AMOUNT_UNLIMITED if tier == "unlimited" else STRIPE_PRICE_AMOUNT
+        product_name = "CINÉMARIÉS — Premium Illimité" if tier == "unlimited" else "CINÉMARIÉS — Premium"
+
         session = stripe.checkout.Session.create(
             mode="subscription",
             customer=customer_id,
             line_items=[{
                 "price_data": {
                     "currency": STRIPE_PRICE_CURRENCY,
-                    "product_data": {"name": "CINÉMARIÉS — Premium"},
+                    "product_data": {"name": product_name},
                     "recurring": {"interval": "month"},
-                    "unit_amount": STRIPE_PRICE_AMOUNT,
+                    "unit_amount": price_amount,
                 },
                 "quantity": 1,
             }],
             success_url=success_url,
             cancel_url=cancel_url,
-            metadata={"user_id": current["id"]},
+            metadata={"user_id": current["id"], "tier": tier},
         )
         await db.checkout_sessions.insert_one({
             "session_id": session.id,
             "user_id": current["id"],
+            "tier": tier,
             "status": "pending",
             "created_at": utcnow(),
         })
-        return {"url": session.url, "session_id": session.id}
+        return {"url": session.url, "session_id": session.id, "tier": tier}
     except stripe.error.StripeError as e:  # type: ignore[attr-defined]
         logging.warning(f"Stripe error: {e}")
         raise HTTPException(status_code=502, detail=f"Erreur Stripe: {str(e)}")
@@ -558,7 +724,9 @@ async def billing_config():
     return {
         "publishable_key": STRIPE_PUBLISHABLE_KEY,
         "price_amount": STRIPE_PRICE_AMOUNT,
+        "price_amount_unlimited": STRIPE_PRICE_AMOUNT_UNLIMITED,
         "price_currency": STRIPE_PRICE_CURRENCY,
+        "basic_max_codes": BASIC_MAX_CODES,
         "configured": bool(STRIPE_API_KEY and STRIPE_API_KEY != "sk_test_emergent"),
     }
 
@@ -621,12 +789,15 @@ async def stripe_webhook(request: Request, stripe_signature: Optional[str] = Hea
         if event_type == "checkout.session.completed":
             customer_id = obj.get("customer")
             sub_id = obj.get("subscription")
-            user_id = (obj.get("metadata") or {}).get("user_id")
+            meta = obj.get("metadata") or {}
+            user_id = meta.get("user_id")
+            tier = meta.get("tier") or "basic"
             if user_id:
                 await db.users.update_one(
                     {"id": user_id},
                     {"$set": {
                         "is_subscribed": True,
+                        "subscription_tier": tier,
                         "stripe_customer_id": customer_id,
                         "stripe_subscription_id": sub_id,
                     }},
@@ -905,10 +1076,35 @@ async def admin_list_users(_: dict = Depends(require_admin)):
             "full_name": u.get("full_name", ""),
             "is_subscribed": u.get("is_subscribed", False),
             "is_admin": u.get("is_admin", False),
+            "subscription_tier": u.get("subscription_tier"),
+            "client_id": u.get("client_id"),
             "unlocks": counts.get(u["id"], 0),
             "created_at": u.get("created_at").isoformat() if u.get("created_at") else None,
         })
     return {"users": out}
+
+
+@api_router.post("/admin/users/{user_id}/assign-wedding")
+async def admin_assign_wedding(user_id: str, body: AssignWeddingRequest, _: dict = Depends(require_admin)):
+    """Link a user account to a specific wedding so they can self-generate codes."""
+    # Verify the wedding exists
+    all_v = await db.videos.find({}, {"_id": 0}).to_list(500)
+    matching = [v for v in all_v if (v.get("client_id") or slugify(v.get("title", ""))) == body.client_id]
+    if not matching:
+        raise HTTPException(status_code=404, detail="Mariage introuvable")
+    res = await db.users.update_one({"id": user_id}, {"$set": {"client_id": body.client_id}})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+    wedding_name = matching[0].get("client_name") or matching[0].get("title")
+    return {"ok": True, "client_id": body.client_id, "client_name": wedding_name}
+
+
+@api_router.delete("/admin/users/{user_id}/wedding")
+async def admin_unassign_wedding(user_id: str, _: dict = Depends(require_admin)):
+    res = await db.users.update_one({"id": user_id}, {"$unset": {"client_id": ""}})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+    return {"ok": True}
 
 
 @api_router.get("/admin/users/{user_id}/unlocks")

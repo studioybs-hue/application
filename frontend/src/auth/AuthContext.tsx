@@ -7,6 +7,8 @@ type User = {
   full_name: string;
   is_subscribed: boolean;
   is_admin: boolean;
+  subscription_tier?: string | null;
+  client_id?: string | null;
 } | null;
 
 type Ctx = {
