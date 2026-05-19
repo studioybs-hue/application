@@ -6,7 +6,6 @@ import {
   TouchableOpacity,
   ScrollView,
   ActivityIndicator,
-  Alert,
   Platform,
 } from "react-native";
 import { Image } from "expo-image";
@@ -18,6 +17,8 @@ import { LinearGradient } from "expo-linear-gradient";
 import { api } from "@/src/api/client";
 import { colors, spacing, radii } from "@/src/theme";
 import { useAuth } from "@/src/auth/AuthContext";
+import { useCast } from "@/src/cast";
+import { showAlert } from "@/src/utils/dialog";
 
 type Video = {
   id: string;
@@ -39,7 +40,7 @@ export default function VideoScreen() {
   const [video, setVideo] = useState<Video | null>(null);
   const [loading, setLoading] = useState(true);
   const [playing, setPlaying] = useState(false);
-  const [cast, setCast] = useState(false);
+  const castApi = useCast();
 
   useEffect(() => {
     (async () => {
@@ -47,7 +48,7 @@ export default function VideoScreen() {
         const v = await api<Video>(`/videos/${id}`);
         setVideo(v);
       } catch (e: any) {
-        Alert.alert("Erreur", e.message);
+        showAlert("Erreur", e.message);
       } finally {
         setLoading(false);
       }
@@ -66,15 +67,36 @@ export default function VideoScreen() {
   const isUnlocked = !!video.full_url;
   const playableUrl = (isUnlocked ? video.full_url : null) || video.trailer_url || video.full_url || "";
 
-  const onCastPress = () => {
-    setCast(!cast);
-    Alert.alert(
-      cast ? "Diffusion arrêtée" : "Chromecast",
-      cast
-        ? "Lecture sur ce téléphone."
-        : "Aperçu : recherche de périphériques Chromecast à proximité…\n(Mode démo — diffusion native disponible dans la version TV.)"
-    );
+  const onCastPress = async () => {
+    if (Platform.OS !== "web") {
+      showAlert(
+        "Chromecast",
+        "La diffusion native Chromecast nécessite l'application mobile officielle (build EAS). En attendant, ouvrez le site sur Chrome desktop pour profiter du Cast Web."
+      );
+      return;
+    }
+    if (!castApi.available) {
+      showAlert(
+        "Chromecast indisponible",
+        "Votre navigateur ne supporte pas Google Cast.\n\n→ Ouvrez CINÉMARIÉS sur Chrome ou Edge (desktop) et assurez-vous d'être sur le même Wi-Fi que votre Chromecast / TV."
+      );
+      return;
+    }
+    if (castApi.connected) {
+      await castApi.stop();
+      showAlert("Diffusion arrêtée", "Lecture revenue sur ce navigateur.");
+      return;
+    }
+    const ok = await castApi.cast(playableUrl, video.title, video.poster_url);
+    if (!ok) {
+      showAlert(
+        "Diffusion annulée",
+        "Aucun appareil Chromecast sélectionné ou la diffusion a échoué."
+      );
+    }
   };
+
+  const castIconColor = castApi.connected ? colors.gold : castApi.available || Platform.OS !== "web" ? colors.ivory : colors.textDisabled;
 
   const playerHtml = `
     <html>
@@ -100,9 +122,9 @@ export default function VideoScreen() {
           </TouchableOpacity>
           <TouchableOpacity onPress={onCastPress} style={styles.iconBtn} testID="video-cast-btn">
             <Ionicons
-              name={cast ? "tv" : "tv-outline"}
+              name={castApi.connected ? "tv" : "tv-outline"}
               size={22}
-              color={cast ? colors.gold : colors.ivory}
+              color={castIconColor}
             />
           </TouchableOpacity>
         </View>
@@ -200,10 +222,10 @@ export default function VideoScreen() {
           <ActionBtn icon="add" label="Ma liste" />
           <ActionBtn icon="share-social-outline" label="Partager" />
           <ActionBtn
-            icon={cast ? "tv" : "tv-outline"}
-            label="Chromecast"
+            icon={castApi.connected ? "tv" : "tv-outline"}
+            label={castApi.connected ? (castApi.deviceName || "Cast") : "Chromecast"}
             onPress={onCastPress}
-            highlighted={cast}
+            highlighted={castApi.connected}
             testID="video-action-cast"
           />
         </View>

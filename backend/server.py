@@ -28,6 +28,8 @@ JWT_SECRET = os.environ['JWT_SECRET']
 JWT_ALGO = "HS256"
 ACCESS_EXP_MIN = 60 * 24 * 7  # 7 days
 STRIPE_API_KEY = os.environ.get('STRIPE_API_KEY', '')
+STRIPE_PUBLISHABLE_KEY = os.environ.get('STRIPE_PUBLISHABLE_KEY', '')
+STRIPE_WEBHOOK_SECRET = os.environ.get('STRIPE_WEBHOOK_SECRET', '')
 STRIPE_PRICE_AMOUNT = int(os.environ.get('STRIPE_PRICE_AMOUNT', '199'))
 STRIPE_PRICE_CURRENCY = os.environ.get('STRIPE_PRICE_CURRENCY', 'eur')
 APP_PUBLIC_URL = os.environ.get('APP_PUBLIC_URL', '')
@@ -540,10 +542,131 @@ async def billing_status(session_id: Optional[str] = None, current: dict = Depen
             paid = s.get("payment_status") == "paid"
             if paid:
                 await db.users.update_one({"id": current["id"]}, {"$set": {"is_subscribed": True}})
+                # save subscription id for cancellation
+                sub_id = s.get("subscription")
+                if sub_id:
+                    await db.users.update_one({"id": current["id"]}, {"$set": {"stripe_subscription_id": sub_id}})
         except Exception as e:
             logging.warning(f"Stripe retrieve error: {e}")
     u = await db.users.find_one({"id": current["id"]}, {"_id": 0})
     return {"is_subscribed": bool(u.get("is_subscribed"))}
+
+
+@api_router.get("/billing/config")
+async def billing_config():
+    """Public config: returns publishable key and prices so the front-end can display info."""
+    return {
+        "publishable_key": STRIPE_PUBLISHABLE_KEY,
+        "price_amount": STRIPE_PRICE_AMOUNT,
+        "price_currency": STRIPE_PRICE_CURRENCY,
+        "configured": bool(STRIPE_API_KEY and STRIPE_API_KEY != "sk_test_emergent"),
+    }
+
+
+@api_router.post("/billing/cancel")
+async def cancel_subscription(current: dict = Depends(get_current_user)):
+    """Cancel the user's Stripe subscription (at the end of the current period)."""
+    sub_id = current.get("stripe_subscription_id")
+    if not sub_id:
+        # try to look it up from customer
+        cust_id = current.get("stripe_customer_id")
+        if cust_id and STRIPE_API_KEY:
+            try:
+                subs = stripe.Subscription.list(customer=cust_id, status="active", limit=1)
+                if subs and subs.data:
+                    sub_id = subs.data[0].id
+            except Exception as e:
+                logging.warning(f"Stripe list subs error: {e}")
+    if not sub_id:
+        raise HTTPException(status_code=404, detail="Aucun abonnement actif trouvé")
+    try:
+        stripe.Subscription.modify(sub_id, cancel_at_period_end=True)
+        return {"ok": True, "message": "Abonnement programmé pour résiliation à la fin de la période."}
+    except stripe.error.StripeError as e:  # type: ignore[attr-defined]
+        raise HTTPException(status_code=502, detail=f"Erreur Stripe: {str(e)}")
+
+
+@api_router.post("/billing/webhook")
+async def stripe_webhook(request: Request, stripe_signature: Optional[str] = Header(None, alias="Stripe-Signature")):
+    """Stripe webhook endpoint. Configure in Stripe Dashboard:
+    https://dashboard.stripe.com/test/webhooks → endpoint: {APP_PUBLIC_URL}/api/billing/webhook
+    Then set STRIPE_WEBHOOK_SECRET in backend/.env."""
+    payload = await request.body()
+
+    # Verify signature if a secret is configured (recommended for production)
+    if STRIPE_WEBHOOK_SECRET and stripe_signature:
+        try:
+            event = stripe.Webhook.construct_event(
+                payload=payload,
+                sig_header=stripe_signature,
+                secret=STRIPE_WEBHOOK_SECRET,
+            )
+        except Exception as e:
+            logging.warning(f"Webhook signature verification failed: {e}")
+            raise HTTPException(status_code=400, detail="Signature invalide")
+    else:
+        # No secret configured yet → parse raw event (dev only)
+        try:
+            import json as _json
+            event = _json.loads(payload.decode("utf-8"))
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"JSON invalide: {e}")
+
+    event_type = event["type"] if isinstance(event, dict) else event.type
+    obj = event["data"]["object"] if isinstance(event, dict) else event.data.object
+
+    logging.info(f"[Stripe webhook] {event_type}")
+
+    try:
+        if event_type == "checkout.session.completed":
+            customer_id = obj.get("customer")
+            sub_id = obj.get("subscription")
+            user_id = (obj.get("metadata") or {}).get("user_id")
+            if user_id:
+                await db.users.update_one(
+                    {"id": user_id},
+                    {"$set": {
+                        "is_subscribed": True,
+                        "stripe_customer_id": customer_id,
+                        "stripe_subscription_id": sub_id,
+                    }},
+                )
+        elif event_type in ("customer.subscription.updated", "customer.subscription.created"):
+            customer_id = obj.get("customer")
+            status_v = obj.get("status")
+            cancel_at_period_end = obj.get("cancel_at_period_end", False)
+            is_premium = status_v in ("active", "trialing")
+            if customer_id:
+                await db.users.update_one(
+                    {"stripe_customer_id": customer_id},
+                    {"$set": {
+                        "is_subscribed": is_premium,
+                        "subscription_status": status_v,
+                        "cancel_at_period_end": cancel_at_period_end,
+                        "stripe_subscription_id": obj.get("id"),
+                    }},
+                )
+        elif event_type == "customer.subscription.deleted":
+            customer_id = obj.get("customer")
+            if customer_id:
+                await db.users.update_one(
+                    {"stripe_customer_id": customer_id},
+                    {"$set": {
+                        "is_subscribed": False,
+                        "subscription_status": "canceled",
+                    }},
+                )
+        elif event_type == "invoice.payment_failed":
+            customer_id = obj.get("customer")
+            if customer_id:
+                await db.users.update_one(
+                    {"stripe_customer_id": customer_id},
+                    {"$set": {"subscription_status": "past_due"}},
+                )
+    except Exception as e:
+        logging.error(f"Webhook handler error for {event_type}: {e}")
+        # We still return 200 so Stripe doesn't retry endlessly for our own bugs
+    return {"received": True}
 
 
 # --- SEED (admin) ---

@@ -13,7 +13,8 @@ import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { api } from "@/src/api/client";
-import { confirmAction, showAlert } from "@/src/utils/dialog";
+import { showAlert } from "@/src/utils/dialog";
+import { useConfirm } from "@/src/ui/ConfirmDialog";
 import { colors, spacing, radii } from "@/src/theme";
 
 type V = {
@@ -28,6 +29,7 @@ type V = {
 
 export default function AdminVideosList() {
   const router = useRouter();
+  const confirm = useConfirm();
   const [videos, setVideos] = useState<V[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -46,20 +48,53 @@ export default function AdminVideosList() {
 
   useEffect(() => { load(); }, [load]);
 
-  const onDelete = (v: V) => {
-    confirmAction(
-      "Supprimer la vidéo ?",
-      `« ${v.title} » sera définitivement supprimée.`,
-      async () => {
-        try {
-          await api(`/admin/videos/${v.id}`, { method: "DELETE" });
-          setVideos((prev) => prev.filter((x) => x.id !== v.id));
-        } catch (e: any) {
-          showAlert("Erreur", e.message);
-        }
-      },
-      { confirmText: "Supprimer", destructive: true }
-    );
+  const onDelete = async (v: V) => {
+    const ok = await confirm({
+      title: "Supprimer la vidéo ?",
+      message: `« ${v.title} » sera définitivement supprimée.`,
+      confirmText: "Supprimer",
+      destructive: true,
+      icon: "trash-outline",
+    });
+    if (!ok) return;
+    try {
+      await api(`/admin/videos/${v.id}`, { method: "DELETE" });
+      setVideos((prev) => prev.filter((x) => x.id !== v.id));
+    } catch (e: any) {
+      showAlert("Erreur", e.message);
+    }
+  };
+
+  const onBulkDeleteDuplicates = async () => {
+    // group by title+client_name, keep first occurrence, delete the rest
+    const seen = new Set<string>();
+    const dups: V[] = [];
+    for (const v of videos) {
+      const key = `${v.title}|${(v as any).client_name || ""}`;
+      if (seen.has(key)) dups.push(v);
+      else seen.add(key);
+    }
+    if (dups.length === 0) {
+      showAlert("Aucun doublon", "Aucune vidéo dupliquée détectée.");
+      return;
+    }
+    const ok = await confirm({
+      title: `Supprimer ${dups.length} doublon(s) ?`,
+      message: `${dups.length} vidéo${dups.length > 1 ? "s sont des doublons" : " est un doublon"} et ${dups.length > 1 ? "seront supprimées" : "sera supprimée"}.`,
+      confirmText: `Supprimer ${dups.length}`,
+      destructive: true,
+      icon: "copy-outline",
+    });
+    if (!ok) return;
+    let deleted = 0;
+    for (const d of dups) {
+      try {
+        await api(`/admin/videos/${d.id}`, { method: "DELETE" });
+        deleted++;
+      } catch {}
+    }
+    showAlert("Terminé", `${deleted} doublon(s) supprimé(s).`);
+    load();
   };
 
   return (
@@ -69,6 +104,13 @@ export default function AdminVideosList() {
           <Ionicons name="chevron-back" size={26} color={colors.ivory} />
         </TouchableOpacity>
         <Text style={styles.title}>Vidéos</Text>
+        <TouchableOpacity
+          style={styles.cleanBtn}
+          onPress={onBulkDeleteDuplicates}
+          testID="admin-clean-duplicates-btn"
+        >
+          <Ionicons name="copy-outline" size={18} color={colors.error} />
+        </TouchableOpacity>
         <TouchableOpacity
           style={styles.addBtn}
           onPress={() => router.push("/admin/video-edit/new")}
@@ -123,6 +165,7 @@ const styles = StyleSheet.create({
   loading: { flex: 1, alignItems: "center", justifyContent: "center" },
   header: { flexDirection: "row", alignItems: "center", paddingHorizontal: spacing.md, paddingVertical: spacing.sm, gap: spacing.md },
   title: { flex: 1, color: colors.ivory, fontSize: 22, fontWeight: "700" },
+  cleanBtn: { width: 40, height: 40, borderRadius: 20, borderWidth: 1, borderColor: "rgba(211,47,47,0.4)", alignItems: "center", justifyContent: "center", marginRight: 4 },
   addBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.gold, alignItems: "center", justifyContent: "center" },
   row: {
     flexDirection: "row",

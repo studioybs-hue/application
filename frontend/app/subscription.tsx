@@ -6,7 +6,6 @@ import {
   ScrollView,
   TouchableOpacity,
   ActivityIndicator,
-  Alert,
   Platform,
   Linking,
 } from "react-native";
@@ -18,6 +17,7 @@ import * as WebBrowser from "expo-web-browser";
 import { api } from "@/src/api/client";
 import { colors, spacing, radii } from "@/src/theme";
 import { useAuth } from "@/src/auth/AuthContext";
+import { showAlert, confirmAction } from "@/src/utils/dialog";
 
 export default function SubscriptionScreen() {
   const router = useRouter();
@@ -25,6 +25,7 @@ export default function SubscriptionScreen() {
   const params = useLocalSearchParams<{ status?: string; session_id?: string }>();
   const [loading, setLoading] = useState(false);
   const [verifying, setVerifying] = useState(false);
+  const [canceling, setCanceling] = useState(false);
 
   useEffect(() => {
     if (params.status === "success") {
@@ -33,13 +34,15 @@ export default function SubscriptionScreen() {
         try {
           await api(`/billing/status?session_id=${params.session_id || ""}`);
           await refresh();
-          Alert.alert("✓ Bienvenue Premium", "Votre abonnement est activé !");
+          showAlert("✓ Bienvenue Premium", "Votre abonnement est activé !");
         } catch (e) {
           // ignore
         } finally {
           setVerifying(false);
         }
       })();
+    } else if (params.status === "cancel") {
+      showAlert("Paiement annulé", "Vous n'avez pas été débité. Vous pouvez réessayer à tout moment.");
     }
   }, [params.status, params.session_id, refresh]);
 
@@ -63,15 +66,35 @@ export default function SubscriptionScreen() {
         await refresh();
       }
     } catch (e: any) {
-      Alert.alert("Erreur", e.message || "Impossible de démarrer le paiement");
+      showAlert("Erreur", e.message || "Impossible de démarrer le paiement");
     } finally {
       setLoading(false);
     }
   };
 
+  const cancelSub = () => {
+    confirmAction(
+      "Résilier l'abonnement",
+      "Votre abonnement sera résilié à la fin de la période en cours. Vous garderez l'accès Premium jusqu'à cette date.",
+      async () => {
+        setCanceling(true);
+        try {
+          await api("/billing/cancel", { method: "POST", body: {} });
+          await refresh();
+          showAlert("Abonnement résilié", "Votre abonnement sera résilié à la fin de la période en cours.");
+        } catch (e: any) {
+          showAlert("Erreur", e.message || "Impossible de résilier l'abonnement");
+        } finally {
+          setCanceling(false);
+        }
+      },
+      { confirmText: "Résilier", cancelText: "Garder", destructive: true }
+    );
+  };
+
   const features = [
     { icon: "infinite", text: "Accès illimité au catalogue complet" },
-    { icon: "tv", text: "Chromecast & version TV (à venir)" },
+    { icon: "tv", text: "Chromecast (Chrome desktop) & version TV" },
     { icon: "download", text: "Téléchargement hors-ligne (à venir)" },
     { icon: "star", text: "Qualité 4K et son immersif" },
     { icon: "shield-checkmark", text: "Sans publicité, sans engagement" },
@@ -117,9 +140,23 @@ export default function SubscriptionScreen() {
           </View>
 
           {user?.is_subscribed ? (
-            <View style={styles.activeCard} testID="subscription-active">
-              <Ionicons name="checkmark-circle" size={24} color={colors.success} />
-              <Text style={styles.activeTxt}>Vous êtes Premium</Text>
+            <View testID="subscription-active" style={{ gap: spacing.md }}>
+              <View style={styles.activeCard}>
+                <Ionicons name="checkmark-circle" size={24} color={colors.success} />
+                <Text style={styles.activeTxt}>Vous êtes Premium</Text>
+              </View>
+              <TouchableOpacity
+                style={styles.cancelBtn}
+                onPress={cancelSub}
+                disabled={canceling}
+                testID="cancel-sub-btn"
+              >
+                {canceling ? (
+                  <ActivityIndicator color={colors.textSecondary} />
+                ) : (
+                  <Text style={styles.cancelTxt}>Résilier mon abonnement</Text>
+                )}
+              </TouchableOpacity>
             </View>
           ) : (
             <TouchableOpacity
@@ -218,6 +255,15 @@ const styles = StyleSheet.create({
     borderRadius: radii.sm,
   },
   activeTxt: { color: colors.ivory, fontWeight: "700", fontSize: 15 },
+  cancelBtn: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 14,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.15)",
+    borderRadius: radii.sm,
+  },
+  cancelTxt: { color: colors.textSecondary, fontSize: 13, textDecorationLine: "underline" },
   legal: { alignItems: "center", marginTop: spacing.lg, paddingHorizontal: spacing.md },
   legalTxt: { color: colors.textSecondary, fontSize: 11, textAlign: "center", lineHeight: 16 },
   legalLink: { color: colors.gold, fontSize: 12, marginTop: 6 },

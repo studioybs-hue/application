@@ -8,7 +8,8 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Clipboard from "expo-clipboard";
 import { api } from "@/src/api/client";
-import { confirmAction, showAlert } from "@/src/utils/dialog";
+import { showAlert } from "@/src/utils/dialog";
+import { useConfirm } from "@/src/ui/ConfirmDialog";
 import { colors, spacing, radii } from "@/src/theme";
 
 type Code = {
@@ -29,6 +30,7 @@ type Wedding = { client_id: string; client_name: string; video_count: number };
 
 export default function CodesScreen() {
   const router = useRouter();
+  const confirm = useConfirm();
   const [codes, setCodes] = useState<Code[]>([]);
   const [videos, setVideos] = useState<Vid[]>([]);
   const [loading, setLoading] = useState(true);
@@ -73,20 +75,21 @@ export default function CodesScreen() {
     } catch {}
   };
 
-  const revoke = (code: string) => {
-    confirmAction(
-      "Révoquer ce code ?",
-      `Le code ${code} sera désactivé.`,
-      async () => {
-        try {
-          await api(`/admin/codes/${code}`, { method: "DELETE" });
-          await load();
-        } catch (e: any) {
-          showAlert("Erreur", e.message);
-        }
-      },
-      { confirmText: "Révoquer", destructive: true }
-    );
+  const revoke = async (code: string) => {
+    const ok = await confirm({
+      title: "Révoquer ce code ?",
+      message: `Le code ${code} sera désactivé.`,
+      confirmText: "Révoquer",
+      destructive: true,
+      icon: "ban-outline",
+    });
+    if (!ok) return;
+    try {
+      await api(`/admin/codes/${code}`, { method: "DELETE" });
+      await load();
+    } catch (e: any) {
+      showAlert("Erreur", e.message);
+    }
   };
 
   const create = async () => {

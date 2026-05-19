@@ -1,13 +1,15 @@
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, Platform } from "react-native";
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { colors, spacing, radii } from "@/src/theme";
 import { useAuth } from "@/src/auth/AuthContext";
+import { useConfirm } from "@/src/ui/ConfirmDialog";
 
 export default function ProfileScreen() {
   const router = useRouter();
   const { user, logout } = useAuth();
+  const confirm = useConfirm();
 
   if (!user) {
     return (
@@ -31,21 +33,17 @@ export default function ProfileScreen() {
     );
   }
 
-  const onLogout = () => {
-    const doLogout = async () => {
-      await logout();
-      router.replace("/(tabs)/home");
-    };
-    if (Platform.OS === "web") {
-      // eslint-disable-next-line no-alert
-      const ok = typeof window !== "undefined" && window.confirm("Voulez-vous vraiment vous déconnecter ?");
-      if (ok) doLogout();
-      return;
-    }
-    Alert.alert("Déconnexion", "Voulez-vous vraiment vous déconnecter ?", [
-      { text: "Annuler", style: "cancel" },
-      { text: "Déconnexion", style: "destructive", onPress: doLogout },
-    ]);
+  const onLogout = async () => {
+    const ok = await confirm({
+      title: "Déconnexion",
+      message: "Voulez-vous vraiment vous déconnecter ?",
+      confirmText: "Déconnexion",
+      destructive: true,
+      icon: "log-out-outline",
+    });
+    if (!ok) return;
+    await logout();
+    router.replace("/(tabs)/home");
   };
 
   return (
