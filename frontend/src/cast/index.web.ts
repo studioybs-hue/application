@@ -98,29 +98,65 @@ export function useCast() {
   }, []);
 
   const cast = useCallback(
-    async (url: string, title: string, poster?: string): Promise<boolean> => {
-      if (!available || !window.cast || !window.chrome) return false;
+    async (url: string, title: string, poster?: string): Promise<{ ok: boolean; error?: string }> => {
+      if (!available || !window.cast || !window.chrome) {
+        return { ok: false, error: "Chromecast non disponible dans ce navigateur." };
+      }
       try {
+        // Resolve to absolute URL (Chromecast cannot handle relative paths)
+        let absoluteUrl = url;
+        if (absoluteUrl.startsWith("/")) {
+          absoluteUrl = (typeof window !== "undefined" ? window.location.origin : "") + absoluteUrl;
+        }
+        if (!absoluteUrl.startsWith("http")) {
+          return { ok: false, error: "URL vidéo invalide." };
+        }
+
+        // Detect content type from extension
+        const lower = absoluteUrl.toLowerCase().split("?")[0];
+        let contentType = "video/mp4";
+        if (lower.endsWith(".m3u8")) contentType = "application/x-mpegURL";
+        else if (lower.endsWith(".mpd")) contentType = "application/dash+xml";
+        else if (lower.endsWith(".webm")) contentType = "video/webm";
+        else if (lower.endsWith(".mov")) contentType = "video/quicktime";
+
         const context = window.cast.framework.CastContext.getInstance();
         let session = context.getCurrentSession();
         if (!session) {
           await context.requestSession();
           session = context.getCurrentSession();
         }
-        if (!session) return false;
+        if (!session) return { ok: false, error: "Aucun appareil Chromecast sélectionné." };
 
-        const mediaInfo = new window.chrome.cast.media.MediaInfo(url, "video/mp4");
+        const mediaInfo = new window.chrome.cast.media.MediaInfo(absoluteUrl, contentType);
         mediaInfo.metadata = new window.chrome.cast.media.GenericMediaMetadata();
         mediaInfo.metadata.title = title;
         if (poster) {
           mediaInfo.metadata.images = [new window.chrome.cast.Image(poster)];
         }
         const request = new window.chrome.cast.media.LoadRequest(mediaInfo);
-        await session.loadMedia(request);
-        return true;
-      } catch (e) {
+
+        try {
+          await session.loadMedia(request);
+          return { ok: true };
+        } catch (loadErr: any) {
+          console.error("Cast loadMedia error:", loadErr);
+          // The receiver returns an error code if it can't play the file
+          const code = loadErr?.code || "";
+          const desc = loadErr?.description || loadErr?.message || "";
+          let hint = "";
+          if (code === "load_failed" || /load.?fail/i.test(desc)) {
+            hint = "Le fichier vidéo ne peut pas être lu par votre Chromecast. Causes possibles : format/codec non supporté, fichier trop volumineux, ou serveur lent.";
+          } else if (/timeout/i.test(desc)) {
+            hint = "Délai dépassé pendant la mise en mémoire tampon.";
+          } else if (/cancel/i.test(desc)) {
+            hint = "Diffusion annulée.";
+          }
+          return { ok: false, error: `${hint || desc || "Erreur de chargement"}\n\n(URL : ${absoluteUrl})` };
+        }
+      } catch (e: any) {
         console.error("Cast error", e);
-        return false;
+        return { ok: false, error: e?.message || "Erreur Chromecast" };
       }
     },
     [available]

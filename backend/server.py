@@ -1,7 +1,7 @@
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, Header, Request, UploadFile, File, Form
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse, Response
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -1495,15 +1495,79 @@ async def admin_upload(
     return {"url": public_url, "name": name, "size": size}
 
 
-@api_router.get("/uploads/{name}")
-async def serve_upload(name: str):
-    # safe name check (no path traversal)
-    if "/" in name or ".." in name:
+@api_router.get("/uploads/{name:path}")
+async def serve_upload(name: str, request: Request):
+    """Serve uploaded files with HTTP Range support (required for Chromecast / video streaming)."""
+    # Safety: prevent path traversal but allow nested folders (e.g. hosting_xxx/file.mp4)
+    if ".." in name:
         raise HTTPException(status_code=400, detail="Nom invalide")
     path = UPLOAD_DIR / name
-    if not path.exists():
+    if not path.exists() or not path.is_file():
         raise HTTPException(status_code=404, detail="Fichier introuvable")
-    return FileResponse(str(path))
+
+    # Guess content type by extension
+    import mimetypes
+    ctype, _ = mimetypes.guess_type(str(path))
+    if not ctype:
+        ctype = "application/octet-stream"
+
+    file_size = path.stat().st_size
+    range_header = request.headers.get("range") or request.headers.get("Range")
+
+    # Common headers for media playback + cross-origin (Chromecast)
+    common_headers = {
+        "accept-ranges": "bytes",
+        "access-control-allow-origin": "*",
+        "access-control-expose-headers": "Content-Range, Content-Length, Accept-Ranges",
+        "cache-control": "public, max-age=3600",
+    }
+
+    if range_header:
+        # Parse "bytes=START-END"
+        try:
+            units, rng = range_header.split("=")
+            if units.strip().lower() != "bytes":
+                raise ValueError("bad unit")
+            start_s, end_s = rng.split("-")
+            start = int(start_s) if start_s else 0
+            end = int(end_s) if end_s else file_size - 1
+            if start < 0 or end >= file_size or start > end:
+                raise ValueError("bad range")
+        except Exception:
+            # Invalid range → 416 Range Not Satisfiable
+            return Response(
+                status_code=416,
+                headers={**common_headers, "content-range": f"bytes */{file_size}"},
+            )
+
+        chunk_size = end - start + 1
+
+        def iter_file():
+            with open(path, "rb") as f:
+                f.seek(start)
+                remaining = chunk_size
+                while remaining > 0:
+                    data = f.read(min(1024 * 1024, remaining))
+                    if not data:
+                        break
+                    remaining -= len(data)
+                    yield data
+
+        headers = {
+            **common_headers,
+            "content-range": f"bytes {start}-{end}/{file_size}",
+            "content-length": str(chunk_size),
+            "content-type": ctype,
+        }
+        return StreamingResponse(iter_file(), status_code=206, headers=headers, media_type=ctype)
+
+    # Full file response (still with Accept-Ranges so client knows it CAN do ranges next time)
+    headers = {
+        **common_headers,
+        "content-length": str(file_size),
+        "content-type": ctype,
+    }
+    return FileResponse(str(path), headers=headers, media_type=ctype)
 
 
 async def _seed():

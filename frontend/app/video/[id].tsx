@@ -87,11 +87,11 @@ export default function VideoScreen() {
       showAlert("Diffusion arrêtée", "Lecture revenue sur ce navigateur.");
       return;
     }
-    const ok = await castApi.cast(playableUrl, video.title, video.poster_url);
-    if (!ok) {
+    const result = await castApi.cast(playableUrl, video.title, video.poster_url);
+    if (!result.ok) {
       showAlert(
-        "Diffusion annulée",
-        "Aucun appareil Chromecast sélectionné ou la diffusion a échoué."
+        "Problème de diffusion",
+        result.error || "Aucun appareil Chromecast sélectionné ou la diffusion a échoué.\n\n💡 Conseil : assurez-vous que le fichier vidéo est au format MP4 (H.264 + AAC) qui est universellement compatible Chromecast."
       );
     }
   };
