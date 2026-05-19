@@ -96,11 +96,11 @@ export default function SubscriptionScreen() {
   };
 
   const features = [
-    { icon: "infinite", text: "Accès illimité au catalogue complet" },
-    { icon: "tv", text: "Chromecast (Chrome desktop) & version TV" },
-    { icon: "download", text: "Téléchargement hors-ligne (à venir)" },
-    { icon: "star", text: "Qualité 4K et son immersif" },
-    { icon: "shield-checkmark", text: "Sans publicité, sans engagement" },
+    { icon: "key", text: "Générez des codes d'invitation pour votre mariage" },
+    { icon: "shield-checkmark", text: "1 code = 1 appareil unique (sécurité maximale)" },
+    { icon: "people", text: "Partagez votre film en famille en toute confidentialité" },
+    { icon: "tv", text: "Vos invités peuvent caster sur leur TV (Chromecast)" },
+    { icon: "lock-closed", text: "Vos vidéos restent privées — accès uniquement par code" },
   ];
 
   return (
@@ -120,7 +120,8 @@ export default function SubscriptionScreen() {
             </View>
             <Text style={styles.title}>CINÉMARIÉS Premium</Text>
             <Text style={styles.subtitle}>
-              Le cinéma de votre plus beau jour, partout avec vous.
+              Partagez VOTRE mariage avec vos proches, en toute sécurité.{"\n"}
+              <Text style={{ color: colors.gold, fontSize: 12 }}>(Réservé aux mariés — donne accès uniquement à votre propre film)</Text>
             </Text>
           </View>
 
