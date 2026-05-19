@@ -29,6 +29,7 @@ export default function HostScreen() {
 
   const [submitting, setSubmitting] = useState(false);
 
+  // Pre-fill contact email with the logged-in user's email
   useEffect(() => {
     if (user && !contactEmail) setContactEmail(user.email);
   }, [user, contactEmail]);
@@ -39,17 +40,32 @@ export default function HostScreen() {
     }
   }, [params.status]);
 
+  // Auth gate: ensure user is logged in BEFORE filling the form (avoid losing data at submit time)
+  const goToForm = () => {
+    if (!user) {
+      router.push({
+        pathname: "/auth/register",
+        params: { redirect: "/host" },
+      } as any);
+      return;
+    }
+    setStep("form");
+  };
+
   const submit = async () => {
     if (!user) {
-      router.push("/auth/login?redirect=/host");
+      router.push({
+        pathname: "/auth/register",
+        params: { redirect: "/host" },
+      } as any);
       return;
     }
     if (coupleName.trim().length < 2) {
       showAlert("Information manquante", "Veuillez indiquer le nom du couple (ex: « Sarah & Anthony »).");
       return;
     }
-    if (!contactEmail.includes("@")) {
-      showAlert("Email invalide", "Veuillez indiquer un email valide pour la suite des échanges.");
+    if (!contactEmail.includes("@") || !contactEmail.includes(".")) {
+      showAlert("Email invalide", "Veuillez saisir un email valide (ex: vous@email.com) pour qu'on puisse vous recontacter.");
       return;
     }
     setSubmitting(true);
@@ -125,14 +141,15 @@ export default function HostScreen() {
                   <Benefit icon="tv" text="Compatible Chromecast & Smart TV" />
                 </View>
 
-                <TouchableOpacity style={styles.cta} onPress={() => setStep("form")} testID="host-start-btn">
-                  <Text style={styles.ctaTxt}>Commencer ma demande</Text>
+                <TouchableOpacity style={styles.cta} onPress={goToForm} testID="host-start-btn">
+                  <Text style={styles.ctaTxt}>{user ? "Commencer ma demande" : "Créer mon compte et commencer"}</Text>
                   <Ionicons name="arrow-forward" size={18} color="#0A0A0A" />
                 </TouchableOpacity>
 
                 <Text style={styles.fine}>
-                  Aucun débit avant validation du formulaire.{"\n"}
-                  Vous serez redirigé vers Stripe pour le paiement sécurisé.
+                  {user
+                    ? "Aucun débit avant validation du formulaire.\nVous serez redirigé vers Stripe pour le paiement sécurisé."
+                    : "Vous serez d'abord invité à créer votre compte (gratuit), puis vous remplirez les infos de votre mariage, et enfin paiement sécurisé via Stripe."}
                 </Text>
               </>
             ) : (

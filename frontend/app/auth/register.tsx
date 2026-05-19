@@ -10,7 +10,7 @@ import {
   ScrollView,
   ActivityIndicator,
 } from "react-native";
-import { useRouter } from "expo-router";
+import { useRouter, useLocalSearchParams } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { colors, spacing, radii } from "@/src/theme";
@@ -19,6 +19,7 @@ import { useAuth } from "@/src/auth/AuthContext";
 export default function RegisterScreen() {
   const router = useRouter();
   const { register } = useAuth();
+  const params = useLocalSearchParams<{ redirect?: string }>();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -31,6 +32,10 @@ export default function RegisterScreen() {
       setError("Veuillez remplir tous les champs");
       return;
     }
+    if (!email.includes("@") || !email.includes(".")) {
+      setError("Veuillez saisir un email valide (ex: vous@email.com)");
+      return;
+    }
     if (password.length < 6) {
       setError("Le mot de passe doit contenir au moins 6 caractères");
       return;
@@ -38,7 +43,8 @@ export default function RegisterScreen() {
     setLoading(true);
     try {
       await register(email.trim().toLowerCase(), password, name.trim());
-      router.replace("/(tabs)/home");
+      const target = params.redirect && typeof params.redirect === "string" ? params.redirect : "/(tabs)/home";
+      router.replace(target as any);
     } catch (e: any) {
       setError(e.message || "Erreur lors de l'inscription");
     } finally {
