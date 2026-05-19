@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput,
   ActivityIndicator, KeyboardAvoidingView, Platform,
@@ -28,11 +28,19 @@ export default function HostScreen() {
   const [notes, setNotes] = useState("");
 
   const [submitting, setSubmitting] = useState(false);
+  const scrollRef = useRef<ScrollView>(null);
 
   // Pre-fill contact email with the logged-in user's email
   useEffect(() => {
     if (user && !contactEmail) setContactEmail(user.email);
   }, [user, contactEmail]);
+
+  // Auto-scroll to top when switching to the form
+  useEffect(() => {
+    if (step === "form" && scrollRef.current) {
+      setTimeout(() => scrollRef.current?.scrollTo({ y: 0, animated: true }), 50);
+    }
+  }, [step]);
 
   useEffect(() => {
     if (params.status === "cancel") {
@@ -61,7 +69,9 @@ export default function HostScreen() {
       return;
     }
     if (coupleName.trim().length < 2) {
-      showAlert("Information manquante", "Veuillez indiquer le nom du couple (ex: « Sarah & Anthony »).");
+      // Auto-scroll back to top so user sees the missing field
+      scrollRef.current?.scrollTo({ y: 0, animated: true });
+      showAlert("Information manquante", "Veuillez indiquer le nom du couple en haut du formulaire (ex: « Sarah & Anthony »).");
       return;
     }
     if (!contactEmail.includes("@") || !contactEmail.includes(".")) {
@@ -112,7 +122,7 @@ export default function HostScreen() {
         </View>
 
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
-          <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+          <ScrollView ref={scrollRef} contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
             {step === "intro" ? (
               <>
                 <View style={styles.iconBubble}>
@@ -157,7 +167,25 @@ export default function HostScreen() {
                 <Text style={styles.title}>Votre demande</Text>
                 <Text style={styles.subtitle}>Quelques infos pour préparer votre espace.</Text>
 
-                <Field label="Nom du couple *" value={coupleName} onChangeText={setCoupleName} placeholder="Ex : Sarah & Anthony" />
+                {/* Highlighted required field at the top */}
+                <View style={styles.requiredCard}>
+                  <View style={styles.requiredHeader}>
+                    <View style={styles.requiredBadge}><Text style={styles.requiredBadgeTxt}>OBLIGATOIRE</Text></View>
+                    <Ionicons name="heart" size={18} color={colors.gold} />
+                  </View>
+                  <Text style={styles.requiredLabel}>Nom du couple</Text>
+                  <Text style={styles.requiredHint}>Ce nom apparaîtra sur la page de votre mariage</Text>
+                  <TextInput
+                    style={styles.requiredInput}
+                    value={coupleName}
+                    onChangeText={setCoupleName}
+                    placeholder="Ex : Sarah & Anthony"
+                    placeholderTextColor={colors.textDisabled}
+                    autoCapitalize="words"
+                    autoFocus
+                  />
+                </View>
+
                 <Field label="Date du mariage" value={weddingDate} onChangeText={setWeddingDate} placeholder="JJ/MM/AAAA" />
                 <Field label="Lieu / Ville" value={location} onChangeText={setLocation} placeholder="Paris, Marseille…" />
                 <Field label="Email de contact *" value={contactEmail} onChangeText={setContactEmail} placeholder="vous@email.com" keyboardType="email-address" />
@@ -280,4 +308,27 @@ const styles = StyleSheet.create({
   secondaryTxt: { color: colors.textSecondary, textDecorationLine: "underline" },
   label: { color: colors.textSecondary, fontSize: 11, letterSpacing: 1, textTransform: "uppercase", marginBottom: 6 },
   input: { backgroundColor: colors.surface, color: colors.ivory, padding: 14, borderRadius: 8, fontSize: 14, borderWidth: 1, borderColor: colors.border },
+  requiredCard: {
+    backgroundColor: "rgba(212,175,55,0.08)",
+    borderWidth: 2,
+    borderColor: colors.gold,
+    borderRadius: radii.lg,
+    padding: spacing.md,
+    marginBottom: spacing.lg,
+  },
+  requiredHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 8 },
+  requiredBadge: { backgroundColor: colors.gold, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 4 },
+  requiredBadgeTxt: { color: "#0A0A0A", fontSize: 9, fontWeight: "800", letterSpacing: 1.5 },
+  requiredLabel: { color: colors.ivory, fontSize: 18, fontWeight: "700", marginTop: 4 },
+  requiredHint: { color: colors.textSecondary, fontSize: 12, marginTop: 4, marginBottom: 10, fontStyle: "italic" },
+  requiredInput: {
+    backgroundColor: colors.bg,
+    color: colors.ivory,
+    padding: 16,
+    borderRadius: 8,
+    fontSize: 18,
+    fontWeight: "600",
+    borderWidth: 1,
+    borderColor: colors.gold,
+  },
 });
