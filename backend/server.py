@@ -35,6 +35,8 @@ STRIPE_PRICE_AMOUNT_UNLIMITED = int(os.environ.get('STRIPE_PRICE_AMOUNT_UNLIMITE
 STRIPE_PRICE_CURRENCY = os.environ.get('STRIPE_PRICE_CURRENCY', 'eur')
 # Plan limits: Basic = 3 codes max (1 device each), Unlimited = unlimited codes
 BASIC_MAX_CODES = int(os.environ.get('BASIC_MAX_CODES', '3'))
+# One-time hosting fee for couples wanting to host their wedding (in cents)
+HOSTING_FEE_AMOUNT = int(os.environ.get('HOSTING_FEE_AMOUNT', '9000'))
 APP_PUBLIC_URL = os.environ.get('APP_PUBLIC_URL', '')
 ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', 'admin@wedding.fr')
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'Admin13!')
@@ -110,6 +112,17 @@ class ClientCodeCreate(BaseModel):
 
 class AssignWeddingRequest(BaseModel):
     client_id: str
+
+
+class HostingRequestCreate(BaseModel):
+    couple_name: str = Field(..., min_length=2, max_length=100)
+    wedding_date: Optional[str] = None  # ISO date "YYYY-MM-DD"
+    location: Optional[str] = Field(None, max_length=200)
+    contact_email: EmailStr
+    contact_phone: Optional[str] = Field(None, max_length=30)
+    description: Optional[str] = Field(None, max_length=2000)
+    drive_link: Optional[str] = Field(None, max_length=500)
+    notes: Optional[str] = Field(None, max_length=1000)
 
 
 class UnlockCodeInfo(BaseModel):
@@ -588,6 +601,136 @@ async def client_revoke_code(code: str, current: dict = Depends(get_current_user
     return {"ok": True}
 
 
+# --- HOSTING REQUESTS (one-time 90€ fee to host a wedding) ---
+def hosting_to_public(h: dict) -> dict:
+    return {
+        "id": h["id"],
+        "user_id": h.get("user_id"),
+        "user_email": h.get("user_email"),
+        "couple_name": h.get("couple_name"),
+        "wedding_date": h.get("wedding_date"),
+        "location": h.get("location"),
+        "contact_email": h.get("contact_email"),
+        "contact_phone": h.get("contact_phone"),
+        "description": h.get("description"),
+        "drive_link": h.get("drive_link"),
+        "notes": h.get("notes"),
+        "status": h.get("status", "pending_payment"),
+        "amount": h.get("amount", HOSTING_FEE_AMOUNT),
+        "currency": h.get("currency", "eur"),
+        "client_id": h.get("client_id"),
+        "checkout_url": h.get("checkout_url"),
+        "created_at": h.get("created_at").isoformat() if h.get("created_at") else None,
+        "paid_at": h.get("paid_at").isoformat() if h.get("paid_at") else None,
+        "published_at": h.get("published_at").isoformat() if h.get("published_at") else None,
+    }
+
+
+@api_router.post("/hosting/requests")
+async def create_hosting_request(body: HostingRequestCreate, current: dict = Depends(get_current_user)):
+    """Step 1: User fills the form. We create a 'pending_payment' record and return a Stripe Checkout URL."""
+    if not STRIPE_API_KEY:
+        raise HTTPException(status_code=503, detail="Le service de paiement n'est pas encore configuré.")
+    rid = str(uuid.uuid4())
+    doc = {
+        "id": rid,
+        "user_id": current["id"],
+        "user_email": current.get("email"),
+        "couple_name": body.couple_name.strip(),
+        "wedding_date": body.wedding_date,
+        "location": (body.location or "").strip(),
+        "contact_email": body.contact_email,
+        "contact_phone": (body.contact_phone or "").strip(),
+        "description": (body.description or "").strip(),
+        "drive_link": (body.drive_link or "").strip(),
+        "notes": (body.notes or "").strip(),
+        "status": "pending_payment",
+        "amount": HOSTING_FEE_AMOUNT,
+        "currency": STRIPE_PRICE_CURRENCY,
+        "client_id": None,
+        "stripe_session_id": None,
+        "checkout_url": None,
+        "created_at": utcnow(),
+        "paid_at": None,
+        "published_at": None,
+    }
+
+    # Re-use/create Stripe customer
+    customer_id = current.get("stripe_customer_id")
+    if not customer_id:
+        try:
+            customer = stripe.Customer.create(email=current["email"], name=current.get("full_name") or "")
+            customer_id = customer.id
+            await db.users.update_one({"id": current["id"]}, {"$set": {"stripe_customer_id": customer_id}})
+        except stripe.error.StripeError as e:  # type: ignore[attr-defined]
+            raise HTTPException(status_code=502, detail=f"Stripe error: {str(e)}")
+
+    try:
+        success_url = f"{APP_PUBLIC_URL}/host/success?session_id={{CHECKOUT_SESSION_ID}}&request_id={rid}"
+        cancel_url = f"{APP_PUBLIC_URL}/host?status=cancel&request_id={rid}"
+        session = stripe.checkout.Session.create(
+            mode="payment",
+            customer=customer_id,
+            line_items=[{
+                "price_data": {
+                    "currency": STRIPE_PRICE_CURRENCY,
+                    "product_data": {
+                        "name": f"CINÉMARIÉS — Hébergement à vie ({body.couple_name})",
+                        "description": "Frais unique d'hébergement (paiement unique, à vie).",
+                    },
+                    "unit_amount": HOSTING_FEE_AMOUNT,
+                },
+                "quantity": 1,
+            }],
+            success_url=success_url,
+            cancel_url=cancel_url,
+            metadata={"kind": "hosting_fee", "request_id": rid, "user_id": current["id"]},
+        )
+        doc["stripe_session_id"] = session.id
+        doc["checkout_url"] = session.url
+        await db.hosting_requests.insert_one(doc)
+        return {"id": rid, "checkout_url": session.url, "amount": HOSTING_FEE_AMOUNT, "currency": STRIPE_PRICE_CURRENCY}
+    except stripe.error.StripeError as e:  # type: ignore[attr-defined]
+        raise HTTPException(status_code=502, detail=f"Stripe error: {str(e)}")
+
+
+@api_router.get("/hosting/requests/me")
+async def my_hosting_requests(current: dict = Depends(get_current_user)):
+    rs = await db.hosting_requests.find({"user_id": current["id"]}, {"_id": 0}).sort("created_at", -1).to_list(100)
+    return {"requests": [hosting_to_public(r) for r in rs]}
+
+
+@api_router.get("/hosting/requests/{request_id}/status")
+async def hosting_request_status(request_id: str, session_id: Optional[str] = None, current: dict = Depends(get_current_user)):
+    r = await db.hosting_requests.find_one({"id": request_id}, {"_id": 0})
+    if not r:
+        raise HTTPException(status_code=404, detail="Demande introuvable")
+    if r["user_id"] != current["id"] and not current.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Accès refusé")
+    if session_id and r.get("status") == "pending_payment" and STRIPE_API_KEY:
+        try:
+            s = stripe.checkout.Session.retrieve(session_id)
+            if s.get("payment_status") == "paid":
+                await db.hosting_requests.update_one(
+                    {"id": request_id},
+                    {"$set": {
+                        "status": "paid",
+                        "paid_at": utcnow(),
+                        "stripe_payment_intent_id": s.get("payment_intent"),
+                    }},
+                )
+                r["status"] = "paid"
+        except Exception as e:
+            logging.warning(f"Stripe retrieve error (hosting): {e}")
+    r = await db.hosting_requests.find_one({"id": request_id}, {"_id": 0})
+    return hosting_to_public(r) if r else {}
+
+
+# --- ADMIN HOSTING ENDPOINTS are defined further below (after require_admin is declared) ---
+
+
+
+
 
 
 @api_router.get("/videos/{video_id}")
@@ -790,9 +933,25 @@ async def stripe_webhook(request: Request, stripe_signature: Optional[str] = Hea
             customer_id = obj.get("customer")
             sub_id = obj.get("subscription")
             meta = obj.get("metadata") or {}
+            kind = meta.get("kind")
             user_id = meta.get("user_id")
             tier = meta.get("tier") or "basic"
-            if user_id:
+
+            if kind == "hosting_fee":
+                # One-time hosting payment
+                request_id = meta.get("request_id")
+                if request_id:
+                    await db.hosting_requests.update_one(
+                        {"id": request_id},
+                        {"$set": {
+                            "status": "paid",
+                            "paid_at": utcnow(),
+                            "stripe_payment_intent_id": obj.get("payment_intent"),
+                            "stripe_customer_id": customer_id,
+                        }},
+                    )
+            elif user_id:
+                # Subscription checkout (basic / unlimited)
                 await db.users.update_one(
                     {"id": user_id},
                     {"$set": {
@@ -1105,6 +1264,77 @@ async def admin_unassign_wedding(user_id: str, _: dict = Depends(require_admin))
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Utilisateur introuvable")
     return {"ok": True}
+
+
+# --- ADMIN HOSTING REQUESTS ---
+@api_router.get("/admin/hosting/requests")
+async def admin_list_hosting(_: dict = Depends(require_admin), status: Optional[str] = None):
+    q: dict = {}
+    if status:
+        q["status"] = status
+    rs = await db.hosting_requests.find(q, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return {"requests": [hosting_to_public(r) for r in rs]}
+
+
+@api_router.post("/admin/hosting/requests/{request_id}/publish")
+async def admin_publish_hosting(request_id: str, _: dict = Depends(require_admin)):
+    r = await db.hosting_requests.find_one({"id": request_id}, {"_id": 0})
+    if not r:
+        raise HTTPException(status_code=404, detail="Demande introuvable")
+    if r.get("status") not in ("paid", "in_progress"):
+        raise HTTPException(status_code=400, detail="Cette demande n'est pas encore payée.")
+
+    client_id = slugify(r["couple_name"])
+    base = client_id
+    n = 1
+    while await db.videos.find_one({"client_id": client_id}, {"_id": 1}):
+        n += 1
+        client_id = f"{base}-{n}"
+
+    vid_id = str(uuid.uuid4())
+    video_doc = {
+        "id": vid_id,
+        "title": r["couple_name"],
+        "client_name": r["couple_name"],
+        "client_id": client_id,
+        "description": r.get("description") or "",
+        "poster_url": "",
+        "hero_url": "",
+        "trailer_url": "",
+        "full_url": "",
+        "duration_minutes": 0,
+        "category": "À l'affiche",
+        "is_featured": False,
+        "is_top_france": False,
+        "is_private": True,
+        "created_at": utcnow(),
+    }
+    await db.videos.insert_one(video_doc)
+
+    await db.users.update_one({"id": r["user_id"]}, {"$set": {"client_id": client_id}})
+
+    await db.hosting_requests.update_one(
+        {"id": request_id},
+        {"$set": {
+            "status": "published",
+            "client_id": client_id,
+            "video_id": vid_id,
+            "published_at": utcnow(),
+        }},
+    )
+
+    return {"ok": True, "client_id": client_id, "video_id": vid_id}
+
+
+@api_router.post("/admin/hosting/requests/{request_id}/reject")
+async def admin_reject_hosting(request_id: str, _: dict = Depends(require_admin)):
+    r = await db.hosting_requests.find_one({"id": request_id}, {"_id": 0})
+    if not r:
+        raise HTTPException(status_code=404, detail="Demande introuvable")
+    await db.hosting_requests.update_one({"id": request_id}, {"$set": {"status": "rejected"}})
+    return {"ok": True}
+
+
 
 
 @api_router.get("/admin/users/{user_id}/unlocks")

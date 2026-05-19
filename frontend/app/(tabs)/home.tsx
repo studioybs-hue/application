@@ -118,6 +118,17 @@ export default function HomeScreen() {
           <Ionicons name="chevron-forward" size={20} color={colors.gold} />
         </TouchableOpacity>
 
+        <TouchableOpacity style={styles.hostBand} onPress={() => router.push("/host")} testID="host-band">
+          <View style={styles.unlockBandLeft}>
+            <Ionicons name="heart" size={20} color="#0A0A0A" />
+            <View style={{ marginLeft: 12 }}>
+              <Text style={styles.hostTitle}>Hébergez votre mariage</Text>
+              <Text style={styles.hostSub}>Frais unique 90€ à vie — paiement sécurisé</Text>
+            </View>
+          </View>
+          <Ionicons name="chevron-forward" size={20} color="#0A0A0A" />
+        </TouchableOpacity>
+
         {topFrance.length > 0 && <Row title="N°1 en France" weddings={topFrance} router={router} />}
         {featured.length > 0 && <Row title="À l'affiche" weddings={featured} router={router} />}
         {recent.length > 0 && <Row title="Nos derniers mariages" weddings={recent} router={router} />}
@@ -192,6 +203,9 @@ const styles = StyleSheet.create({
   unlockBandLeft: { flexDirection: "row", alignItems: "center", flex: 1 },
   unlockTitle: { color: colors.ivory, fontWeight: "600", fontSize: 14 },
   unlockSub: { color: colors.textSecondary, fontSize: 12, marginTop: 2 },
+  hostBand: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginHorizontal: spacing.md, marginTop: 10, padding: spacing.md, backgroundColor: colors.gold, borderRadius: radii.md },
+  hostTitle: { color: "#0A0A0A", fontWeight: "800", fontSize: 14 },
+  hostSub: { color: "rgba(0,0,0,0.7)", fontSize: 11, marginTop: 2, fontWeight: "600" },
   row: { marginTop: spacing.lg },
   rowTitle: { color: colors.ivory, fontSize: 18, fontWeight: "600", paddingHorizontal: spacing.md, marginBottom: spacing.sm },
   poster: { width: 130, marginRight: 10 },
