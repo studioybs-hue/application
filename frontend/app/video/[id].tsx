@@ -68,18 +68,19 @@ export default function VideoScreen() {
   const playableUrl = (isUnlocked ? video.full_url : null) || video.trailer_url || video.full_url || "";
 
   const onCastPress = async () => {
-    if (Platform.OS !== "web") {
-      showAlert(
-        "Chromecast",
-        "La diffusion native Chromecast nécessite l'application mobile officielle (build EAS). En attendant, ouvrez le site sur Chrome desktop pour profiter du Cast Web."
-      );
-      return;
-    }
     if (!castApi.available) {
-      showAlert(
-        "Chromecast indisponible",
-        "Votre navigateur ne supporte pas Google Cast.\n\n→ Ouvrez CINÉMARIÉS sur Chrome ou Edge (desktop) et assurez-vous d'être sur le même Wi-Fi que votre Chromecast / TV."
-      );
+      // Module not available
+      if (Platform.OS === "web") {
+        showAlert(
+          "Chromecast indisponible",
+          "Votre navigateur ne supporte pas Google Cast.\n\n→ Ouvrez CINÉMARIÉS sur Chrome ou Edge (desktop) et assurez-vous d'être sur le même Wi-Fi que votre Chromecast / TV."
+        );
+      } else {
+        showAlert(
+          "Chromecast indisponible",
+          "Le module Chromecast n'est pas chargé. Si vous utilisez Expo Go, installez plutôt l'APK officielle (EAS Build)."
+        );
+      }
       return;
     }
     if (castApi.connected) {
