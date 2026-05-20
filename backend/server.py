@@ -765,7 +765,8 @@ async def hosting_upload_info(token: str):
 
 @api_router.post("/hosting/upload/{token}/file")
 async def hosting_upload_file(token: str, file: UploadFile = File(...)):
-    """Public endpoint: accepts a single file upload for a specific hosting request token."""
+    """Public endpoint: accepts a single file upload for a specific hosting request token.
+    For very large files (>50MB), prefer /hosting/upload/{token}/chunk to avoid proxy timeouts."""
     r = await db.hosting_requests.find_one({"upload_token": token}, {"_id": 0})
     if not r:
         raise HTTPException(status_code=404, detail="Lien invalide.")
@@ -774,11 +775,9 @@ async def hosting_upload_file(token: str, file: UploadFile = File(...)):
     if r.get("status") in ("rejected",):
         raise HTTPException(status_code=400, detail="Cette demande a été rejetée.")
 
-    # Determine the storage subdir for this hosting request
     hosting_dir = UPLOAD_DIR / f"hosting_{r['id']}"
     hosting_dir.mkdir(exist_ok=True)
 
-    # Generate a safe filename keeping the original extension
     orig_name = (file.filename or "fichier").replace("/", "_").replace("\\", "_")
     ext = ""
     if "." in orig_name:
@@ -787,7 +786,6 @@ async def hosting_upload_file(token: str, file: UploadFile = File(...)):
     saved_name = f"{safe_id}{ext}"
     dest = hosting_dir / saved_name
 
-    # Stream-write to disk
     size = 0
     with open(dest, "wb") as f_out:
         while True:
@@ -808,7 +806,100 @@ async def hosting_upload_file(token: str, file: UploadFile = File(...)):
         {"upload_token": token},
         {"$push": {"uploaded_files": file_entry}},
     )
-    # If status was "paid", advance to in_progress now that files are coming in
+    if r.get("status") == "paid":
+        await db.hosting_requests.update_one(
+            {"upload_token": token},
+            {"$set": {"status": "in_progress"}},
+        )
+    return {"ok": True, "file": file_entry}
+
+
+@api_router.post("/hosting/upload/{token}/chunk")
+async def hosting_upload_chunk(
+    token: str,
+    upload_id: str = Form(...),
+    chunk_index: int = Form(...),
+    total_chunks: int = Form(...),
+    filename: str = Form("fichier"),
+    file: UploadFile = File(...),
+):
+    """Chunked upload endpoint for the public hosting flow.
+    Use this for large video files (>50MB) to bypass proxy body-size limits.
+    Frontend sends chunks of ~5 MB; the last chunk triggers assembly."""
+    r = await db.hosting_requests.find_one({"upload_token": token}, {"_id": 0})
+    if not r:
+        raise HTTPException(status_code=404, detail="Lien invalide.")
+    if r.get("status") == "pending_payment":
+        raise HTTPException(status_code=402, detail="Paiement requis avant l'envoi des fichiers.")
+    if r.get("status") in ("rejected",):
+        raise HTTPException(status_code=400, detail="Cette demande a été rejetée.")
+
+    safe_upload_id = "".join(c for c in upload_id if c.isalnum() or c in "-_")
+    if not safe_upload_id or len(safe_upload_id) > 80:
+        raise HTTPException(status_code=400, detail="upload_id invalide")
+    if chunk_index < 0 or total_chunks <= 0 or chunk_index >= total_chunks:
+        raise HTTPException(status_code=400, detail="chunk_index hors-bornes")
+
+    chunk_dir = CHUNKS_DIR / f"hosting_{safe_upload_id}"
+    chunk_dir.mkdir(exist_ok=True)
+    chunk_path = chunk_dir / f"chunk_{chunk_index:06d}"
+    with chunk_path.open("wb") as f_out:
+        while True:
+            data = await file.read(1024 * 1024)
+            if not data:
+                break
+            f_out.write(data)
+
+    if chunk_index < total_chunks - 1:
+        return {"ok": True, "chunk_index": chunk_index, "total_chunks": total_chunks}
+
+    # LAST CHUNK → assemble
+    orig_name = (filename or "fichier").replace("/", "_").replace("\\", "_")
+    ext = ""
+    if "." in orig_name:
+        ext = "." + orig_name.rsplit(".", 1)[-1].lower()[:10]
+    safe_id = secrets.token_hex(8)
+    saved_name = f"{safe_id}{ext}"
+
+    hosting_dir = UPLOAD_DIR / f"hosting_{r['id']}"
+    hosting_dir.mkdir(exist_ok=True)
+    final_path = hosting_dir / saved_name
+
+    total_size = 0
+    try:
+        for i in range(total_chunks):
+            p = chunk_dir / f"chunk_{i:06d}"
+            if not p.exists():
+                raise HTTPException(status_code=400, detail=f"Chunk {i} manquant — réessayez l'upload.")
+        with final_path.open("wb") as out:
+            for i in range(total_chunks):
+                p = chunk_dir / f"chunk_{i:06d}"
+                with p.open("rb") as src:
+                    while True:
+                        buf = src.read(4 * 1024 * 1024)
+                        if not buf:
+                            break
+                        out.write(buf)
+                        total_size += len(buf)
+    finally:
+        try:
+            for p in chunk_dir.glob("chunk_*"):
+                p.unlink()
+            chunk_dir.rmdir()
+        except Exception as e:
+            logging.warning(f"Could not cleanup chunks: {e}")
+
+    file_entry = {
+        "name": orig_name,
+        "stored_as": saved_name,
+        "size": total_size,
+        "url": f"/api/uploads/hosting_{r['id']}/{saved_name}",
+        "uploaded_at": utcnow().isoformat(),
+    }
+    await db.hosting_requests.update_one(
+        {"upload_token": token},
+        {"$push": {"uploaded_files": file_entry}},
+    )
     if r.get("status") == "paid":
         await db.hosting_requests.update_one(
             {"upload_token": token},
@@ -1493,6 +1584,106 @@ async def admin_upload(
         "created_at": utcnow(),
     })
     return {"url": public_url, "name": name, "size": size}
+
+
+# --- CHUNKED UPLOAD (for large files that exceed proxy body-size limits) ---
+CHUNKS_DIR = UPLOAD_DIR / ".chunks"
+CHUNKS_DIR.mkdir(exist_ok=True)
+
+
+@api_router.post("/admin/upload-chunk")
+async def admin_upload_chunk(
+    upload_id: str = Form(...),
+    chunk_index: int = Form(...),
+    total_chunks: int = Form(...),
+    kind: str = Form("video"),
+    filename: str = Form("file.mp4"),
+    file: UploadFile = File(...),
+    _: dict = Depends(require_admin),
+):
+    """Accept one chunk of a chunked upload.
+    When the last chunk is received, all chunks are assembled into the final file
+    and the public URL is returned.
+
+    Frontend should:
+      1. Generate a UUID `upload_id`
+      2. Split the file into 5MB chunks
+      3. POST each chunk with the same upload_id and incrementing chunk_index
+      4. When chunk_index == total_chunks - 1, the response includes the final URL
+    """
+    if kind not in ("video", "image"):
+        raise HTTPException(status_code=400, detail="kind doit être 'video' ou 'image'")
+    # Safety: upload_id must be a hex/uuid-like string only
+    safe_upload_id = "".join(c for c in upload_id if c.isalnum() or c in "-_")
+    if not safe_upload_id or len(safe_upload_id) > 80:
+        raise HTTPException(status_code=400, detail="upload_id invalide")
+    if chunk_index < 0 or total_chunks <= 0 or chunk_index >= total_chunks:
+        raise HTTPException(status_code=400, detail="chunk_index hors-bornes")
+
+    chunk_dir = CHUNKS_DIR / safe_upload_id
+    chunk_dir.mkdir(exist_ok=True)
+
+    # Save chunk
+    chunk_path = chunk_dir / f"chunk_{chunk_index:06d}"
+    with chunk_path.open("wb") as f_out:
+        while True:
+            data = await file.read(1024 * 1024)
+            if not data:
+                break
+            f_out.write(data)
+
+    # If not the last chunk, just acknowledge
+    if chunk_index < total_chunks - 1:
+        return {"ok": True, "chunk_index": chunk_index, "total_chunks": total_chunks}
+
+    # LAST CHUNK → assemble all chunks into a single file
+    # Detect extension from provided filename
+    ext = (filename or "").split(".")[-1].lower() if "." in filename else ""
+    if not ext or len(ext) > 6:
+        ext = "mp4" if kind == "video" else "jpg"
+    final_name = f"{uuid.uuid4().hex}.{ext}"
+    final_path = UPLOAD_DIR / final_name
+
+    total_size = 0
+    try:
+        # Verify all chunks are present
+        for i in range(total_chunks):
+            p = chunk_dir / f"chunk_{i:06d}"
+            if not p.exists():
+                raise HTTPException(status_code=400, detail=f"Chunk {i} manquant — réessayez l'upload.")
+        # Concatenate
+        with final_path.open("wb") as out:
+            for i in range(total_chunks):
+                p = chunk_dir / f"chunk_{i:06d}"
+                with p.open("rb") as src:
+                    while True:
+                        buf = src.read(4 * 1024 * 1024)
+                        if not buf:
+                            break
+                        out.write(buf)
+                        total_size += len(buf)
+    finally:
+        # Cleanup chunks regardless of success
+        try:
+            for p in chunk_dir.glob("chunk_*"):
+                p.unlink()
+            chunk_dir.rmdir()
+        except Exception as e:
+            logging.warning(f"Could not cleanup chunks for {safe_upload_id}: {e}")
+
+    public_url = f"{APP_PUBLIC_URL}/api/uploads/{final_name}"
+    await db.uploads.insert_one({
+        "name": final_name,
+        "kind": kind,
+        "size": total_size,
+        "content_type": None,
+        "url": public_url,
+        "chunked": True,
+        "created_at": utcnow(),
+    })
+    return {"ok": True, "url": public_url, "name": final_name, "size": total_size}
+
+
 
 
 @api_router.get("/uploads/{name:path}")

@@ -115,49 +115,115 @@ export default function VideoEdit() {
       setUploadedStatus((s) => ({ ...s, [target]: false }));
 
       const token = await storage.secureGet<string>("ws_token", "");
-      const fd = new FormData();
-      fd.append("kind", target === "poster" ? "image" : "video");
-      if (Platform.OS === "web") {
-        // On web, fetch the URI as a Blob
-        const blob = await (await fetch(asset.uri)).blob();
-        fd.append("file", blob, asset.name || "file");
-      } else {
-        // @ts-ignore - RN FormData accepts {uri,name,type}
-        fd.append("file", { uri: asset.uri, name: asset.name || "file", type: asset.mimeType || "application/octet-stream" });
-      }
+      const isVideo = target !== "poster";
 
-      // Use XMLHttpRequest for real upload progress
-      const url = `${BASE}/api/admin/upload`;
-      const result = await new Promise<{ url: string }>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open("POST", url);
-        xhr.setRequestHeader("Authorization", `Bearer ${token}`);
-        xhr.upload.onprogress = (e: any) => {
-          if (e.lengthComputable) {
-            const pct = Math.round((e.loaded / e.total) * 100);
-            setProgress((p) => ({ ...p, [target]: pct }));
-          }
-        };
-        xhr.onload = () => {
-          if (xhr.status >= 200 && xhr.status < 300) {
-            try {
-              resolve(JSON.parse(xhr.responseText));
-            } catch (e) {
-              reject(new Error("Réponse invalide du serveur"));
+      // Convert asset to a Blob/File (needed for both flows)
+      let blob: Blob;
+      let fileName = asset.name || (isVideo ? "video.mp4" : "image.jpg");
+      if (Platform.OS === "web") {
+        blob = await (await fetch(asset.uri)).blob();
+      } else {
+        blob = await (await fetch(asset.uri)).blob();
+      }
+      const fileSize = (blob as any).size || asset.size || 0;
+
+      let result: { url: string };
+
+      // ====== CHUNKED UPLOAD for videos (any size) or large images ======
+      const CHUNK_SIZE = 5 * 1024 * 1024; // 5 MB per chunk (safely below proxy limits)
+      const useChunked = isVideo || fileSize > 8 * 1024 * 1024;
+
+      if (useChunked && fileSize > 0) {
+        const totalChunks = Math.max(1, Math.ceil(fileSize / CHUNK_SIZE));
+        const uploadId = (typeof crypto !== "undefined" && (crypto as any).randomUUID)
+          ? (crypto as any).randomUUID()
+          : `up_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
+        let finalUrl: string | null = null;
+
+        for (let i = 0; i < totalChunks; i++) {
+          const start = i * CHUNK_SIZE;
+          const end = Math.min(start + CHUNK_SIZE, fileSize);
+          const chunk = blob.slice(start, end);
+
+          const fd = new FormData();
+          fd.append("upload_id", uploadId);
+          fd.append("chunk_index", String(i));
+          fd.append("total_chunks", String(totalChunks));
+          fd.append("kind", isVideo ? "video" : "image");
+          fd.append("filename", fileName);
+          fd.append("file", chunk, `${fileName}.part${i}`);
+
+          const chunkResult = await new Promise<{ url?: string; ok: boolean }>((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open("POST", `${BASE}/api/admin/upload-chunk`);
+            xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+            xhr.timeout = 5 * 60 * 1000; // 5 min per chunk
+            xhr.upload.onprogress = (ev: any) => {
+              if (ev.lengthComputable) {
+                const chunkPct = ev.loaded / ev.total;
+                // Overall progress accounts for completed chunks + this chunk's progress
+                const overallPct = Math.round(((i + chunkPct) / totalChunks) * 100);
+                setProgress((p) => ({ ...p, [target]: Math.min(99, overallPct) }));
+              }
+            };
+            xhr.onload = () => {
+              if (xhr.status >= 200 && xhr.status < 300) {
+                try { resolve(JSON.parse(xhr.responseText)); }
+                catch { resolve({ ok: true }); }
+              } else {
+                try {
+                  const err = JSON.parse(xhr.responseText);
+                  reject(new Error(err.detail || `HTTP ${xhr.status}`));
+                } catch {
+                  reject(new Error(`Erreur ${xhr.status} sur le chunk ${i + 1}/${totalChunks}`));
+                }
+              }
+            };
+            xhr.onerror = () => reject(new Error(`Erreur réseau sur le chunk ${i + 1}/${totalChunks}. Vérifiez votre connexion et réessayez.`));
+            xhr.ontimeout = () => reject(new Error(`Timeout sur le chunk ${i + 1}/${totalChunks}`));
+            xhr.send(fd as any);
+          });
+
+          if (chunkResult.url) finalUrl = chunkResult.url;
+        }
+
+        if (!finalUrl) throw new Error("Le serveur n'a pas renvoyé l'URL finale. Réessayez l'upload.");
+        result = { url: finalUrl };
+      } else {
+        // ====== SINGLE-SHOT UPLOAD (small images) ======
+        const fd = new FormData();
+        fd.append("kind", isVideo ? "video" : "image");
+        fd.append("file", blob, fileName);
+
+        result = await new Promise<{ url: string }>((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open("POST", `${BASE}/api/admin/upload`);
+          xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+          xhr.upload.onprogress = (e: any) => {
+            if (e.lengthComputable) {
+              const pct = Math.round((e.loaded / e.total) * 100);
+              setProgress((p) => ({ ...p, [target]: pct }));
             }
-          } else {
-            try {
-              const err = JSON.parse(xhr.responseText);
-              reject(new Error(err.detail || `HTTP ${xhr.status}`));
-            } catch {
-              reject(new Error(`Erreur ${xhr.status}`));
+          };
+          xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+              try { resolve(JSON.parse(xhr.responseText)); }
+              catch { reject(new Error("Réponse invalide du serveur")); }
+            } else {
+              try {
+                const err = JSON.parse(xhr.responseText);
+                reject(new Error(err.detail || `HTTP ${xhr.status}`));
+              } catch {
+                reject(new Error(`Erreur ${xhr.status}`));
+              }
             }
-          }
-        };
-        xhr.onerror = () => reject(new Error("Erreur réseau pendant l'upload"));
-        xhr.ontimeout = () => reject(new Error("Timeout de l'upload"));
-        xhr.send(fd as any);
-      });
+          };
+          xhr.onerror = () => reject(new Error("Erreur réseau pendant l'upload"));
+          xhr.ontimeout = () => reject(new Error("Timeout de l'upload"));
+          xhr.send(fd as any);
+        });
+      }
 
       // Minimum 800ms visible so the user sees the gauge even for fast uploads
       const elapsed = Date.now() - startedAt;

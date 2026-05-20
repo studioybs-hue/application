@@ -61,30 +61,80 @@ export default function PublicUploadScreen() {
   useEffect(() => { load(); }, [load]);
 
   const uploadFile = (file: File): Promise<void> => {
-    return new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
-      const form = new FormData();
-      form.append("file", file);
-      xhr.open("POST", `${BACKEND_URL}/api/hosting/upload/${token}/file`);
-      xhr.upload.onprogress = (e) => {
-        if (e.lengthComputable) {
-          setProgress(Math.round((e.loaded / e.total) * 100));
-        }
-      };
-      xhr.onload = () => {
-        if (xhr.status >= 200 && xhr.status < 300) resolve();
-        else {
-          try {
-            const err = JSON.parse(xhr.responseText);
-            reject(new Error(err.detail || `Erreur ${xhr.status}`));
-          } catch {
-            reject(new Error(`Erreur ${xhr.status}`));
+    const CHUNK_SIZE = 5 * 1024 * 1024; // 5 MB per chunk
+    const fileSize = file.size;
+    // For files > 50MB, use chunked upload to bypass proxy limits and avoid timeouts
+    const useChunked = fileSize > 50 * 1024 * 1024;
+
+    if (!useChunked) {
+      return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        const form = new FormData();
+        form.append("file", file);
+        xhr.open("POST", `${BACKEND_URL}/api/hosting/upload/${token}/file`);
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) setProgress(Math.round((e.loaded / e.total) * 100));
+        };
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) resolve();
+          else {
+            try {
+              const err = JSON.parse(xhr.responseText);
+              reject(new Error(err.detail || `Erreur ${xhr.status}`));
+            } catch { reject(new Error(`Erreur ${xhr.status}`)); }
           }
-        }
-      };
-      xhr.onerror = () => reject(new Error("Erreur réseau"));
-      xhr.send(form);
-    });
+        };
+        xhr.onerror = () => reject(new Error("Erreur réseau pendant l'upload"));
+        xhr.send(form);
+      });
+    }
+
+    // CHUNKED UPLOAD for large files
+    const totalChunks = Math.max(1, Math.ceil(fileSize / CHUNK_SIZE));
+    const uploadId = (typeof crypto !== "undefined" && (crypto as any).randomUUID)
+      ? (crypto as any).randomUUID()
+      : `up_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
+    return (async () => {
+      for (let i = 0; i < totalChunks; i++) {
+        const start = i * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, fileSize);
+        const chunk = file.slice(start, end);
+
+        await new Promise<void>((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          const form = new FormData();
+          form.append("upload_id", uploadId);
+          form.append("chunk_index", String(i));
+          form.append("total_chunks", String(totalChunks));
+          form.append("filename", file.name);
+          form.append("file", chunk, `${file.name}.part${i}`);
+
+          xhr.open("POST", `${BACKEND_URL}/api/hosting/upload/${token}/chunk`);
+          xhr.timeout = 5 * 60 * 1000;
+          xhr.upload.onprogress = (e) => {
+            if (e.lengthComputable) {
+              const chunkPct = e.loaded / e.total;
+              const overallPct = Math.round(((i + chunkPct) / totalChunks) * 100);
+              setProgress(Math.min(99, overallPct));
+            }
+          };
+          xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) resolve();
+            else {
+              try {
+                const err = JSON.parse(xhr.responseText);
+                reject(new Error(err.detail || `Erreur ${xhr.status} sur le chunk ${i + 1}/${totalChunks}`));
+              } catch { reject(new Error(`Erreur ${xhr.status} sur le chunk ${i + 1}/${totalChunks}`)); }
+            }
+          };
+          xhr.onerror = () => reject(new Error(`Erreur réseau sur le chunk ${i + 1}/${totalChunks}. Vérifiez votre connexion.`));
+          xhr.ontimeout = () => reject(new Error(`Timeout sur le chunk ${i + 1}/${totalChunks}`));
+          xhr.send(form);
+        });
+      }
+      setProgress(100);
+    })();
   };
 
   const pickAndUpload = async () => {
