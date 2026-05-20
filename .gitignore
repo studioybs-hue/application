@@ -83,3 +83,9 @@ android-sdk/backend/uploads/b897c1530b5c4a08bf7e5a5daa17b919.mp4
 backend/uploads/b897c1530b5c4a08bf7e5a5daa17b919.mp4
 backend/uploads/cf2b6f371a6e42519a5ef3538f6ac6e1.mp4
 backend/uploads/b9c27af224ff49a7832c37a2ce2a436c.m4v
+.env
+.env.*
+*.env
+credentials.json
+*.key
+.credentials
