@@ -7,6 +7,9 @@
     "development": {
       "developmentClient": true,
       "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_BACKEND_URL": "https://mariagevideo.preview.emergentagent.com"
+      },
       "ios": {
         "simulator": true
       }
@@ -14,6 +17,9 @@
     "preview": {
       "distribution": "internal",
       "channel": "preview",
+      "env": {
+        "EXPO_PUBLIC_BACKEND_URL": "https://mariagevideo.preview.emergentagent.com"
+      },
       "android": {
         "buildType": "apk"
       },
@@ -24,6 +30,9 @@
     "production": {
       "channel": "production",
       "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_BACKEND_URL": "https://mariagevideo.preview.emergentagent.com"
+      },
       "android": {
         "buildType": "app-bundle"
       }
