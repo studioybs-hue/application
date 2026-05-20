@@ -5,18 +5,36 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "frontend",
+    "scheme": "cinemaries",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "fr.cinemaries.app",
+      "buildNumber": "1",
+      "infoPlist": {
+        "NSLocalNetworkUsageDescription": "Recherche les Chromecast et TV connectées sur votre Wi-Fi pour la diffusion vidéo.",
+        "NSBonjourServices": [
+          "_googlecast._tcp"
+        ],
+        "NSPhotoLibraryUsageDescription": "Choisir une photo pour votre mariage.",
+        "NSCameraUsageDescription": "Prendre une photo pour votre mariage."
+      }
     },
     "android": {
+      "package": "fr.cinemaries.app",
+      "versionCode": 1,
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#000"
       },
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "permissions": [
+        "ACCESS_NETWORK_STATE",
+        "ACCESS_WIFI_STATE",
+        "CHANGE_WIFI_MULTICAST_STATE",
+        "INTERNET"
+      ]
     },
     "web": {
       "bundler": "metro",
@@ -34,10 +52,22 @@
           "backgroundColor": "#0A0A0A"
         }
       ],
-      "expo-web-browser"
+      "expo-web-browser",
+      [
+        "react-native-google-cast",
+        {
+          "iosReceiverAppId": "CC1AD845",
+          "androidReceiverAppId": "CC1AD845"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "eas": {
+        "projectId": ""
+      }
     }
   }
 }
