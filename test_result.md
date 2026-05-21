@@ -432,3 +432,43 @@ agent_communication:
 
       Cleanup: test video deleted, state back to baseline (sarahaline-elarif=2, hanifa-et-dali=1). No 5xx errors. Both endpoints are production-ready. No further backend testing required for this story.
 
+  - task: "Contact / Devis endpoints (POST /api/contact + admin CRUD)"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          All 41 assertions PASSED against https://mariagevideo.preview.emergentagent.com/api (see /app/backend_test_contact.py).
+          POST /api/contact (PUBLIC, no auth):
+            • Happy path with full body {name, email, phone, subject, wedding_date, location, message, source:'cinemaries-about'} → 200 {ok:true, id:<uuid>}.
+            • All fields persisted including the NEW 'subject' field (verified via GET admin list).
+            • Missing name → 400 "Nom, email et message requis."
+            • Empty email → 422 (Pydantic EmailStr); invalid email format ('notanemail') → 422.
+            • Missing message → 400 "Nom, email et message requis."
+            • Message > 5000 chars → 400 "Message trop long (max 5000 caractères)."
+            • Minimal valid body {name, email, message} (no phone/subject) → 200 (subject is optional, confirmed).
+          GET /api/admin/contact-requests (ADMIN):
+            • Unauth → 401, non-admin (test@wedding.fr) → 403, admin → 200 {requests:[...]}.
+            • List sorted by created_at descending (verified).
+            • Each item has id, name, email, phone, subject, wedding_date, location, message, source, status:'new', created_at (ISO string).
+            • The happy-path doc from step 1 appears with all fields intact.
+          PATCH /api/admin/contact-requests/{req_id} (ADMIN):
+            • Non-admin → 403.
+            • {status:'read'} → 200 {ok:true}; subsequent GET shows status='read'.
+            • {status:'archived'} → 200; GET shows archived.
+            • {notes:'called client'} → 200; notes field persisted.
+            • Empty body {} → 400 "Aucune modification."
+            • Non-existent req_id → 404 "Demande introuvable".
+          DELETE /api/admin/contact-requests/{req_id} (ADMIN):
+            • Non-admin → 403.
+            • Valid id → 200 {ok:true}; subsequent GET no longer contains it.
+            • Already-deleted id → 404 "Demande introuvable".
+          REGRESSION:
+            • GET /api/admin/weddings (admin) → 200 with 2 weddings; sarahaline-elarif has video_count=2 as expected.
+          No 5xx errors observed; backend logs clean. Contact + admin CRUD endpoints are production-ready.
+

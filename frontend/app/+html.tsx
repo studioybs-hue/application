@@ -26,7 +26,7 @@ export default function Root({ children }: PropsWithChildren) {
         />
 
         {/* --- PRIMARY SEO --- */}
-        <title>{SITE_NAME} — {SITE_TAGLINE}</title>
+        <title>{`${SITE_NAME} — ${SITE_TAGLINE}`}</title>
         <meta name="title" content={`${SITE_NAME} — ${SITE_TAGLINE}`} />
         <meta name="description" content={SITE_DESCRIPTION} />
         <meta name="keywords" content={SITE_KEYWORDS} />

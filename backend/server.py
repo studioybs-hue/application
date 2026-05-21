@@ -1760,6 +1760,7 @@ class ContactRequest(BaseModel):
     name: str
     email: EmailStr
     phone: Optional[str] = None
+    subject: Optional[str] = None
     wedding_date: Optional[str] = None
     location: Optional[str] = None
     message: str
@@ -1781,6 +1782,7 @@ async def submit_contact(body: ContactRequest):
         "name": name,
         "email": email,
         "phone": (body.phone or "").strip() or None,
+        "subject": (body.subject or "").strip() or None,
         "wedding_date": (body.wedding_date or "").strip() or None,
         "location": (body.location or "").strip() or None,
         "message": message,
