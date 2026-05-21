@@ -35,8 +35,10 @@ STRIPE_WEBHOOK_SECRET = os.environ.get('STRIPE_WEBHOOK_SECRET', '')
 STRIPE_PRICE_AMOUNT = int(os.environ.get('STRIPE_PRICE_AMOUNT', '199'))
 STRIPE_PRICE_AMOUNT_UNLIMITED = int(os.environ.get('STRIPE_PRICE_AMOUNT_UNLIMITED', '230'))
 STRIPE_PRICE_CURRENCY = os.environ.get('STRIPE_PRICE_CURRENCY', 'eur')
-# Plan limits: Basic = 3 codes max (1 device each), Unlimited = unlimited codes
+# Plan limits: Basic = 3 codes max, Unlimited = unlimited codes
 BASIC_MAX_CODES = int(os.environ.get('BASIC_MAX_CODES', '3'))
+# Max devices that a single code can be activated on (1 code = up to N devices)
+MAX_DEVICES_PER_CODE = int(os.environ.get('MAX_DEVICES_PER_CODE', '3'))
 # One-time hosting fee for couples wanting to host their wedding (in cents)
 HOSTING_FEE_AMOUNT = int(os.environ.get('HOSTING_FEE_AMOUNT', '9000'))
 APP_PUBLIC_URL = os.environ.get('APP_PUBLIC_URL', '')
@@ -753,7 +755,7 @@ async def get_wedding(client_id: str, code: Optional[str] = None, current: Optio
 @api_router.post("/weddings/unlock")
 async def unlock_wedding(body: UnlockRequest, request: Request, current: Optional[dict] = Depends(get_optional_user)):
     """Enter a code to unlock an entire wedding. Works anonymously (no login required).
-    Each code is locked to ONE device (the first device that uses it).
+    Each code can be activated on UP TO MAX_DEVICES_PER_CODE devices (default 3).
     The same device can re-unlock with the code as many times as needed."""
     code = body.code.strip().upper()
     rec = await db.unlock_codes.find_one({"code": code, "is_active": True}, {"_id": 0})
@@ -762,20 +764,46 @@ async def unlock_wedding(body: UnlockRequest, request: Request, current: Optiona
     if rec.get("expires_at") and rec["expires_at"] < utcnow():
         raise HTTPException(status_code=410, detail="Code expiré")
 
-    # DEVICE BINDING: 1 code = 1 device. First device that uses it wins.
+    # DEVICE BINDING: 1 code = up to MAX_DEVICES_PER_CODE devices.
     device_id = (body.device_id or "").strip()
-    bound_device = rec.get("bound_device_id")
 
-    if bound_device:
-        if not device_id:
-            raise HTTPException(status_code=403, detail="Ce code est verrouillé sur un appareil spécifique. Veuillez utiliser ce même appareil.")
-        if bound_device != device_id:
-            raise HTTPException(status_code=403, detail="Ce code est déjà utilisé sur un autre appareil. Un code = 1 seul appareil.")
-    else:
-        # First use: bind to this device (if provided)
-        # Also respect max_uses for legacy codes (still useful for admin "limit by use count" model)
+    # Build the list of currently bound devices.
+    # Backward compat: if a code used the old single-device schema, promote it to the new list.
+    bound_devices: List[dict] = list(rec.get("bound_devices") or [])
+    legacy_id = rec.get("bound_device_id")
+    if legacy_id and not any((d.get("device_id") == legacy_id) for d in bound_devices):
+        bound_devices.insert(0, {
+            "device_id": legacy_id,
+            "label": rec.get("bound_device_label") or "Appareil",
+            "ip": rec.get("bound_device_ip"),
+            "ua": rec.get("bound_device_ua"),
+            "bound_at": rec.get("bound_at"),
+            "last_seen_at": rec.get("last_seen_at") or rec.get("bound_at"),
+        })
+
+    is_known_device = bool(device_id) and any((d.get("device_id") == device_id) for d in bound_devices)
+
+    if not is_known_device:
+        # Either it's a fresh device or no device_id provided.
+        if bound_devices and not device_id:
+            # Code already used by other devices but caller did not identify themselves
+            raise HTTPException(
+                status_code=403,
+                detail=f"Ce code est déjà utilisé sur {len(bound_devices)} appareil(s). Veuillez utiliser l'un de ces appareils."
+            )
+        if len(bound_devices) >= MAX_DEVICES_PER_CODE:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"Limite de {MAX_DEVICES_PER_CODE} appareils atteinte pour ce code. "
+                    "Passez à l'offre Illimité ou contactez les mariés pour qu'ils génèrent un nouveau code."
+                ),
+            )
+        # Respect legacy max_uses if explicitly set above MAX_DEVICES_PER_CODE
         if rec.get("max_uses") and rec.get("current_uses", 0) >= rec["max_uses"]:
-            raise HTTPException(status_code=429, detail="Code épuisé")
+            # If max_uses == 1 (legacy "1 device" codes from earlier rollout), upgrade silently to 3
+            if rec["max_uses"] >= MAX_DEVICES_PER_CODE:
+                raise HTTPException(status_code=429, detail="Code épuisé")
 
     # Determine client_id from the code (new) or derive from video_id (backward compat)
     client_id = rec.get("client_id")
@@ -817,29 +845,51 @@ async def unlock_wedding(body: UnlockRequest, request: Request, current: Optiona
                 upsert=True,
             )
 
-    # Bind to device on first activation (or refresh activation timestamp if same device)
+    # Update bound_devices array
+    now = utcnow()
+    ip = (request.client.host if request.client else "") or ""
+    ua = (request.headers.get("user-agent") or "")[:300]
+
     if device_id:
-        ip = (request.client.host if request.client else "") or ""
-        ua = (request.headers.get("user-agent") or "")[:300]
-        if not bound_device:
-            await db.unlock_codes.update_one(
-                {"code": code},
-                {"$set": {
-                    "bound_device_id": device_id,
-                    "bound_device_label": body.device_label or "Appareil",
-                    "bound_device_ip": ip,
-                    "bound_device_ua": ua,
-                    "bound_at": utcnow(),
-                }, "$inc": {"current_uses": 1}},
-            )
+        if is_known_device:
+            # Same device re-unlocking — just refresh last_seen
+            for d in bound_devices:
+                if d.get("device_id") == device_id:
+                    d["last_seen_at"] = now
+                    if body.device_label:
+                        d["label"] = body.device_label
+                    break
         else:
-            # Same device re-unlocking — update last seen
-            await db.unlock_codes.update_one(
-                {"code": code},
-                {"$set": {"last_seen_at": utcnow()}},
-            )
+            # New device joining (we already checked we are under the limit)
+            bound_devices.append({
+                "device_id": device_id,
+                "label": (body.device_label or "Appareil")[:60],
+                "ip": ip,
+                "ua": ua,
+                "bound_at": now,
+                "last_seen_at": now,
+            })
+
+        # Persist the updated devices array. Also keep the legacy single fields populated
+        # with the FIRST device for backward compat with admin UIs that don't yet read the array.
+        first = bound_devices[0]
+        await db.unlock_codes.update_one(
+            {"code": code},
+            {
+                "$set": {
+                    "bound_devices": bound_devices,
+                    "bound_device_id": first.get("device_id"),
+                    "bound_device_label": first.get("label"),
+                    "bound_device_ip": first.get("ip"),
+                    "bound_device_ua": first.get("ua"),
+                    "bound_at": first.get("bound_at"),
+                    "last_seen_at": now,
+                },
+                "$inc": {"current_uses": 0 if is_known_device else 1},
+            },
+        )
     else:
-        # No device id provided (legacy) — bump usage count
+        # No device id provided (legacy caller) — bump usage count, do not bind
         await db.unlock_codes.update_one({"code": code}, {"$inc": {"current_uses": 1}})
 
     wedding_name = wedding_videos[0].get("client_name") or wedding_videos[0].get("title")
@@ -850,6 +900,8 @@ async def unlock_wedding(body: UnlockRequest, request: Request, current: Optiona
         "client_id": client_id,
         "client_name": wedding_name,
         "video_count": len(wedding_videos),
+        "devices_used": len(bound_devices) if device_id else None,
+        "devices_max": MAX_DEVICES_PER_CODE,
         "videos": full_videos,
     }
 
@@ -857,6 +909,23 @@ async def unlock_wedding(body: UnlockRequest, request: Request, current: Optiona
 # --- CLIENT SELF-SERVICE CODES (premium owners can generate codes for their own wedding) ---
 def code_to_public(c: dict) -> dict:
     expired = bool(c.get("expires_at") and c["expires_at"] < utcnow())
+    # Backward-compat: build devices list from legacy single-device fields if needed.
+    devices_raw = list(c.get("bound_devices") or [])
+    if not devices_raw and c.get("bound_device_id"):
+        devices_raw = [{
+            "device_id": c.get("bound_device_id"),
+            "label": c.get("bound_device_label") or "Appareil",
+            "ip": c.get("bound_device_ip"),
+            "ua": c.get("bound_device_ua"),
+            "bound_at": c.get("bound_at"),
+            "last_seen_at": c.get("last_seen_at") or c.get("bound_at"),
+        }]
+    devices_out = [{
+        "device_id": d.get("device_id"),
+        "label": d.get("label") or "Appareil",
+        "bound_at": d.get("bound_at").isoformat() if d.get("bound_at") else None,
+        "last_seen_at": d.get("last_seen_at").isoformat() if d.get("last_seen_at") else None,
+    } for d in devices_raw]
     return {
         "code": c["code"],
         "client_id": c.get("client_id"),
@@ -865,9 +934,14 @@ def code_to_public(c: dict) -> dict:
         "expired": expired,
         "current_uses": c.get("current_uses", 0),
         "max_uses": c.get("max_uses"),
-        "bound_device_id": c.get("bound_device_id"),
-        "bound_device_label": c.get("bound_device_label"),
-        "bound_at": c.get("bound_at").isoformat() if c.get("bound_at") else None,
+        # Legacy single-device fields (first device) — kept for backward compat
+        "bound_device_id": (devices_out[0]["device_id"] if devices_out else None),
+        "bound_device_label": (devices_out[0]["label"] if devices_out else None),
+        "bound_at": (devices_out[0]["bound_at"] if devices_out else None),
+        # New multi-device fields
+        "devices": devices_out,
+        "devices_count": len(devices_out),
+        "devices_max": MAX_DEVICES_PER_CODE,
         "created_at": c.get("created_at").isoformat() if c.get("created_at") else None,
     }
 
@@ -933,13 +1007,56 @@ async def client_create_code(body: ClientCodeCreate, current: dict = Depends(get
         "owner_email": current.get("email"),
         "source": "client",
         "is_active": True,
-        "max_uses": 1,  # 1 device per code; max_uses kept for legacy display
+        # Device-based limit (MAX_DEVICES_PER_CODE); max_uses kept null for new codes.
+        "max_uses": None,
         "current_uses": 0,
         "expires_at": None,
+        "bound_devices": [],
         "bound_device_id": None,
         "created_at": utcnow(),
     })
     return {"ok": True, "code": code, "client_id": current["client_id"]}
+
+
+@api_router.delete("/client/codes/{code}/devices/{device_id}")
+async def client_revoke_device(code: str, device_id: str, current: dict = Depends(get_current_user)):
+    """Revoke ONE specific device from a code so the freed slot can be re-used by a new device."""
+    code = code.strip().upper()
+    rec = await db.unlock_codes.find_one({"code": code}, {"_id": 0})
+    if not rec:
+        raise HTTPException(status_code=404, detail="Code introuvable")
+    if rec.get("owner_user_id") != current["id"] and not current.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Vous n'êtes pas le propriétaire de ce code")
+
+    devices = list(rec.get("bound_devices") or [])
+    legacy_id = rec.get("bound_device_id")
+    if legacy_id and not any(d.get("device_id") == legacy_id for d in devices):
+        devices.insert(0, {
+            "device_id": legacy_id,
+            "label": rec.get("bound_device_label") or "Appareil",
+            "ip": rec.get("bound_device_ip"),
+            "ua": rec.get("bound_device_ua"),
+            "bound_at": rec.get("bound_at"),
+            "last_seen_at": rec.get("last_seen_at") or rec.get("bound_at"),
+        })
+
+    new_devices = [d for d in devices if d.get("device_id") != device_id]
+    if len(new_devices) == len(devices):
+        raise HTTPException(status_code=404, detail="Appareil introuvable pour ce code")
+
+    first = new_devices[0] if new_devices else None
+    await db.unlock_codes.update_one(
+        {"code": code},
+        {"$set": {
+            "bound_devices": new_devices,
+            "bound_device_id": first.get("device_id") if first else None,
+            "bound_device_label": first.get("label") if first else None,
+            "bound_device_ip": first.get("ip") if first else None,
+            "bound_device_ua": first.get("ua") if first else None,
+            "bound_at": first.get("bound_at") if first else None,
+        }},
+    )
+    return {"ok": True, "devices_count": len(new_devices), "devices_max": MAX_DEVICES_PER_CODE}
 
 
 @api_router.delete("/client/codes/{code}")
@@ -1427,6 +1544,7 @@ async def billing_config():
         "price_amount_unlimited": STRIPE_PRICE_AMOUNT_UNLIMITED,
         "price_currency": STRIPE_PRICE_CURRENCY,
         "basic_max_codes": BASIC_MAX_CODES,
+        "max_devices_per_code": MAX_DEVICES_PER_CODE,
         "configured": bool(STRIPE_API_KEY and STRIPE_API_KEY != "sk_test_emergent"),
     }
 

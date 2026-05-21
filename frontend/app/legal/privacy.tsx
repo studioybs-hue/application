@@ -34,14 +34,14 @@ export default function PrivacyPolicy() {
 
       <H3>2.2 Données collectées automatiquement</H3>
       <Bullet><Bold>Adresse IP</Bold> (pour la sécurité, la prévention de fraude et la conformité aux ordonnances judiciaires)</Bullet>
-      <Bullet><Bold>Identifiant d'appareil unique</Bold> : généré aléatoirement, stocké localement, utilisé pour lier 1 code à 1 appareil</Bullet>
+      <Bullet><Bold>Identifiant d'appareil unique</Bold> : généré aléatoirement, stocké localement, utilisé pour lier 1 code à un maximum de 3 appareils</Bullet>
       <Bullet><Bold>Logs techniques</Bold> : horodatage, type de requête, user-agent (navigateur/app)</Bullet>
       <Bullet><Bold>Données de paiement</Bold> : gérées exclusivement par Stripe. Nous ne stockons aucun numéro de carte bancaire.</Bullet>
 
       <H2>3. Finalités et bases légales</H2>
       <Bullet><Bold>Exécution du contrat (art. 6.1.b RGPD)</Bold> : création de compte, accès aux films, gestion de l'abonnement, hébergement payant</Bullet>
       <Bullet><Bold>Obligation légale (art. 6.1.c)</Bold> : facturation, comptabilité, lutte contre la fraude, conservation des données de connexion (loi LCEN)</Bullet>
-      <Bullet><Bold>Intérêt légitime (art. 6.1.f)</Bold> : sécurité du service (limitation 1 code = 1 appareil), prévention des abus, amélioration du service</Bullet>
+      <Bullet><Bold>Intérêt légitime (art. 6.1.f)</Bold> : sécurité du service (limitation 1 code = jusqu'à 3 appareils), prévention des abus, amélioration du service</Bullet>
       <Bullet><Bold>Consentement (art. 6.1.a)</Bold> : envoi du formulaire de contact, communications commerciales optionnelles</Bullet>
 
       <H2>4. Durées de conservation</H2>
@@ -93,7 +93,7 @@ export default function PrivacyPolicy() {
       </P>
       <P>Seuls des cookies/stockages strictement nécessaires sont utilisés :</P>
       <Bullet><Bold>Token de session JWT</Bold> : pour vous maintenir connecté</Bullet>
-      <Bullet><Bold>Identifiant d'appareil local</Bold> : pour la sécurité 1 code = 1 appareil</Bullet>
+      <Bullet><Bold>Identifiant d'appareil local</Bold> : pour la sécurité 1 code = jusqu'à 3 appareils</Bullet>
       <P>Ces cookies fonctionnels sont exemptés de consentement (art. 82 loi Informatique et Libertés, lignes directrices CNIL).</P>
 
       <H2>10. Mineurs</H2>

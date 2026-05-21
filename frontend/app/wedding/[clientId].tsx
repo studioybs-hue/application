@@ -51,6 +51,9 @@ type ClientCode = {
   bound_device_label?: string | null;
   bound_at?: string | null;
   created_at?: string | null;
+  devices?: { device_id: string; label: string; bound_at?: string | null; last_seen_at?: string | null }[];
+  devices_count?: number;
+  devices_max?: number;
 };
 
 const CODES_KEY = "ws_unlocked_codes"; // JSON-stringified map of client_id -> code
@@ -168,7 +171,7 @@ export default function WeddingScreen() {
       });
       setInviteLabel("");
       await loadInviteCodes();
-      showAlert("✓ Code généré", `Votre nouveau code : ${r.code}\n\nIl est valable UNE SEULE FOIS sur UN SEUL appareil. Copiez-le et partagez-le avec votre invité.`);
+      showAlert("✓ Code généré", `Votre nouveau code : ${r.code}\n\nIl peut être utilisé sur jusqu'à 3 appareils différents. Copiez-le et partagez-le avec vos invités.`);
     } catch (e: any) {
       showAlert("Erreur", e.message || "Impossible de générer le code");
     } finally {
@@ -184,7 +187,7 @@ export default function WeddingScreen() {
   const shareInvite = async (c: ClientCode) => {
     try {
       const link = typeof window !== "undefined" ? `${window.location.origin}/wedding/${clientId}` : "";
-      const msg = `Je vous invite à découvrir notre mariage sur CINÉMARIÉS 💍\n\nVotre code unique : ${c.code}\n${link ? `\nLien direct : ${link}` : ""}\n\n(Ce code ne fonctionne que sur UN seul appareil — le premier à l'utiliser.)`;
+      const msg = `Je vous invite à découvrir notre mariage sur CINÉMARIÉS 💍\n\nVotre code unique : ${c.code}\n${link ? `\nLien direct : ${link}` : ""}\n\n(Ce code fonctionne sur 3 appareils différents maximum.)`;
       if (Platform.OS === "web" && (navigator as any).share) {
         await (navigator as any).share({ title: "Mon mariage CINÉMARIÉS", text: msg });
       } else {
@@ -319,7 +322,7 @@ export default function WeddingScreen() {
                 <Ionicons name="people" size={20} color="#0A0A0A" />
                 <View style={{ flex: 1, marginLeft: 12 }}>
                   <Text style={styles.inviteBtnTitle}>Inviter mes proches</Text>
-                  <Text style={styles.inviteBtnSub}>Générez des codes uniques à partager (1 code = 1 appareil)</Text>
+                  <Text style={styles.inviteBtnSub}>Générez des codes uniques à partager (1 code = jusqu'à 3 appareils)</Text>
                 </View>
                 <Ionicons name="chevron-forward" size={20} color="#0A0A0A" />
               </TouchableOpacity>
@@ -396,7 +399,7 @@ export default function WeddingScreen() {
             </View>
 
             <Text style={styles.modalSub}>
-              Générez des codes uniques pour vos invités. <Text style={{ color: colors.gold, fontWeight: "700" }}>1 code = 1 appareil</Text> (le premier qui l'utilise le verrouille).
+              Générez des codes uniques pour vos invités. <Text style={{ color: colors.gold, fontWeight: "700" }}>1 code = jusqu'à 3 appareils</Text> (les 3 premiers à l'utiliser sont mémorisés).
             </Text>
 
             {/* Plan badge */}
@@ -449,16 +452,26 @@ export default function WeddingScreen() {
               ) : inviteCodes.length === 0 ? (
                 <Text style={styles.emptyTxt}>Aucun code généré pour l'instant.</Text>
               ) : (
-                inviteCodes.map((c) => (
+                inviteCodes.map((c) => {
+                  const used = c.devices_count ?? (c.bound_device_id ? 1 : 0);
+                  const max = c.devices_max ?? 3;
+                  return (
                   <View key={c.code} style={[styles.codeRow, !c.is_active && { opacity: 0.5 }]}>
                     <View style={{ flex: 1 }}>
                       <Text style={styles.codeRowCode}>{c.code}</Text>
                       <Text style={styles.codeRowMeta}>
                         {c.label ? `${c.label} · ` : ""}
-                        {c.bound_device_id
-                          ? `🔒 Activé sur ${c.bound_device_label || "un appareil"}`
-                          : "⌛ Non activé"}
+                        {used === 0
+                          ? "⌛ Non activé"
+                          : `📱 ${used}/${max} appareil${used > 1 ? "s" : ""}${used >= max ? " (complet)" : ""}`}
                       </Text>
+                      {(c.devices && c.devices.length > 0) ? (
+                        <View style={{ marginTop: 4 }}>
+                          {c.devices.map((d, idx) => (
+                            <Text key={d.device_id || idx} style={styles.deviceLine} numberOfLines={1}>• {d.label || "Appareil"}</Text>
+                          ))}
+                        </View>
+                      ) : null}
                     </View>
                     <TouchableOpacity onPress={() => copyCode(c.code)} style={styles.smallBtn}>
                       <Ionicons name="copy-outline" size={16} color={colors.gold} />
@@ -472,7 +485,8 @@ export default function WeddingScreen() {
                       </TouchableOpacity>
                     )}
                   </View>
-                ))
+                  );
+                })
               )}
             </ScrollView>
           </View>
@@ -550,6 +564,7 @@ const styles = StyleSheet.create({
   codeRowCode: { color: colors.gold, fontSize: 17, fontWeight: "800", letterSpacing: 2 },
   codeRowMeta: { color: colors.textSecondary, fontSize: 11, marginTop: 2 },
   smallBtn: { width: 32, height: 32, borderRadius: 6, borderWidth: 1, borderColor: colors.border, alignItems: "center", justifyContent: "center" },
+  deviceLine: { color: colors.textSecondary, fontSize: 10, marginTop: 1, opacity: 0.8 },
   upsellCard: { marginTop: spacing.md, padding: spacing.md, backgroundColor: "rgba(212,175,55,0.08)", borderWidth: 1, borderColor: colors.gold, borderRadius: radii.md, alignItems: "center" },
   upsellTitle: { color: colors.ivory, fontWeight: "700", fontSize: 16, marginTop: 8 },
   upsellSub: { color: colors.textSecondary, fontSize: 13, textAlign: "center", marginTop: 6, marginBottom: spacing.md, lineHeight: 18 },

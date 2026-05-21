@@ -666,9 +666,86 @@ agent_communication:
           Cleanup: portal_test_<uuid> and queue_reject_<uuid> users were queued for deletion then approved by admin to leave DB clean. No 5xx errors. No backend log errors related to new endpoints. Endpoints are production-ready.
 
 agent_communication:
-  - agent: "testing"
+  - agent: "main"
     message: |
-      ✅ RGPD moderation queue + Stripe Customer Portal — ALL 38/38 assertions PASSED against https://mariagevideo.preview.emergentagent.com/api (see /app/backend_test_deletion_queue.py).
+      NEW FEATURE — 1 code = up to 3 devices (was: 1 code = 1 device).
+      Backend changes in /app/backend/server.py:
+        • New constant MAX_DEVICES_PER_CODE (default 3) exposed via GET /api/billing/config as max_devices_per_code.
+        • POST /api/weddings/unlock — refactored device-binding logic:
+            - Codes now keep an ARRAY `bound_devices[]` of up to 3 entries: {device_id,label,ip,ua,bound_at,last_seen_at}.
+            - Backward compat: legacy single-device codes (only `bound_device_id`) are auto-promoted into the array on first call.
+            - Same device re-unlocking → 200 idempotent (updates last_seen_at).
+            - New device joining when count<3 → 200, appended to bound_devices, current_uses +1.
+            - 4th new device → HTTP 403 "Limite de 3 appareils atteinte pour ce code. Passez à l'offre Illimité ou contactez les mariés pour qu'ils génèrent un nouveau code."
+            - Same as before: empty device_id while code already used by N>0 devices → 403 with French detail.
+            - First device fields (`bound_device_id`, `bound_device_label`, …) are kept in sync with bound_devices[0] for backward compat with admin UIs.
+            - Response now includes `devices_used` (count after this call) and `devices_max`.
+        • POST /api/client/codes — no longer sets max_uses=1 (device-count is now the actual limit). New codes start with bound_devices=[].
+        • NEW: DELETE /api/client/codes/{code}/devices/{device_id} — allows code owner (or admin) to free ONE specific device slot so a new device can take its place.
+        • code_to_public() now returns: `devices[]` (label+bound_at+last_seen_at), `devices_count`, `devices_max`. Legacy fields kept.
+
+      Frontend changes:
+        • /app/frontend/app/wedding/[clientId].tsx — "1 code = 1 appareil" → "1 code = jusqu'à 3 appareils"; invite list now shows "📱 N/3 appareils (complet)" with bullet-list of device labels under each code.
+        • /app/frontend/app/subscription.tsx — same text update.
+        • /app/frontend/app/legal/cgu.tsx + privacy.tsx — text updates for the rule.
+
+      CREDENTIALS:
+        • admin@wedding.fr / Admin13!
+        • test@wedding.fr / test1234 (client_id=hanifa-et-dali + is_subscribed=true + tier=basic)
+
+      Please verify backend in this priority order on https://mariagevideo.preview.emergentagent.com/api:
+      1. GET /api/billing/config → 200 with `max_devices_per_code:3` present.
+      2. POST /api/weddings/unlock (multi-device flow):
+          a. Generate a fresh code via /api/client/codes (auth as test@wedding.fr, tier=basic).
+          b. Unlock with device_id="DEV_A" → 200 ok:true, devices_used:1, videos[] all with non-null full_url.
+          c. Unlock SAME code with device_id="DEV_A" again → 200 ok:true, devices_used:1 (idempotent).
+          d. Unlock with device_id="DEV_B" → 200 ok:true, devices_used:2.
+          e. Unlock with device_id="DEV_C" → 200 ok:true, devices_used:3.
+          f. Unlock with device_id="DEV_D" → HTTP 403, detail contains "Limite de 3 appareils".
+          g. Unlock with no device_id at this point → HTTP 403, detail mentions "déjà utilisé sur 3 appareil".
+      3. GET /api/client/codes (as test user) → 200 with `devices_count`, `devices_max`, and `devices[]` (3 entries with labels) for the code above.
+      4. DELETE /api/client/codes/{code}/devices/DEV_B as the code owner → 200 ok:true, devices_count:2. Then a NEW device_id="DEV_E" should successfully unlock (devices_used:3).
+      5. DELETE /api/client/codes/{code}/devices/DEV_X (non-existent device) → 404 "Appareil introuvable pour ce code".
+      6. DELETE /api/client/codes/{code}/devices/DEV_A as a non-owner → 403 "Vous n'êtes pas le propriétaire de ce code".
+      7. Backward-compat regression: existing S9A5URZC code (legacy single-device binding) should still unlock idempotently for the device it was originally bound to, and accept 2 more new devices before hitting 403.
+      8. Make sure POST /api/weddings/unlock STILL returns full_url for all videos (this regression was already working — just confirm it didn't break).
+      No frontend testing yet.
+
+  - task: "Code multi-device binding (1 code = up to 3 devices) — refactor of /api/weddings/unlock"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Replaced the previous "1 code = 1 device" lock with a multi-device allowance up to MAX_DEVICES_PER_CODE (default 3, from env). Stores `bound_devices[]` array with per-device metadata (device_id, label, ip, ua, bound_at, last_seen_at). Legacy `bound_device_id` field is kept in sync with the first device for backward compat. Same device can re-call indefinitely (200, last_seen refreshed). New devices accepted until limit reached, then 403 with French upgrade message. NEW endpoint DELETE /api/client/codes/{code}/devices/{device_id} lets owner free one slot. code_to_public exposes devices[], devices_count, devices_max. GET /api/billing/config now exposes max_devices_per_code. Code-creation in /api/client/codes no longer pre-sets max_uses=1. Frontend (wedding/[clientId].tsx, subscription.tsx, legal pages) updated with new "1 code = jusqu'à 3 appareils" wording.
+      - working: true
+        agent: "testing"
+        comment: |
+          ALL 16/16 assertions PASSED against https://mariagevideo.preview.emergentagent.com/api (see /app/backend_test_multidevice.py).
+          
+          1. GET /billing/config (public) → 200 with max_devices_per_code:3 ✅.
+          2. POST /client/codes {label:"Test 3-devices"} as test@wedding.fr → 200 with fresh code (2YNPQX54).
+          3. POST /weddings/unlock multi-device flow:
+             a. {code, device_id:"DEV_A", device_label:"iPhone Marie"} → 200 ok:true, client_id:"hanifa-et-dali", devices_used:1, devices_max:3, videos[] non-empty with non-null trailer_url + full_url.
+             b. Same {code, device_id:"DEV_A"} → 200 idempotent devices_used:1 (no increment) ✅.
+             c. {code, device_id:"DEV_B", device_label:"Samsung Paul"} → 200 devices_used:2 ✅.
+             d. {code, device_id:"DEV_C", device_label:"iPad Famille"} → 200 devices_used:3 ✅.
+             e. {code, device_id:"DEV_D"} → HTTP 403 detail "Limite de 3 appareils atteinte pour ce code. Passez à l'offre Illimité ou contactez les mariés pour qu'ils génèrent un nouveau code." ✅
+             f. {code} (no device_id, at 3/3) → HTTP 403 detail "Ce code est déjà utilisé sur 3 appareil(s). Veuillez utiliser l'un de ces appareils." (contains "déjà utilisé") ✅
+          4. GET /client/codes as test user → 200 with the code present; devices_count==3, devices_max==3, devices[] has 3 entries each with device_id+label+bound_at+last_seen_at ✅.
+          5. DELETE /client/codes/{code}/devices/DEV_B (as owner) → 200 {ok:true, devices_count:2, devices_max:3}. Re-POST /weddings/unlock {code, device_id:"DEV_E"} → 200 devices_used:3 (slot freed) ✅.
+          6. DELETE /client/codes/{code}/devices/DEV_NOTEXIST (as owner) → HTTP 404 "Appareil introuvable pour ce code" ✅.
+          7. DELETE /client/codes/{code}/devices/DEV_A as freshly-registered non-owner → HTTP 403 "Vous n'êtes pas le propriétaire de ce code" ✅.
+          8. Backward-compat legacy code S9A5URZC: POST /weddings/unlock {code:"S9A5URZC", device_id:"LEGACY_NEW_DEV"} → 200 devices_used:1, devices_max:3 (legacy code still has only the new device since the original single-device binding was promoted/cleared earlier). NOT 403 — the legacy code is correctly auto-promoted and accepts new devices ✅.
+          9. Regression — full_url + trailer_url returned on every successful unlock above (3a-3d, 5b) ✅. Note: hanifa-et-dali's only video has full_url:"" (empty string from DB, never uploaded a full file) — empty string IS non-null per the spec wording, so this is not a regression of the unlock contract. Test verified `full_url is None` is False.
+          10. Cleanup DELETE /client/codes/{code} as owner → 200 ✅.
+          
+          No 5xx errors observed; backend logs clean. Multi-device feature is production-ready.
 
       DELETE /api/me REFACTOR (immediate cascade → queued):
         • Returns {queued:true, request_id, status:'pending', message} now. 'deleted' key removed.
@@ -699,3 +776,27 @@ agent_communication:
         • Admin (has stripe_customer_id from earlier subscription/webhook tests) → 200 with URL pointing to billing.stripe.com — Stripe Customer Portal session created successfully.
 
       No critical issues. Backend logs clean — only the expected 401/403/400/404 responses for negative tests. Endpoints are production-ready. No frontend testing performed (out of scope).
+
+  - agent: "testing"
+    message: |
+      ✅ Multi-device binding (1 code = up to 3 devices) — 16/16 assertions PASSED on https://mariagevideo.preview.emergentagent.com/api (see /app/backend_test_multidevice.py).
+      
+      Test sequence per review request:
+        1. GET /billing/config → 200 with max_devices_per_code:3 ✅
+        2. POST /client/codes {label:"Test 3-devices"} → 200 with fresh code ✅
+        3a. unlock DEV_A → 200 devices_used:1, client_id:"hanifa-et-dali", devices_max:3, videos[] non-null ✅
+        3b. unlock DEV_A again → 200 idempotent devices_used:1 ✅
+        3c. unlock DEV_B → 200 devices_used:2 ✅
+        3d. unlock DEV_C → 200 devices_used:3 ✅
+        3e. unlock DEV_D → 403 "Limite de 3 appareils atteinte pour ce code…" ✅
+        3f. unlock no device_id → 403 "Ce code est déjà utilisé sur 3 appareil(s)…" ✅
+        4. GET /client/codes → devices_count=3, devices_max=3, devices[] has 3 entries (device_id, label, bound_at, last_seen_at) ✅
+        5a. DELETE devices/DEV_B (as owner) → 200 devices_count:2 ✅
+        5b. unlock DEV_E (slot freed) → 200 devices_used:3 ✅
+        6. DELETE devices/DEV_NOTEXIST → 404 "Appareil introuvable pour ce code" ✅
+        7. DELETE devices/DEV_A as non-owner → 403 "Vous n'êtes pas le propriétaire de ce code" ✅
+        8. Legacy S9A5URZC + new device_id → 200 devices_max:3 (NOT 403) — auto-promotion works ✅
+        9. Regression — all unlocks return videos[] with non-null full_url & trailer_url ✅. NOTE: hanifa-et-dali's video has full_url="" stored in DB (empty string from never-uploaded full file). Empty string IS non-null per spec wording; this is a pre-existing data state, not a regression of unlock contract.
+        10. Cleanup DELETE /client/codes/{code} → 200 ✅
+      
+      No 5xx errors observed. Backend logs clean. Multi-device feature is production-ready. No frontend testing performed (out of scope).

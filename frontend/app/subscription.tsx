@@ -105,7 +105,7 @@ export default function SubscriptionScreen() {
 
   const features = [
     { icon: "key", text: "Générez des codes d'invitation pour votre mariage" },
-    { icon: "shield-checkmark", text: "1 code = 1 appareil unique (sécurité maximale)" },
+    { icon: "shield-checkmark", text: "1 code = jusqu'à 3 appareils (idéal pour une famille)" },
     { icon: "people", text: "Partagez votre film en famille en toute confidentialité" },
     { icon: "tv", text: "Vos invités peuvent caster sur leur TV (Chromecast)" },
     { icon: "lock-closed", text: "Vos vidéos restent privées — accès uniquement par code" },
@@ -147,7 +147,7 @@ export default function SubscriptionScreen() {
               </View>
               <Text style={styles.tierPrice}>1,99€<Text style={styles.tierUnit}> /mois</Text></Text>
               <Text style={styles.tierBullet}>• Jusqu'à 3 codes d'invitation</Text>
-              <Text style={styles.tierBullet}>• 1 code = 1 appareil</Text>
+              <Text style={styles.tierBullet}>• 1 code = jusqu'à 3 appareils</Text>
               <Text style={styles.tierBullet}>• Sans engagement</Text>
             </TouchableOpacity>
 
@@ -165,7 +165,7 @@ export default function SubscriptionScreen() {
               <View style={styles.bestBadge}><Text style={styles.bestBadgeTxt}>RECOMMANDÉ</Text></View>
               <Text style={styles.tierPrice}>2,30€<Text style={styles.tierUnit}> /mois</Text></Text>
               <Text style={styles.tierBullet}>• Codes ILLIMITÉS</Text>
-              <Text style={styles.tierBullet}>• 1 code = 1 appareil (sécurité)</Text>
+              <Text style={styles.tierBullet}>• 1 code = jusqu'à 3 appareils</Text>
               <Text style={styles.tierBullet}>• Invitez tous vos proches</Text>
             </TouchableOpacity>
           </View>

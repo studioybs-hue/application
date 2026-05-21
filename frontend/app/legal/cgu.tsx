@@ -33,7 +33,7 @@ export default function CGU() {
       <Bullet>L'Utilisateur déclare être majeur (18 ans révolus) ou disposer du consentement de son représentant légal</Bullet>
       <Bullet>Tout compte multiple, frauduleux ou usurpant l'identité d'un tiers sera supprimé sans préavis</Bullet>
 
-      <H2>Article 5 — Règle « 1 code = 1 appareil »</H2>
+      <H2>Article 5 — Règle « 1 code = jusqu'à 3 appareils »</H2>
       <InfoBox>
         Pour des raisons de <Bold>sécurité et de protection de la vie privée des mariés</Bold>, chaque code d'accès est lié à un seul appareil après première utilisation.
       </InfoBox>
@@ -52,7 +52,7 @@ export default function CGU() {
       <H2>Article 7 — Obligations de l'Utilisateur</H2>
       <P>L'Utilisateur s'engage à :</P>
       <Bullet>Utiliser le service conformément à sa destination personnelle et non commerciale</Bullet>
-      <Bullet>Ne pas tenter de contourner les mesures de sécurité (DRM, limitation 1 code = 1 appareil)</Bullet>
+      <Bullet>Ne pas tenter de contourner les mesures de sécurité (DRM, limitation 1 code = 3 appareils)</Bullet>
       <Bullet>Ne pas télécharger, copier, capturer ou rediffuser les films par tout moyen</Bullet>
       <Bullet>Ne pas partager publiquement son code d'accès ou ses identifiants</Bullet>
       <Bullet>Ne pas utiliser de robots, scripts ou outils automatisés pour accéder au service</Bullet>
