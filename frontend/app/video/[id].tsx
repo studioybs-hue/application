@@ -18,7 +18,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { api } from "@/src/api/client";
 import { colors, spacing, radii } from "@/src/theme";
 import { useAuth } from "@/src/auth/AuthContext";
-import { useCast } from "@/src/cast";
+import { useCast, NativeCastButton } from "@/src/cast";
 import { showAlert } from "@/src/utils/dialog";
 
 type Video = {
@@ -82,6 +82,14 @@ export default function VideoScreen() {
     });
     return () => { try { sub?.remove?.(); } catch {} };
   }, [player]);
+
+  // Pre-queue the media for Chromecast so when user taps the native CastButton
+  // and selects a device, the video auto-loads on TV.
+  useEffect(() => {
+    if (playableUrl && video?.title) {
+      castApi.prepareMedia(playableUrl, video.title, video.poster_url);
+    }
+  }, [playableUrl, video?.title, video?.poster_url, castApi.prepareMedia]);
   // --- END HOOKS BLOCK ---
 
   if (loading) {
@@ -283,13 +291,28 @@ export default function VideoScreen() {
         <View style={styles.actions}>
           <ActionBtn icon="add" label="Ma liste" onPress={onAddToList} testID="video-action-list" />
           <ActionBtn icon="share-social-outline" label="Partager" onPress={onShare} testID="video-action-share" />
-          <ActionBtn
-            icon={castApi.connected ? "tv" : "tv-outline"}
-            label={castApi.connected ? (castApi.deviceName || "Cast") : "Chromecast"}
-            onPress={onCastPress}
-            highlighted={castApi.connected}
-            testID="video-action-cast"
-          />
+
+          {/* Native CastButton: opens device picker automatically on tap.
+              On Android/iOS shows only when Cast devices are nearby.
+              On web (NativeCastButton = null) → fallback to custom button. */}
+          {Platform.OS !== "web" && NativeCastButton ? (
+            <View style={styles.action} testID="video-action-cast-native">
+              <NativeCastButton
+                style={{ width: 32, height: 32, tintColor: castApi.connected ? colors.gold : colors.ivory }}
+              />
+              <Text style={[styles.actionTxt, castApi.connected && { color: colors.gold }]}>
+                {castApi.connected ? (castApi.deviceName || "Cast") : "Chromecast"}
+              </Text>
+            </View>
+          ) : (
+            <ActionBtn
+              icon={castApi.connected ? "tv" : "tv-outline"}
+              label={castApi.connected ? (castApi.deviceName || "Cast") : "Chromecast"}
+              onPress={onCastPress}
+              highlighted={castApi.connected}
+              testID="video-action-cast"
+            />
+          )}
         </View>
       </ScrollView>
     </View>

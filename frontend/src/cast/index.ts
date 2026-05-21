@@ -132,6 +132,16 @@ export function useCast() {
     [remoteMediaClient]
   );
 
+  /** Pre-queue media so that if user opens the native CastButton picker and selects a device,
+   * the media will auto-load when the remote media client becomes available.
+   * Call this whenever you display a video page. */
+  const prepareMedia = useCallback(
+    (url: string, title: string, poster?: string) => {
+      pendingMediaRef.current = { url, title, poster };
+    },
+    []
+  );
+
   const stop = useCallback(async () => {
     if (!GoogleCast) return;
     try {
@@ -142,7 +152,7 @@ export function useCast() {
     }
   }, []);
 
-  return { available, connected, deviceName, cast, stop };
+  return { available, connected, deviceName, cast, stop, prepareMedia };
 }
 
 // Re-export the native CastButton so screens can use it directly if desired.

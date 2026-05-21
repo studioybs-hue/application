@@ -173,5 +173,13 @@ export function useCast() {
     }
   }, [available]);
 
-  return { available, connected, deviceName, cast, stop };
+  // Web stub for prepareMedia (used on native to pre-queue media before tap on native CastButton)
+  const prepareMedia = useCallback((_url: string, _title: string, _poster?: string) => {
+    // no-op on web — user invokes cast() directly via custom button
+  }, []);
+
+  return { available, connected, deviceName, cast, stop, prepareMedia };
 }
+
+// Web has no native CastButton; export null so the video page can fallback to its custom button.
+export const NativeCastButton = null as any;
