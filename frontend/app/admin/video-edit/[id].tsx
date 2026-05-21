@@ -151,19 +151,31 @@ export default function VideoEdit() {
       const isVideo = target !== "poster";
 
       // Convert asset to a Blob/File (needed for both flows)
+      // CRITICAL: On web, prefer the native File object directly (zero-copy).
+      // Calling `fetch(asset.uri).blob()` on a 2GB file would try to load the entire
+      // file into memory and crash Chrome with "Failed to read the selected media".
       let blob: Blob;
       let fileName = asset.name || (isVideo ? "video.mp4" : "image.jpg");
-      if (Platform.OS === "web") {
-        blob = await (await fetch(asset.uri)).blob();
+      if (Platform.OS === "web" && (asset as any).file) {
+        // expo-document-picker exposes the underlying File object on web
+        blob = (asset as any).file as Blob;
+        fileName = (asset as any).file.name || fileName;
       } else {
         blob = await (await fetch(asset.uri)).blob();
       }
       const fileSize = (blob as any).size || asset.size || 0;
 
+      // Sanity check: refuse very large files that would fill the server disk
+      const MAX_FILE_SIZE = 5 * 1024 * 1024 * 1024; // 5 GB hard cap
+      if (fileSize > MAX_FILE_SIZE) {
+        throw new Error(`Fichier trop volumineux (${Math.round(fileSize / (1024 * 1024 * 1024))} GB). Limite : 5 GB. Compressez votre vidéo (H.264, ~5 Mbps suffit pour du Full HD).`);
+      }
+
       let result: { url: string };
 
       // ====== CHUNKED UPLOAD for videos (any size) or large images ======
-      const CHUNK_SIZE = 5 * 1024 * 1024; // 5 MB per chunk (safely below proxy limits)
+      // Use 8 MB chunks for big files (better throughput, fewer round-trips)
+      const CHUNK_SIZE = fileSize > 500 * 1024 * 1024 ? 8 * 1024 * 1024 : 5 * 1024 * 1024;
       const useChunked = isVideo || fileSize > 8 * 1024 * 1024;
 
       if (useChunked && fileSize > 0) {
