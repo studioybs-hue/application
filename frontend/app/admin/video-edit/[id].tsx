@@ -21,6 +21,7 @@ import { api } from "@/src/api/client";
 import { storage } from "@/src/utils/storage";
 import { showAlert } from "@/src/utils/dialog";
 import { colors, spacing, radii } from "@/src/theme";
+import { FtpPicker } from "@/src/ui/FtpPicker";
 
 const BASE = process.env.EXPO_PUBLIC_BACKEND_URL || "";
 const CATEGORIES = ["À l'affiche", "Cérémonies", "Soirées", "Best Of"];
@@ -74,6 +75,7 @@ export default function VideoEdit() {
   const [uploadedStatus, setUploadedStatus] = useState<{ poster?: boolean; trailer?: boolean; full?: boolean }>({});
   const [existingWeddings, setExistingWeddings] = useState<WeddingOption[]>([]);
   const [weddingPicker, setWeddingPicker] = useState<"new" | "existing">(isNew ? "new" : "existing");
+  const [ftpPickerTarget, setFtpPickerTarget] = useState<"poster" | "hero" | "trailer" | "full" | null>(null);
 
   // Load existing weddings to allow attaching new videos to an existing one
   useEffect(() => {
@@ -472,10 +474,12 @@ export default function VideoEdit() {
               onPress={() => upload("poster")}
               testID="upload-poster"
             />
+            <FtpButton onPress={() => setFtpPickerTarget("poster")} />
           </Field>
 
           <Field label="Hero (image grand format)">
             <TextInput style={styles.input} value={form.hero_url} onChangeText={(t) => set("hero_url", t)} placeholder="URL (vide = utilise le poster)" placeholderTextColor={colors.textDisabled} autoCapitalize="none" />
+            <FtpButton onPress={() => setFtpPickerTarget("hero")} />
           </Field>
 
           <Field label="Bande-annonce (publique)">
@@ -490,6 +494,7 @@ export default function VideoEdit() {
               onPress={() => upload("trailer")}
               testID="upload-trailer"
             />
+            <FtpButton onPress={() => setFtpPickerTarget("trailer")} />
           </Field>
 
           <Field label="Vidéo complète (privée)">
@@ -504,6 +509,7 @@ export default function VideoEdit() {
               onPress={() => upload("full")}
               testID="upload-full"
             />
+            <FtpButton onPress={() => setFtpPickerTarget("full")} />
           </Field>
 
           <Field label="Durée (minutes)">
@@ -526,7 +532,32 @@ export default function VideoEdit() {
           </TouchableOpacity>
         </ScrollView>
       </KeyboardAvoidingView>
+
+      {/* FTP picker modal */}
+      <FtpPicker
+        visible={ftpPickerTarget !== null}
+        onClose={() => setFtpPickerTarget(null)}
+        target={ftpPickerTarget || "poster"}
+        videoId={isNew ? undefined : (id as string)}
+        filterExt={ftpPickerTarget === "poster" || ftpPickerTarget === "hero" ? ["jpg", "jpeg", "png", "webp", "avif"] : ["mp4", "mov", "m4v", "webm", "mkv", "avi"]}
+        onPicked={(url) => {
+          if (ftpPickerTarget === "poster") set("poster_url", url);
+          else if (ftpPickerTarget === "hero") set("hero_url", url);
+          else if (ftpPickerTarget === "trailer") set("trailer_url", url);
+          else if (ftpPickerTarget === "full") set("full_url", url);
+        }}
+      />
     </SafeAreaView>
+  );
+}
+
+/** Bouton "📁 Depuis FTP/Serveur" — alternative aux upload navigateur pour les gros fichiers. */
+function FtpButton({ onPress }: { onPress: () => void }) {
+  return (
+    <TouchableOpacity style={styles.ftpBtn} onPress={onPress}>
+      <Ionicons name="server-outline" size={16} color={colors.gold} />
+      <Text style={styles.ftpBtnTxt}>Importer depuis le serveur (FTP/FileZilla)</Text>
+    </TouchableOpacity>
   );
 }
 
@@ -612,6 +643,8 @@ const styles = StyleSheet.create({
   uploadDone: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 8, padding: 14, borderRadius: radii.sm, backgroundColor: "rgba(46,125,50,0.15)", borderWidth: 1.5, borderColor: colors.success },
   uploadDoneTxt: { color: colors.ivory, fontSize: 14, fontWeight: "700", flex: 1 },
   uploadReplaceTxt: { color: colors.gold, fontSize: 13, fontWeight: "700", textDecorationLine: "underline" },
+  ftpBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 8, paddingVertical: 10, paddingHorizontal: 12, borderRadius: radii.sm, borderWidth: 1, borderColor: colors.gold, borderStyle: "dashed", backgroundColor: "rgba(212,175,55,0.04)" },
+  ftpBtnTxt: { color: colors.gold, fontSize: 12, fontWeight: "600" },
   switchRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", backgroundColor: colors.surface, padding: spacing.md, borderRadius: radii.sm, marginBottom: spacing.sm },
   saveBtn: { backgroundColor: colors.gold, paddingVertical: 16, borderRadius: radii.sm, alignItems: "center", marginTop: spacing.lg },
   saveTxt: { color: "#0A0A0A", fontWeight: "700", fontSize: 15, letterSpacing: 0.5 },

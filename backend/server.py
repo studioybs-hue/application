@@ -539,6 +539,112 @@ async def admin_reject_deletion(request_id: str, body: dict, admin: dict = Depen
     return {"rejected": True, "reason": reason}
 
 
+
+# --- FTP / SFTP IMPORT (admin) ---
+# Permet d'uploader d'énormes fichiers via FileZilla/WinSCP vers /uploads/ftp_drop/
+# puis de les importer dans une vidéo sans repasser par le navigateur.
+import shutil as _shutil_mod
+
+FTP_DROP_DIR = UPLOAD_DIR / "ftp_drop"
+FTP_DROP_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _human_size(n: float) -> str:
+    for unit in ["B", "KB", "MB", "GB", "TB"]:
+        if n < 1024:
+            return f"{n:.1f} {unit}"
+        n /= 1024
+    return f"{n:.1f} PB"
+
+
+@api_router.get("/admin/ftp-files")
+async def list_ftp_files(admin: dict = Depends(get_current_admin)):
+    """Liste les fichiers déposés via FTP/SFTP dans uploads/ftp_drop/."""
+    items = []
+    try:
+        for f in FTP_DROP_DIR.iterdir():
+            if f.is_file() and not f.name.startswith("."):
+                stat = f.stat()
+                items.append({
+                    "name": f.name,
+                    "size": stat.st_size,
+                    "size_human": _human_size(float(stat.st_size)),
+                    "modified": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+                    "ext": f.suffix.lower().lstrip("."),
+                })
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erreur lecture dossier FTP: {e}")
+    items.sort(key=lambda x: x["modified"], reverse=True)
+    return {"items": items, "count": len(items), "drop_path": str(FTP_DROP_DIR)}
+
+
+class FtpImportRequest(BaseModel):
+    filename: str
+    target: str  # "poster" | "hero" | "trailer" | "full"
+    video_id: Optional[str] = None
+
+
+@api_router.post("/admin/ftp-files/import")
+async def import_ftp_file(body: FtpImportRequest, admin: dict = Depends(get_current_admin)):
+    """Déplace un fichier de ftp_drop/ vers uploads/ avec un nom UUID,
+    puis met à jour la vidéo si video_id est fourni."""
+    if "/" in body.filename or "\\" in body.filename or ".." in body.filename:
+        raise HTTPException(status_code=400, detail="Nom de fichier invalide")
+    src = FTP_DROP_DIR / body.filename
+    if not src.exists() or not src.is_file():
+        raise HTTPException(status_code=404, detail=f"Fichier '{body.filename}' introuvable dans ftp_drop/")
+    if body.target not in ("poster", "hero", "trailer", "full"):
+        raise HTTPException(status_code=400, detail="target doit être: poster, hero, trailer ou full")
+
+    ext = src.suffix.lower()
+    new_name = f"{uuid.uuid4().hex}{ext}"
+    dst = UPLOAD_DIR / new_name
+    try:
+        _shutil_mod.move(str(src), str(dst))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erreur déplacement: {e}")
+
+    public_url = f"{APP_PUBLIC_URL}/api/uploads/{new_name}" if APP_PUBLIC_URL else f"/api/uploads/{new_name}"
+
+    if body.video_id:
+        field_map = {
+            "poster": "poster_url",
+            "hero": "hero_url",
+            "trailer": "trailer_url",
+            "full": "full_url",
+        }
+        update_field = field_map[body.target]
+        result = await db.videos.update_one(
+            {"id": body.video_id},
+            {"$set": {update_field: public_url, "updated_at": datetime.now(timezone.utc)}},
+        )
+        if result.matched_count == 0:
+            raise HTTPException(status_code=404, detail=f"Vidéo {body.video_id} introuvable")
+
+    return {
+        "imported": True,
+        "url": public_url,
+        "filename": new_name,
+        "size": dst.stat().st_size,
+        "target": body.target,
+        "video_updated": bool(body.video_id),
+    }
+
+
+@api_router.delete("/admin/ftp-files/{filename}")
+async def delete_ftp_file(filename: str, admin: dict = Depends(get_current_admin)):
+    """Supprime un fichier non utilisé du dossier ftp_drop/."""
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="Nom de fichier invalide")
+    f = FTP_DROP_DIR / filename
+    if not f.exists():
+        raise HTTPException(status_code=404, detail="Fichier introuvable")
+    f.unlink()
+    return {"deleted": True, "filename": filename}
+
+# --- END FTP IMPORT ---
+
+
 # --- VIDEOS ---
 @api_router.get("/videos/public")
 async def list_public_videos():
