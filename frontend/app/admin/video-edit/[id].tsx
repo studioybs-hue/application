@@ -139,9 +139,13 @@ export default function VideoEdit() {
         if (r.canceled || !r.assets?.[0]) return;
         asset = { uri: r.assets[0].uri, name: r.assets[0].fileName || "poster.jpg", mimeType: r.assets[0].mimeType, size: r.assets[0].fileSize };
       } else {
-        const r = await DocumentPicker.getDocumentAsync({ type: "video/*", copyToCacheDirectory: true });
+        // base64:false is CRITICAL — without it, expo-document-picker tries to read the
+        // entire file as a base64 data URL through FileReader, which crashes Chrome on
+        // files > ~1.5 GB with "Failed to read the selected media because the operation failed".
+        const r = await DocumentPicker.getDocumentAsync({ type: "video/*", copyToCacheDirectory: false, base64: false } as any);
         if (r.canceled || !r.assets?.[0]) return;
-        asset = { uri: r.assets[0].uri, name: r.assets[0].name, mimeType: r.assets[0].mimeType, size: r.assets[0].size };
+        const a = r.assets[0] as any;
+        asset = { uri: a.uri, name: a.name, mimeType: a.mimeType, size: a.size, file: a.file };
       }
       setUploading(target);
       setProgress((p) => ({ ...p, [target]: 0 }));

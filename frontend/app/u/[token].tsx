@@ -142,7 +142,8 @@ export default function PublicUploadScreen() {
       const res = await DocumentPicker.getDocumentAsync({
         multiple: true,
         copyToCacheDirectory: false,
-      });
+        base64: false,
+      } as any);
       if (res.canceled || !res.assets || res.assets.length === 0) return;
       setUploading(true);
       for (const asset of res.assets) {
