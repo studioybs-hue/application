@@ -126,6 +126,13 @@ export default function AdminDashboard() {
               onPress={() => router.push("/admin/hosting")}
               testID="admin-hosting-btn"
             />
+            <ActionRow
+              icon="mail-unread-outline"
+              label="Demandes de devis"
+              hint="Contacts reçus via la page À propos"
+              onPress={() => router.push("/admin/contact")}
+              testID="admin-contact-btn"
+            />
           </View>
 
           <Text style={styles.h2}>Top vidéos</Text>

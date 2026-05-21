@@ -175,6 +175,39 @@ function Row({ title, weddings, router }: { title: string; weddings: Wedding[]; 
             </View>
           </TouchableOpacity>
         ))}
+
+        {/* ABOUT / CONTACT CTA */}
+        <TouchableOpacity
+          style={styles.aboutBand}
+          onPress={() => router.push("/about")}
+          testID="about-band"
+          activeOpacity={0.85}
+        >
+          <View style={{ flex: 1 }}>
+            <Text style={styles.aboutTitle}>Votre mariage en film cinéma</Text>
+            <Text style={styles.aboutSub}>Découvrez nos services • Demandez votre devis</Text>
+          </View>
+          <Ionicons name="arrow-forward-circle" size={32} color={colors.gold} />
+        </TouchableOpacity>
+
+        {/* FOOTER */}
+        <View style={styles.footer}>
+          <Text style={styles.footerBrand}>CINÉMARIÉS</Text>
+          <View style={styles.footerLinks}>
+            <TouchableOpacity onPress={() => router.push("/about")} testID="footer-about">
+              <Text style={styles.footerLink}>À propos</Text>
+            </TouchableOpacity>
+            <Text style={styles.footerSep}>·</Text>
+            <TouchableOpacity onPress={() => router.push("/host")} testID="footer-host">
+              <Text style={styles.footerLink}>Hébergement</Text>
+            </TouchableOpacity>
+            <Text style={styles.footerSep}>·</Text>
+            <TouchableOpacity onPress={() => router.push("/unlock")} testID="footer-unlock">
+              <Text style={styles.footerLink}>Code d'accès</Text>
+            </TouchableOpacity>
+          </View>
+          <Text style={styles.footerCopyright}>© {new Date().getFullYear()} CINÉMARIÉS — France</Text>
+        </View>
       </ScrollView>
     </View>
   );
@@ -219,4 +252,32 @@ const styles = StyleSheet.create({
   bottomCTA: { position: "absolute", bottom: 0, left: 0, right: 0, padding: spacing.md, paddingBottom: spacing.lg, backgroundColor: "rgba(10,10,10,0.95)", borderTopWidth: 0.5, borderTopColor: colors.border },
   ctaBtn: { backgroundColor: colors.gold, paddingVertical: 14, borderRadius: radii.sm, alignItems: "center" },
   ctaTxt: { color: "#0A0A0A", fontWeight: "700", fontSize: 15, letterSpacing: 0.5 },
+  // ===== ABOUT BAND + FOOTER =====
+  aboutBand: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginHorizontal: spacing.md,
+    marginTop: spacing.xl,
+    padding: spacing.md,
+    backgroundColor: colors.surface,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderColor: "rgba(212,175,55,0.35)",
+  },
+  aboutTitle: { color: colors.ivory, fontWeight: "700", fontSize: 15, letterSpacing: 0.3 },
+  aboutSub: { color: colors.textSecondary, fontSize: 12, marginTop: 4 },
+  footer: {
+    alignItems: "center",
+    marginTop: spacing.xl,
+    paddingTop: spacing.lg,
+    paddingHorizontal: spacing.md,
+    paddingBottom: spacing.lg,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  footerBrand: { color: colors.gold, fontSize: 18, fontWeight: "900", letterSpacing: 3 },
+  footerLinks: { flexDirection: "row", gap: 12, marginTop: spacing.sm, flexWrap: "wrap", justifyContent: "center" },
+  footerLink: { color: colors.ivory, fontSize: 13 },
+  footerSep: { color: colors.textDisabled, fontSize: 13 },
+  footerCopyright: { color: colors.textDisabled, fontSize: 11, marginTop: spacing.sm },
 });

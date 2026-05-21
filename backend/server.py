@@ -1753,6 +1753,79 @@ async def admin_upload_chunk(
 
 
 
+# =========================
+# CONTACT / DEVIS REQUESTS
+# =========================
+class ContactRequest(BaseModel):
+    name: str
+    email: EmailStr
+    phone: Optional[str] = None
+    wedding_date: Optional[str] = None
+    location: Optional[str] = None
+    message: str
+    source: Optional[str] = "contact"
+
+
+@api_router.post("/contact")
+async def submit_contact(body: ContactRequest):
+    """Public endpoint — clients can submit a quote/contact request without an account."""
+    name = (body.name or "").strip()
+    email = (body.email or "").strip()
+    message = (body.message or "").strip()
+    if not name or not email or not message:
+        raise HTTPException(status_code=400, detail="Nom, email et message requis.")
+    if len(message) > 5000:
+        raise HTTPException(status_code=400, detail="Message trop long (max 5000 caractères).")
+    doc = {
+        "id": str(uuid.uuid4()),
+        "name": name,
+        "email": email,
+        "phone": (body.phone or "").strip() or None,
+        "wedding_date": (body.wedding_date or "").strip() or None,
+        "location": (body.location or "").strip() or None,
+        "message": message,
+        "source": body.source or "contact",
+        "status": "new",
+        "created_at": utcnow(),
+    }
+    await db.contact_requests.insert_one(doc)
+    return {"ok": True, "id": doc["id"]}
+
+
+@api_router.get("/admin/contact-requests")
+async def admin_list_contact_requests(_: dict = Depends(require_admin)):
+    docs = await db.contact_requests.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    for d in docs:
+        if d.get("created_at"):
+            d["created_at"] = d["created_at"].isoformat() if hasattr(d["created_at"], "isoformat") else str(d["created_at"])
+    return {"requests": docs}
+
+
+@api_router.patch("/admin/contact-requests/{req_id}")
+async def admin_update_contact_request(req_id: str, body: dict, _: dict = Depends(require_admin)):
+    update = {}
+    if "status" in body:
+        update["status"] = body["status"]
+    if "notes" in body:
+        update["notes"] = body["notes"]
+    if not update:
+        raise HTTPException(status_code=400, detail="Aucune modification.")
+    res = await db.contact_requests.update_one({"id": req_id}, {"$set": update})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Demande introuvable")
+    return {"ok": True}
+
+
+@api_router.delete("/admin/contact-requests/{req_id}")
+async def admin_delete_contact_request(req_id: str, _: dict = Depends(require_admin)):
+    res = await db.contact_requests.delete_one({"id": req_id})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Demande introuvable")
+    return {"ok": True}
+
+
+
+
 @api_router.get("/uploads/{name:path}")
 async def serve_upload(name: str, request: Request):
     """Serve uploaded files with HTTP Range support (required for Chromecast / video streaming)."""
