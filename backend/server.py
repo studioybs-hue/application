@@ -2201,22 +2201,35 @@ async def admin_delete_contact_request(req_id: str, _: dict = Depends(require_ad
 
 
 @api_router.get("/uploads/{name:path}")
+@api_router.head("/uploads/{name:path}")
 async def serve_upload(name: str, request: Request):
-    """Serve uploaded files with HTTP Range support (required for Chromecast / video streaming)."""
-    # Safety: prevent path traversal but allow nested folders (e.g. hosting_xxx/file.mp4)
+    """Serve uploaded files with HTTP Range support (required for Chromecast / video streaming).
+    Also handles HEAD requests (used by some video players to get file metadata before streaming)."""
     if ".." in name:
         raise HTTPException(status_code=400, detail="Nom invalide")
     path = UPLOAD_DIR / name
     if not path.exists() or not path.is_file():
         raise HTTPException(status_code=404, detail="Fichier introuvable")
 
-    # Guess content type by extension
     import mimetypes
     ctype, _ = mimetypes.guess_type(str(path))
     if not ctype:
         ctype = "application/octet-stream"
 
     file_size = path.stat().st_size
+
+    # HEAD request: return headers only with file info (no body)
+    if request.method == "HEAD":
+        return Response(
+            content=b"",
+            status_code=200,
+            headers={
+                "Content-Length": str(file_size),
+                "Content-Type": ctype,
+                "Accept-Ranges": "bytes",
+            },
+        )
+
     range_header = request.headers.get("range") or request.headers.get("Range")
 
     # Common headers for media playback + cross-origin (Chromecast)
