@@ -8,7 +8,7 @@
       "developmentClient": true,
       "distribution": "internal",
       "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://mariagevideo.preview.emergentagent.com"
+        "EXPO_PUBLIC_BACKEND_URL": "https://cinemaries.fr"
       },
       "ios": {
         "simulator": true
@@ -18,7 +18,7 @@
       "distribution": "internal",
       "channel": "preview",
       "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://mariagevideo.preview.emergentagent.com"
+        "EXPO_PUBLIC_BACKEND_URL": "https://cinemaries.fr"
       },
       "android": {
         "buildType": "apk"
@@ -31,7 +31,7 @@
       "channel": "production",
       "autoIncrement": true,
       "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://mariagevideo.preview.emergentagent.com"
+        "EXPO_PUBLIC_BACKEND_URL": "https://cinemaries.fr"
       },
       "android": {
         "buildType": "app-bundle"
