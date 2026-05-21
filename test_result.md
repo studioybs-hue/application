@@ -826,10 +826,38 @@ agent_communication:
           
           NOTE: hanifa-et-dali's video stores full_url as the empty string "" in DB (file never uploaded). The locked/unlocked contract is enforced correctly (None when locked, the stored string when unlocked); empty string IS non-null per spec wording. No regressions, no 5xx, backend logs clean. The new ?code= query param on GET /api/videos/{video_id} is production-ready.
 
-agent_communication:
-  - agent: "testing"
-    message: |
-      ✅ GET /api/videos/{video_id}?code=… anonymous unlock — all 9 review steps PASSED on https://mariagevideo.preview.emergentagent.com/api (see /app/backend_test_video_code.py, 24/24 assertions).
+  - task: "Auto-assign wedding ownership on POST /api/weddings/unlock (NEW)"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          All 5 scenarios PASSED against https://mariagevideo.preview.emergentagent.com/api (see /app/backend_test_auto_assign.py).
+          
+          SETUP: test@wedding.fr (is_subscribed=true, client_id=hanifa-et-dali) generated fresh code PQGFQWVW via POST /api/client/codes.
+          
+          ✅ S3 — Anonymous unlock (no auth, device_id="ANON1"): POST /weddings/unlock → 200 ok:true, devices_used=1, auto_assigned=False (correct, not logged in).
+          
+          ✅ S4 — Subscribed newcouple, BLOCKED because owner exists: registered newcouple_<uuid>@test.com → flipped is_subscribed=true via direct DB write (no admin endpoint for that — used Mongo $set). GET /auth/me confirms is_subscribed=true, client_id=null. POST /weddings/unlock {code, device_id="NEWUSER_DEV1"} → 200 ok:true, auto_assigned=False (BLOCKED because test@wedding.fr already owns hanifa-et-dali). GET /auth/me after: client_id still null. CORRECT behavior per spec.
+          
+          ✅ S5 — Owner re-unlock is NOOP: test@wedding.fr (already owns hanifa-et-dali) POST /weddings/unlock again → 200, auto_assigned=False. /auth/me still client_id=hanifa-et-dali.
+          
+          ✅ S6 — Logged in but NOT subscribed: freeloader_<uuid>@test.com (is_subscribed=false). POST /weddings/unlock → 200, auto_assigned=False. /auth/me client_id stays null.
+          
+          ✅ BONUS — auto_assigned:true happy path verified: registered bonus_<uuid>@test.com, flipped is_subscribed=true via DB, created a fresh code for sarahaline-elarif (no existing owner). POST /weddings/unlock as bonus user → 200, auto_assigned=True; /auth/me afterwards shows client_id=sarahaline-elarif. Confirms the auto-claim branch works end-to-end when conditions are met (subscribed + no current client_id + no existing subscribed owner of that wedding).
+          
+          Cleanup: code revoked, test users deleted, orphan user_unlocks docs cleaned, sarahaline-elarif left with 0 subscribed owners.
+          
+          NOTE — pre-existing backend bug (UNRELATED to auto-assign but discovered while testing): db.user_unlocks has a UNIQUE INDEX on (user_id, video_id). The wedding-level upsert at /app/backend/server.py line 826 creates docs with video_id=null. A user who unlocks TWO different weddings (e.g. hanifa-et-dali then sarahaline-elarif) triggers DuplicateKeyError E11000 and the endpoint returns HTTP 500. Reproduced when newcouple unlocked hanifa-et-dali (S4) then later tried sarahaline-elarif. Recommend either (a) dropping the unique index, (b) using video_id=client_id sentinel instead of null, or (c) adding client_id to the unique index. Has no impact on the auto-assign feature itself but blocks multi-wedding access for the same user.
+          
+          NOTE — there is no admin HTTP endpoint to flip is_subscribed=true on a user. Used direct Mongo $set as the easiest path (the request explicitly allowed this). Consider adding POST /api/admin/users/{id}/subscribe for future testing automation.
+
+
         [1] /weddings/public + /weddings/{cid} → picked hanifa-et-dali video and sarahaline-elarif video.
         [2] POST /client/codes (test@wedding.fr) → code U89L5SFG, tied to hanifa-et-dali.
         [3] GET /videos/{hanifa_id} no auth no code → full_url=None ✅

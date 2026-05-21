@@ -78,7 +78,7 @@ async function saveCode(clientId: string, code: string) {
 export default function WeddingScreen() {
   const router = useRouter();
   const { clientId } = useLocalSearchParams<{ clientId: string }>();
-  const { user } = useAuth();
+  const { user, refresh: refreshAuth } = useAuth();
   const [wedding, setWedding] = useState<Wedding | null>(null);
   const [loading, setLoading] = useState(true);
   const [codeModal, setCodeModal] = useState(false);
@@ -122,7 +122,7 @@ export default function WeddingScreen() {
     try {
       const device_id = await getDeviceId();
       const device_label = getDeviceLabel();
-      const r = await api<{ ok: boolean; client_id: string; client_name: string; video_count: number }>(
+      const r = await api<{ ok: boolean; client_id: string; client_name: string; video_count: number; auto_assigned?: boolean }>(
         "/weddings/unlock",
         { method: "POST", body: { code: clean, device_id, device_label } }
       );
@@ -134,6 +134,16 @@ export default function WeddingScreen() {
       await saveCode(clientId, clean);
       setCodeModal(false);
       setCode("");
+      // Refresh auth context so the new client_id (if auto-assigned) is reflected.
+      if (r.auto_assigned) {
+        try {
+          await refreshAuth();
+        } catch {}
+        showAlert(
+          "🎉 Bienvenue chez vous !",
+          `Votre compte est désormais lié à votre mariage « ${r.client_name} ». Vous pouvez maintenant générer des codes pour vos invités.`
+        );
+      }
       await load();
     } catch (e: any) {
       setError(e.message || "Code invalide");

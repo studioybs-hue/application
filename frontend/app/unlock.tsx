@@ -32,7 +32,7 @@ async function saveCode(clientId: string, code: string) {
 
 export default function UnlockScreen() {
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, refresh: refreshAuth } = useAuth();
   const [code, setCode] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -48,12 +48,16 @@ export default function UnlockScreen() {
     try {
       const device_id = await getDeviceId();
       const device_label = getDeviceLabel();
-      const r = await api<{ ok: boolean; client_id: string; client_name: string; video_count: number }>("/weddings/unlock", {
+      const r = await api<{ ok: boolean; client_id: string; client_name: string; video_count: number; auto_assigned?: boolean }>("/weddings/unlock", {
         method: "POST",
         body: { code: clean, device_id, device_label },
       });
       // Persist the code locally so future visits/refresh keep the wedding unlocked.
       await saveCode(r.client_id, clean);
+      if (r.auto_assigned) {
+        // Refresh user context so client_id is now visible in the app.
+        try { await refreshAuth(); } catch {}
+      }
       // Go straight to the wedding space — no need for a confirmation modal on web (it would block).
       router.replace(`/wedding/${r.client_id}`);
     } catch (e: any) {

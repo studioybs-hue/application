@@ -821,6 +821,7 @@ async def unlock_wedding(body: UnlockRequest, request: Request, current: Optiona
         raise HTTPException(status_code=404, detail="Aucune vidéo pour ce mariage")
 
     # record wedding-level unlock if user is logged in
+    auto_assigned = False
     if current:
         await db.user_unlocks.update_one(
             {"user_id": current["id"], "client_id": client_id},
@@ -844,6 +845,26 @@ async def unlock_wedding(body: UnlockRequest, request: Request, current: Optiona
                 }},
                 upsert=True,
             )
+
+        # AUTO-ASSIGN ownership: if the logged-in user is a paying subscriber AND
+        # does not yet own a wedding, claim this wedding as their own.
+        # Rule: first-come, first-served on subscribers — once a subscriber owns the
+        # wedding, future subscribers entering the same code just unlock for viewing
+        # but do NOT take ownership.
+        if (current.get("is_subscribed") or current.get("is_admin")) and not current.get("client_id"):
+            existing_owner = await db.users.find_one(
+                {"client_id": client_id, "is_subscribed": True},
+                {"_id": 0, "id": 1, "email": 1},
+            )
+            if not existing_owner or existing_owner.get("id") == current["id"]:
+                await db.users.update_one(
+                    {"id": current["id"]},
+                    {"$set": {"client_id": client_id}},
+                )
+                auto_assigned = True
+                logging.info(
+                    f"[auto-assign] user {current.get('email')} → wedding {client_id} (via code {code})"
+                )
 
     # Update bound_devices array
     now = utcnow()
@@ -902,6 +923,7 @@ async def unlock_wedding(body: UnlockRequest, request: Request, current: Optiona
         "video_count": len(wedding_videos),
         "devices_used": len(bound_devices) if device_id else None,
         "devices_max": MAX_DEVICES_PER_CODE,
+        "auto_assigned": auto_assigned,
         "videos": full_videos,
     }
 
