@@ -127,25 +127,66 @@ export default function VideoEdit() {
     setWeddingPicker("new");
   };
 
+  // Bulletproof file picker for web: bypass expo-document-picker entirely and use a
+  // native HTML <input type="file"> element. This avoids any FileReader-based blocking
+  // when the user picks a very large file (e.g. 2 GB). Returns the underlying File or null.
+  const pickFileNativeWeb = (accept: string): Promise<File | null> => {
+    return new Promise((resolve) => {
+      try {
+        const input = document.createElement("input");
+        input.type = "file";
+        input.accept = accept;
+        input.style.display = "none";
+        const cleanup = () => {
+          input.onchange = null;
+          input.oncancel = null;
+          if (input.parentNode) input.parentNode.removeChild(input);
+        };
+        input.onchange = () => {
+          const f = input.files && input.files[0] ? input.files[0] : null;
+          cleanup();
+          resolve(f);
+        };
+        (input as any).oncancel = () => { cleanup(); resolve(null); };
+        document.body.appendChild(input);
+        input.click();
+      } catch (e) {
+        resolve(null);
+      }
+    });
+  };
+
   const upload = async (target: "poster" | "trailer" | "full") => {
     const startedAt = Date.now();
     try {
-      let asset: { uri: string; name?: string; mimeType?: string; size?: number } | null = null;
+      let asset: { uri: string; name?: string; mimeType?: string; size?: number; file?: File } | null = null;
       if (target === "poster") {
-        const r = await ImagePicker.launchImageLibraryAsync({
-          mediaTypes: ImagePicker.MediaTypeOptions.Images,
-          quality: 0.9,
-        });
-        if (r.canceled || !r.assets?.[0]) return;
-        asset = { uri: r.assets[0].uri, name: r.assets[0].fileName || "poster.jpg", mimeType: r.assets[0].mimeType, size: r.assets[0].fileSize };
+        if (Platform.OS === "web") {
+          // Use native input for images too (consistent + reliable)
+          const f = await pickFileNativeWeb("image/*");
+          if (!f) return;
+          asset = { uri: URL.createObjectURL(f), name: f.name, mimeType: f.type, size: f.size, file: f };
+        } else {
+          const r = await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ImagePicker.MediaTypeOptions.Images,
+            quality: 0.9,
+          });
+          if (r.canceled || !r.assets?.[0]) return;
+          asset = { uri: r.assets[0].uri, name: r.assets[0].fileName || "poster.jpg", mimeType: r.assets[0].mimeType, size: r.assets[0].fileSize };
+        }
       } else {
-        // base64:false is CRITICAL — without it, expo-document-picker tries to read the
-        // entire file as a base64 data URL through FileReader, which crashes Chrome on
-        // files > ~1.5 GB with "Failed to read the selected media because the operation failed".
-        const r = await DocumentPicker.getDocumentAsync({ type: "video/*", copyToCacheDirectory: false, base64: false } as any);
-        if (r.canceled || !r.assets?.[0]) return;
-        const a = r.assets[0] as any;
-        asset = { uri: a.uri, name: a.name, mimeType: a.mimeType, size: a.size, file: a.file };
+        if (Platform.OS === "web") {
+          // On web, bypass expo-document-picker (it can crash on 2GB+ files because of
+          // internal FileReader usage). Use a native <input type="file"> instead.
+          const f = await pickFileNativeWeb("video/*");
+          if (!f) return;
+          asset = { uri: URL.createObjectURL(f), name: f.name, mimeType: f.type, size: f.size, file: f };
+        } else {
+          const r = await DocumentPicker.getDocumentAsync({ type: "video/*", copyToCacheDirectory: false, base64: false } as any);
+          if (r.canceled || !r.assets?.[0]) return;
+          const a = r.assets[0] as any;
+          asset = { uri: a.uri, name: a.name, mimeType: a.mimeType, size: a.size, file: a.file };
+        }
       }
       setUploading(target);
       setProgress((p) => ({ ...p, [target]: 0 }));
