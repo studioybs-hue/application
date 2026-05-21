@@ -1297,6 +1297,73 @@ async def admin_list_videos(_: dict = Depends(require_admin)):
     return {"videos": [video_to_public(v, include_full=True) for v in videos]}
 
 
+@api_router.get("/admin/weddings")
+async def admin_list_weddings(_: dict = Depends(require_admin)):
+    """List existing weddings (unique client_id + client_name pairs) so the admin
+    can attach new videos to an existing wedding rather than creating a duplicate."""
+    videos = await db.videos.find({}, {"_id": 0}).to_list(2000)
+    groups: dict = {}
+    for v in videos:
+        cid = v.get("client_id") or slugify(v.get("title", ""))
+        if not cid:
+            continue
+        if cid not in groups:
+            groups[cid] = {
+                "client_id": cid,
+                "client_name": v.get("client_name") or v.get("title", ""),
+                "video_count": 0,
+                "poster_url": v.get("poster_url"),
+                "created_at": v.get("created_at"),
+            }
+        groups[cid]["video_count"] += 1
+        # keep the earliest created_at
+        if v.get("created_at") and (not groups[cid]["created_at"] or v["created_at"] < groups[cid]["created_at"]):
+            groups[cid]["created_at"] = v["created_at"]
+    weddings = list(groups.values())
+    # Latest first
+    weddings.sort(key=lambda w: w.get("created_at") or utcnow(), reverse=True)
+    for w in weddings:
+        if w.get("created_at"):
+            w["created_at"] = w["created_at"].isoformat() if hasattr(w["created_at"], "isoformat") else str(w["created_at"])
+    return {"weddings": weddings}
+
+
+@api_router.post("/admin/weddings/merge")
+async def admin_merge_weddings(body: dict, _: dict = Depends(require_admin)):
+    """Merge multiple weddings (by client_id) into a single target wedding.
+    Body: { source_client_ids: [str], target_client_id: str, target_client_name?: str }
+    All videos from sources are reassigned to target_client_id, and codes too.
+    """
+    source_ids = body.get("source_client_ids") or []
+    target_id = (body.get("target_client_id") or "").strip()
+    target_name = (body.get("target_client_name") or "").strip()
+    if not target_id:
+        raise HTTPException(status_code=400, detail="target_client_id requis")
+    if not source_ids:
+        raise HTTPException(status_code=400, detail="source_client_ids requis")
+    moved = 0
+    for sid in source_ids:
+        if sid == target_id:
+            continue
+        update = {"client_id": target_id}
+        if target_name:
+            update["client_name"] = target_name
+        # Move videos
+        res = await db.videos.update_many({"client_id": sid}, {"$set": update})
+        moved += res.modified_count or 0
+        # Also handle videos that had no client_id but slugified to sid
+        all_v = await db.videos.find({}, {"_id": 0, "id": 1, "title": 1, "client_id": 1, "client_name": 1}).to_list(2000)
+        for v in all_v:
+            if not v.get("client_id") and slugify(v.get("title", "")) == sid:
+                await db.videos.update_one({"id": v["id"]}, {"$set": update})
+                moved += 1
+        # Move unlock_codes
+        await db.unlock_codes.update_many({"client_id": sid}, {"$set": {"client_id": target_id}})
+        # Move user_unlocks
+        await db.user_unlocks.update_many({"client_id": sid}, {"$set": {"client_id": target_id}})
+    return {"ok": True, "moved": moved, "target_client_id": target_id}
+
+
 @api_router.post("/admin/videos")
 async def admin_create_video(body: VideoCreate, _: dict = Depends(require_admin)):
     vid = str(uuid.uuid4())

@@ -387,3 +387,48 @@ agent_communication:
 
       Backend logs (uvicorn) confirm real Stripe API 200 responses on /v1/customers and /v1/checkout/sessions.
       No critical issues remain. Frontend testing not performed (out of scope).
+
+  - task: "Admin Weddings listing + Merge endpoints (NEW)"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "Added two new admin endpoints to solve the duplicate-wedding bug (when admin uploads multiple videos for the same wedding but with slight title typos, each video gets its own auto-generated client_id, breaking 1-code-unlocks-all-videos behaviour). NEW: (1) GET /api/admin/weddings — returns list of unique weddings with client_id, client_name, video_count, poster_url; admin-only (require_admin); used by /admin/video-edit form to attach new videos to an EXISTING wedding instead of creating a new one. (2) POST /api/admin/weddings/merge — body: {source_client_ids:[str], target_client_id:str, target_client_name?:str}; reassigns all videos with client_id in source_client_ids to target_client_id (also handles videos with no client_id but slugify(title) matching a source), and migrates unlock_codes and user_unlocks accordingly. Already used manually via Python script to merge user's duplicate sarahline-elarif into sarahaline-elarif (2 videos now correctly grouped). Please test: admin auth required (403 for non-admin), GET returns weddings list with correct counts, POST merge moves videos+codes correctly, invalid body returns 400."
+      - working: true
+        agent: "testing"
+        comment: "All 27 assertions PASSED against https://mariagevideo.preview.emergentagent.com/api (see /app/backend_test_admin_weddings.py). GET /api/admin/weddings: (a) unauth → 401 'Non authentifié'; (b) non-admin (test@wedding.fr) → 403 'Accès réservé aux administrateurs'; (c) admin → 200 with {weddings:[...]} containing 2 entries; every wedding has client_id (str), client_name (str), video_count (int > 0), poster_url, created_at (ISO string). Sorting verified: newest created_at first. The sarahaline-elarif wedding correctly shows video_count=2 (Sarahaline & Elarif). POST /api/admin/weddings/merge: (a) non-admin → 403; (b) missing target_client_id → 400 'target_client_id requis'; (c) missing source_client_ids → 400 'source_client_ids requis'; (d) empty source list → 400 'source_client_ids requis'. Happy path: created a test video with title 'TestMergeWedding DFAC7D' (auto client_id testmergewedding-dfac7d), confirmed it appeared in /admin/weddings, then POSTed merge with source=['testmergewedding-dfac7d'], target='sarahaline-elarif', target_client_name='Sarahaline & Elarif' → 200 {ok:true, moved:1, target_client_id:'sarahaline-elarif'}. Post-merge GET /admin/weddings confirmed: test wedding GONE, sarahaline-elarif video_count went 2→3. GET /api/weddings/sarahaline-elarif?code=<existing> returned all 3 videos including the merged TestMergeWedding video with unlocked=true. REGRESSION POST /api/weddings/unlock with a fresh code for sarahaline-elarif + device_id='TEST_DEVICE_001' → 200 video_count=3, videos[] length=3, all with non-null full_url. Cleanup deleted the test video and post-cleanup state confirmed back to baseline (sarahaline-elarif=2, hanifa-et-dali=1). No 5xx errors observed; backend logs clean. Endpoints are production-ready."
+
+test_plan:
+  current_focus: []
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+  - agent: "main"
+    message: "Added GET /api/admin/weddings and POST /api/admin/weddings/merge to fix the duplicate-wedding bug discovered when user uploaded 2 videos for the same couple (Sarahaline/Sarhaline typo created 2 weddings instead of 1). Existing code/unlock logic already correctly returns ALL videos of a client_id when unlock is called, so the fix is on the admin grouping side. Please test the two new endpoints. Admin: admin@wedding.fr / Admin13!. The codes endpoint still works as expected per previous tests."
+  - agent: "testing"
+    message: |
+      ✅ Both new admin endpoints fully verified — 27/27 assertions passed against https://mariagevideo.preview.emergentagent.com/api.
+
+      GET /api/admin/weddings
+        • Unauth → 401, non-admin → 403, admin → 200 with {weddings:[…]} (2 items).
+        • Each entry has client_id, client_name, video_count>0, poster_url, ISO created_at.
+        • Correctly sorted by created_at desc (newest first).
+        • sarahaline-elarif shows video_count=2 as expected.
+
+      POST /api/admin/weddings/merge
+        • Non-admin → 403. Missing target_client_id → 400 'target_client_id requis'. Missing/empty source_client_ids → 400 'source_client_ids requis'.
+        • Happy path: created 'TestMergeWedding DFAC7D' (auto client_id testmergewedding-dfac7d) → appeared in /admin/weddings → merged into sarahaline-elarif → response {ok:true, moved:1, target_client_id:'sarahaline-elarif'}; subsequent GET /admin/weddings showed source wedding gone and sarahaline-elarif count went 2→3.
+        • GET /api/weddings/sarahaline-elarif?code=<active_code> returned unlocked=true with all 3 videos (including the merged test video).
+
+      REGRESSION POST /api/weddings/unlock
+        • With a fresh code for sarahaline-elarif + device_id='TEST_DEVICE_001' → 200, video_count=3, videos[] length=3, every full_url non-null. The 1-code-unlocks-all-videos rule holds after merge.
+
+      Cleanup: test video deleted, state back to baseline (sarahaline-elarif=2, hanifa-et-dali=1). No 5xx errors. Both endpoints are production-ready. No further backend testing required for this story.
+

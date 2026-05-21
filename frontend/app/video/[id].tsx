@@ -12,7 +12,7 @@ import { Image } from "expo-image";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { WebView } from "react-native-webview";
+import { useVideoPlayer, VideoView } from "expo-video";
 import { LinearGradient } from "expo-linear-gradient";
 import { api } from "@/src/api/client";
 import { colors, spacing, radii } from "@/src/theme";
@@ -67,6 +67,12 @@ export default function VideoScreen() {
   const isUnlocked = !!video.full_url;
   const playableUrl = (isUnlocked ? video.full_url : null) || video.trailer_url || video.full_url || "";
 
+  // Native video player (expo-video) for Android/iOS - supports H.264, HEVC, .m4v, .mp4, .mov etc
+  const player = useVideoPlayer(playing && Platform.OS !== "web" ? playableUrl : null, (p) => {
+    p.loop = false;
+    if (playing) p.play();
+  });
+
   const onCastPress = async () => {
     if (!castApi.available) {
       // Module not available
@@ -98,21 +104,6 @@ export default function VideoScreen() {
   };
 
   const castIconColor = castApi.connected ? colors.gold : castApi.available || Platform.OS !== "web" ? colors.ivory : colors.textDisabled;
-
-  const playerHtml = `
-    <html>
-      <head>
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <style>
-          html,body { margin:0; padding:0; background:#000; height:100%; }
-          video { width:100%; height:100%; object-fit:contain; background:#000; }
-        </style>
-      </head>
-      <body>
-        <video src="${playableUrl}" autoplay controls playsinline></video>
-      </body>
-    </html>
-  `;
 
   return (
     <View style={styles.root}>
@@ -146,12 +137,13 @@ export default function VideoScreen() {
               />
             </View>
           ) : (
-            <WebView
-              source={{ html: playerHtml }}
+            <VideoView
+              player={player}
               style={styles.player}
-              allowsFullscreenVideo
-              mediaPlaybackRequiresUserAction={false}
-              allowsInlineMediaPlayback
+              contentFit="contain"
+              allowsFullscreen
+              allowsPictureInPicture
+              nativeControls
             />
           )
         ) : (

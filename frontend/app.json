@@ -33,7 +33,10 @@
         "ACCESS_NETWORK_STATE",
         "ACCESS_WIFI_STATE",
         "CHANGE_WIFI_MULTICAST_STATE",
-        "INTERNET"
+        "INTERNET",
+        "android.permission.NEARBY_WIFI_DEVICES",
+        "android.permission.BLUETOOTH",
+        "android.permission.BLUETOOTH_CONNECT"
       ]
     },
     "web": {

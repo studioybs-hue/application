@@ -37,6 +37,7 @@ type Form = {
   is_featured: boolean;
   is_top_france: boolean;
   client_name: string;
+  client_id: string;
 };
 
 const EMPTY: Form = {
@@ -51,6 +52,14 @@ const EMPTY: Form = {
   is_featured: false,
   is_top_france: false,
   client_name: "",
+  client_id: "",
+};
+
+type WeddingOption = {
+  client_id: string;
+  client_name: string;
+  video_count: number;
+  poster_url?: string;
 };
 
 export default function VideoEdit() {
@@ -63,6 +72,18 @@ export default function VideoEdit() {
   const [uploading, setUploading] = useState<"poster" | "trailer" | "full" | null>(null);
   const [progress, setProgress] = useState<{ poster?: number; trailer?: number; full?: number }>({});
   const [uploadedStatus, setUploadedStatus] = useState<{ poster?: boolean; trailer?: boolean; full?: boolean }>({});
+  const [existingWeddings, setExistingWeddings] = useState<WeddingOption[]>([]);
+  const [weddingPicker, setWeddingPicker] = useState<"new" | "existing">(isNew ? "new" : "existing");
+
+  // Load existing weddings to allow attaching new videos to an existing one
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await api<{ weddings: WeddingOption[] }>("/admin/weddings");
+        setExistingWeddings(r.weddings || []);
+      } catch {}
+    })();
+  }, []);
 
   useEffect(() => {
     if (isNew) return;
@@ -82,6 +103,8 @@ export default function VideoEdit() {
             duration_minutes: String(v.duration_minutes || 0),
             is_featured: !!v.is_featured,
             is_top_france: !!v.is_top_france,
+            client_name: v.client_name || "",
+            client_id: v.client_id || "",
           });
         }
       } catch (e: any) {
@@ -93,6 +116,16 @@ export default function VideoEdit() {
   }, [id, isNew]);
 
   const set = (k: keyof Form, v: any) => setForm((f) => ({ ...f, [k]: v }));
+
+  const attachToExisting = (w: WeddingOption) => {
+    setForm((f) => ({ ...f, client_id: w.client_id, client_name: w.client_name }));
+    setWeddingPicker("existing");
+  };
+
+  const createNewWedding = () => {
+    setForm((f) => ({ ...f, client_id: "" }));
+    setWeddingPicker("new");
+  };
 
   const upload = async (target: "poster" | "trailer" | "full") => {
     const startedAt = Date.now();
@@ -283,13 +316,71 @@ export default function VideoEdit() {
         </View>
 
         <ScrollView contentContainerStyle={{ padding: spacing.md, paddingBottom: spacing.xl }}>
-          <Field label="Titre de la vidéo *">
-            <TextInput style={styles.input} value={form.title} onChangeText={(t) => set("title", t)} placeholder="Ex: Cérémonie civile" placeholderTextColor={colors.textDisabled} testID="video-title-input" />
+          {/* WEDDING SELECTOR — attach to existing OR create new */}
+          <Field label="Mariage *">
+            <View style={styles.weddingTabs}>
+              <TouchableOpacity
+                style={[styles.weddingTab, weddingPicker === "existing" && styles.weddingTabActive]}
+                onPress={() => setWeddingPicker("existing")}
+              >
+                <Ionicons name="people" size={14} color={weddingPicker === "existing" ? "#0A0A0A" : colors.ivory} />
+                <Text style={[styles.weddingTabTxt, weddingPicker === "existing" && { color: "#0A0A0A", fontWeight: "700" }]}>Mariage existant</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.weddingTab, weddingPicker === "new" && styles.weddingTabActive]}
+                onPress={createNewWedding}
+              >
+                <Ionicons name="add-circle" size={14} color={weddingPicker === "new" ? "#0A0A0A" : colors.ivory} />
+                <Text style={[styles.weddingTabTxt, weddingPicker === "new" && { color: "#0A0A0A", fontWeight: "700" }]}>Nouveau mariage</Text>
+              </TouchableOpacity>
+            </View>
+
+            {weddingPicker === "existing" ? (
+              existingWeddings.length === 0 ? (
+                <Text style={styles.hint}>Aucun mariage existant. Crée d'abord une vidéo en mode « Nouveau mariage ».</Text>
+              ) : (
+                <View style={{ marginTop: 8 }}>
+                  {existingWeddings.map((w) => {
+                    const selected = form.client_id === w.client_id;
+                    return (
+                      <TouchableOpacity
+                        key={w.client_id}
+                        style={[styles.weddingRow, selected && styles.weddingRowSelected]}
+                        onPress={() => attachToExisting(w)}
+                        testID={`pick-wedding-${w.client_id}`}
+                      >
+                        <View style={{ flex: 1 }}>
+                          <Text style={[styles.weddingRowName, selected && { color: colors.gold }]}>
+                            {selected ? "✓ " : ""}{w.client_name}
+                          </Text>
+                          <Text style={styles.weddingRowMeta}>
+                            id: {w.client_id} · {w.video_count} vidéo{w.video_count > 1 ? "s" : ""}
+                          </Text>
+                        </View>
+                        {selected && <Ionicons name="checkmark-circle" size={20} color={colors.gold} />}
+                      </TouchableOpacity>
+                    );
+                  })}
+                  <Text style={styles.hint}>📌 La nouvelle vidéo sera rattachée à ce mariage. Le code unique du mariage débloquera aussi cette vidéo.</Text>
+                </View>
+              )
+            ) : (
+              <View style={{ marginTop: 8 }}>
+                <TextInput
+                  style={styles.input}
+                  value={form.client_name}
+                  onChangeText={(t) => set("client_name", t)}
+                  placeholder="Ex: Camille & Antoine"
+                  placeholderTextColor={colors.textDisabled}
+                  testID="video-client-name-input"
+                />
+                <Text style={styles.hint}>📌 Un nouveau mariage sera créé. Toutes les futures vidéos pourront être attachées à ce mariage depuis l'onglet « Mariage existant ».</Text>
+              </View>
+            )}
           </Field>
 
-          <Field label="Nom du couple / mariage *">
-            <TextInput style={styles.input} value={form.client_name} onChangeText={(t) => set("client_name", t)} placeholder="Ex: Camille & Antoine" placeholderTextColor={colors.textDisabled} testID="video-client-name-input" />
-            <Text style={styles.hint}>📌 Toutes les vidéos avec le même nom forment un seul mariage. Le code unique débloque tout le mariage.</Text>
+          <Field label="Titre de la vidéo *">
+            <TextInput style={styles.input} value={form.title} onChangeText={(t) => set("title", t)} placeholder="Ex: Cérémonie civile" placeholderTextColor={colors.textDisabled} testID="video-title-input" />
           </Field>
 
           <Field label="Description">
@@ -439,6 +530,14 @@ const styles = StyleSheet.create({
   title: { flex: 1, color: colors.ivory, fontSize: 18, fontWeight: "700", textAlign: "center" },
   label: { color: colors.textSecondary, fontSize: 12, marginBottom: 6, letterSpacing: 0.5, textTransform: "uppercase" },
   hint: { color: colors.gold, fontSize: 11, marginTop: 6, fontStyle: "italic", lineHeight: 16 },
+  weddingTabs: { flexDirection: "row", gap: 8, marginBottom: 4 },
+  weddingTab: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, paddingVertical: 10, borderRadius: radii.sm, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
+  weddingTabActive: { backgroundColor: colors.gold, borderColor: colors.gold },
+  weddingTabTxt: { color: colors.ivory, fontSize: 13, fontWeight: "600" },
+  weddingRow: { flexDirection: "row", alignItems: "center", backgroundColor: colors.surface, padding: 12, borderRadius: radii.sm, borderWidth: 1, borderColor: colors.border, marginBottom: 6 },
+  weddingRowSelected: { borderColor: colors.gold, backgroundColor: "rgba(212,175,55,0.08)" },
+  weddingRowName: { color: colors.ivory, fontSize: 14, fontWeight: "700" },
+  weddingRowMeta: { color: colors.textSecondary, fontSize: 11, marginTop: 2 },
   input: { backgroundColor: colors.surface, color: colors.ivory, borderRadius: radii.sm, paddingHorizontal: spacing.md, paddingVertical: 14, fontSize: 14, borderWidth: 1, borderColor: "rgba(255,255,255,0.06)" },
   chips: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   chip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
