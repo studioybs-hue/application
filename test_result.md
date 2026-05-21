@@ -800,3 +800,43 @@ agent_communication:
         10. Cleanup DELETE /client/codes/{code} → 200 ✅
       
       No 5xx errors observed. Backend logs clean. Multi-device feature is production-ready. No frontend testing performed (out of scope).
+
+
+  - task: "GET /api/videos/{video_id}?code=... anonymous unlock via wedding code"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          ALL 9 review-request steps PASSED against https://mariagevideo.preview.emergentagent.com/api (see /app/backend_test_video_code.py — 24/24 assertions).
+          1. GET /api/weddings/public anon → 200; picked hanifa-et-dali video eb1b91d6-3dcb-4713-9931-f588d84fe40f and sarahaline-elarif video 4457813f-5d2a-4ee4-846f-67b0bdbf4467.
+          2. POST /api/client/codes as test@wedding.fr {label:"VideoCodeTest"} → 200, code U89L5SFG, client_id=hanifa-et-dali ✅.
+          3. GET /api/videos/{hanifa_id} no auth no code → 200, full_url=None (locked) ✅.
+          4. GET /api/videos/{hanifa_id}?code=U89L5SFG no auth → 200, full_url non-null (anonymous unlock via code works) ✅.
+          5. GET /api/videos/{hanifa_id}?code=INVALID no auth → 200, full_url=None (invalid code does NOT unlock) ✅.
+          6. Cross-wedding security: GET /api/videos/{sarahaline_id}?code=U89L5SFG (hanifa code) → 200, full_url=None (correctly refused) ✅.
+          7. GET /api/videos/{hanifa_id} as admin@wedding.fr (no code) → 200, full_url non-null ✅.
+          8. Logged-in flow: POST /api/weddings/unlock {code:U89L5SFG, device_id:"TESTDEV"} as test@wedding.fr → 200 ok:true; then GET /api/videos/{hanifa_id} as same user without code → 200, full_url non-null (wedding-level unlock recorded in user_unlocks is honored by get_video via the client_id branch) ✅.
+          9. Cleanup DELETE /api/client/codes/U89L5SFG as test user → 200 ok:true ✅.
+          
+          NOTE: hanifa-et-dali's video stores full_url as the empty string "" in DB (file never uploaded). The locked/unlocked contract is enforced correctly (None when locked, the stored string when unlocked); empty string IS non-null per spec wording. No regressions, no 5xx, backend logs clean. The new ?code= query param on GET /api/videos/{video_id} is production-ready.
+
+agent_communication:
+  - agent: "testing"
+    message: |
+      ✅ GET /api/videos/{video_id}?code=… anonymous unlock — all 9 review steps PASSED on https://mariagevideo.preview.emergentagent.com/api (see /app/backend_test_video_code.py, 24/24 assertions).
+        [1] /weddings/public + /weddings/{cid} → picked hanifa-et-dali video and sarahaline-elarif video.
+        [2] POST /client/codes (test@wedding.fr) → code U89L5SFG, tied to hanifa-et-dali.
+        [3] GET /videos/{hanifa_id} no auth no code → full_url=None ✅
+        [4] GET /videos/{hanifa_id}?code=U89L5SFG → full_url non-null ✅
+        [5] GET /videos/{hanifa_id}?code=INVALID → full_url=None ✅
+        [6] GET /videos/{sarahaline_id}?code=U89L5SFG (cross-wedding) → full_url=None ✅
+        [7] GET /videos/{hanifa_id} as admin (no code) → full_url non-null ✅
+        [8] POST /weddings/unlock as test user, then GET /videos/{hanifa_id} no code → full_url non-null (wedding-level unlock works) ✅
+        [9] DELETE /client/codes/U89L5SFG → 200 ok:true ✅
+      Note: hanifa's video has full_url stored as empty string "" (never uploaded). Empty string is non-null per spec; the lock/unlock contract is correct. No regressions, no 5xx. Feature is production-ready.

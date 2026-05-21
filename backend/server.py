@@ -1408,15 +1408,38 @@ async def hosting_upload_delete_file(token: str, stored_as: str):
 
 
 @api_router.get("/videos/{video_id}")
-async def get_video(video_id: str, current: Optional[dict] = Depends(get_optional_user)):
+async def get_video(video_id: str, code: Optional[str] = None, current: Optional[dict] = Depends(get_optional_user)):
     v = await db.videos.find_one({"id": video_id}, {"_id": 0})
     if not v:
         raise HTTPException(status_code=404, detail="Vidéo introuvable")
     # check if user has unlocked
     unlocked = False
+    # 1) Logged-in user with a recorded unlock OR an active subscription OR admin
     if current:
         u_doc = await db.user_unlocks.find_one({"user_id": current["id"], "video_id": video_id})
         unlocked = bool(u_doc) or bool(current.get("is_subscribed")) or bool(current.get("is_admin"))
+        # Also accept wedding-level unlock (one unlock for all videos of the same wedding)
+        if not unlocked:
+            video_client_id = v.get("client_id") or slugify(v.get("title", ""))
+            w_doc = await db.user_unlocks.find_one({"user_id": current["id"], "client_id": video_client_id})
+            unlocked = bool(w_doc)
+    # 2) Anonymous visitor with a valid wedding code → unlock full URL for this video
+    if not unlocked and code:
+        code_clean = code.strip().upper()
+        rec = await db.unlock_codes.find_one({"code": code_clean, "is_active": True}, {"_id": 0})
+        if rec:
+            expired = bool(rec.get("expires_at") and rec["expires_at"] < utcnow())
+            if not expired:
+                # Resolve the wedding that this code unlocks
+                code_client_id = rec.get("client_id")
+                if not code_client_id and rec.get("video_id"):
+                    vidoc = await db.videos.find_one({"id": rec["video_id"]}, {"_id": 0})
+                    if vidoc:
+                        code_client_id = vidoc.get("client_id") or slugify(vidoc.get("title", ""))
+                # Check the code's wedding matches this video's wedding
+                video_client_id = v.get("client_id") or slugify(v.get("title", ""))
+                if code_client_id and code_client_id == video_client_id:
+                    unlocked = True
     return video_to_public(v, include_full=unlocked)
 
 

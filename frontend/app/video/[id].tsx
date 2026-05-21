@@ -16,6 +16,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useVideoPlayer, VideoView } from "expo-video";
 import { LinearGradient } from "expo-linear-gradient";
 import { api } from "@/src/api/client";
+import { storage } from "@/src/utils/storage";
 import { colors, spacing, radii } from "@/src/theme";
 import { useAuth } from "@/src/auth/AuthContext";
 import { useCast, NativeCastButton } from "@/src/cast";
@@ -32,7 +33,21 @@ type Video = {
   full_url: string | null;
   duration_minutes: number;
   is_top_france?: boolean;
+  client_id?: string;
 };
+
+const CODES_KEY = "ws_unlocked_codes"; // same key as wedding/[clientId].tsx
+
+async function getCodeForClient(clientId: string | undefined): Promise<string | null> {
+  if (!clientId) return null;
+  const raw = await storage.getItem<string>(CODES_KEY, "{}");
+  try {
+    const map = JSON.parse(raw || "{}") as Record<string, string>;
+    return map[clientId] || null;
+  } catch {
+    return null;
+  }
+}
 
 export default function VideoScreen() {
   const router = useRouter();
@@ -46,7 +61,19 @@ export default function VideoScreen() {
   useEffect(() => {
     (async () => {
       try {
-        const v = await api<Video>(`/videos/${id}`);
+        // Step 1 — first fetch (no code) to learn the video's client_id
+        let v = await api<Video>(`/videos/${id}`);
+        // Step 2 — if locked but we have a stored code for this video's wedding, refetch with the code
+        if (!v.full_url && v.client_id) {
+          const storedCode = await getCodeForClient(v.client_id);
+          if (storedCode) {
+            try {
+              v = await api<Video>(`/videos/${id}?code=${encodeURIComponent(storedCode)}`);
+            } catch {
+              // keep the initial (locked) video data — error will be surfaced when playing
+            }
+          }
+        }
         setVideo(v);
       } catch (e: any) {
         showAlert("Erreur", e.message);
