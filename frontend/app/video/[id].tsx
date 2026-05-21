@@ -55,17 +55,9 @@ export default function VideoScreen() {
     })();
   }, [id]);
 
-  if (loading) {
-    return (
-      <View style={styles.loading}>
-        <ActivityIndicator color={colors.gold} />
-      </View>
-    );
-  }
-  if (!video) return null;
-
-  const isUnlocked = !!video.full_url;
-  const playableUrl = (isUnlocked ? video.full_url : null) || video.trailer_url || video.full_url || "";
+  // --- HOOKS BLOCK (must be called BEFORE any early return) ---
+  const isUnlocked = !!video?.full_url;
+  const playableUrl = (isUnlocked ? video?.full_url : null) || video?.trailer_url || video?.full_url || "";
 
   // Native video player (expo-video) for Android/iOS - supports H.264, HEVC, .m4v, .mp4, .mov etc
   // Force contentType "progressive" so ExoPlayer treats .m4v / .mov / .mp4 the same way (MP4 container).
@@ -89,6 +81,16 @@ export default function VideoScreen() {
     });
     return () => { try { sub?.remove?.(); } catch {} };
   }, [player]);
+  // --- END HOOKS BLOCK ---
+
+  if (loading) {
+    return (
+      <View style={styles.loading}>
+        <ActivityIndicator color={colors.gold} />
+      </View>
+    );
+  }
+  if (!video) return null;
 
   const onCastPress = async () => {
     if (!castApi.available) {
