@@ -7,6 +7,7 @@ import {
   ScrollView,
   ActivityIndicator,
   Platform,
+  Share,
 } from "react-native";
 import { Image } from "expo-image";
 import { useRouter, useLocalSearchParams } from "expo-router";
@@ -124,6 +125,55 @@ export default function VideoScreen() {
 
   const castIconColor = castApi.connected ? colors.gold : castApi.available || Platform.OS !== "web" ? colors.ivory : colors.textDisabled;
 
+  // --- "Ma liste" — navigate to library (videos auto-added on unlock) ---
+  const onAddToList = () => {
+    if (!user) {
+      router.push("/auth/login");
+      return;
+    }
+    router.push("/(tabs)/library");
+  };
+
+  // --- "Partager" — native share sheet ---
+  const onShare = async () => {
+    const shareUrl = `${process.env.EXPO_PUBLIC_BACKEND_URL || "https://cinemaries.fr"}/wedding/${video.client_id || video.id}`;
+    const shareMessage = `Découvrez le film de mariage "${video.title}" sur CINÉMARIÉS 🎬\n\n${shareUrl}`;
+    try {
+      if (Platform.OS === "web") {
+        // Web: try Web Share API, fallback to clipboard
+        if (typeof navigator !== "undefined" && (navigator as any).share) {
+          await (navigator as any).share({
+            title: `CINÉMARIÉS — ${video.title}`,
+            text: shareMessage,
+            url: shareUrl,
+          });
+        } else if (typeof navigator !== "undefined" && navigator.clipboard) {
+          await navigator.clipboard.writeText(shareUrl);
+          showAlert("Lien copié", "Le lien a été copié dans votre presse-papiers. Vous pouvez maintenant le coller où vous voulez !");
+        } else {
+          showAlert("Partage", shareMessage);
+        }
+      } else {
+        // Native: use RN Share API
+        await Share.share(
+          {
+            title: `CINÉMARIÉS — ${video.title}`,
+            message: shareMessage,
+            url: shareUrl, // iOS uses url
+          },
+          {
+            dialogTitle: "Partager ce film de mariage",
+            subject: `CINÉMARIÉS — ${video.title}`,
+          }
+        );
+      }
+    } catch (e: any) {
+      if (e?.message && !String(e.message).toLowerCase().includes("cancel")) {
+        showAlert("Partage", e.message);
+      }
+    }
+  };
+
   return (
     <View style={styles.root}>
       <SafeAreaView style={styles.headerWrap} edges={["top"]}>
@@ -231,8 +281,8 @@ export default function VideoScreen() {
         <Text style={styles.desc}>{video.description}</Text>
 
         <View style={styles.actions}>
-          <ActionBtn icon="add" label="Ma liste" />
-          <ActionBtn icon="share-social-outline" label="Partager" />
+          <ActionBtn icon="add" label="Ma liste" onPress={onAddToList} testID="video-action-list" />
+          <ActionBtn icon="share-social-outline" label="Partager" onPress={onShare} testID="video-action-share" />
           <ActionBtn
             icon={castApi.connected ? "tv" : "tv-outline"}
             label={castApi.connected ? (castApi.deviceName || "Cast") : "Chromecast"}

@@ -211,9 +211,9 @@ export default function VideoEdit() {
       const fileSize = (blob as any).size || asset.size || 0;
 
       // Sanity check: refuse very large files that would fill the server disk
-      const MAX_FILE_SIZE = 5 * 1024 * 1024 * 1024; // 5 GB hard cap
+      const MAX_FILE_SIZE = 30 * 1024 * 1024 * 1024; // 30 GB hard cap (chunked upload supports very large files)
       if (fileSize > MAX_FILE_SIZE) {
-        throw new Error(`Fichier trop volumineux (${Math.round(fileSize / (1024 * 1024 * 1024))} GB). Limite : 5 GB. Compressez votre vidéo (H.264, ~5 Mbps suffit pour du Full HD).`);
+        throw new Error(`Fichier trop volumineux (${Math.round(fileSize / (1024 * 1024 * 1024))} GB). Limite : 30 GB. Pour des fichiers plus volumineux, compressez en H.264 (~10 Mbps pour 4K, ~5 Mbps pour Full HD).`);
       }
 
       let result: { url: string };

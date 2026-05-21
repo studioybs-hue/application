@@ -62,7 +62,8 @@
           "iosReceiverAppId": "CC1AD845",
           "androidReceiverAppId": "CC1AD845"
         }
-      ]
+      ],
+      "expo-video"
     ],
     "experiments": {
       "typedRoutes": true
