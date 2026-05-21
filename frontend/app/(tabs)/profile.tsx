@@ -1,15 +1,81 @@
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from "react-native";
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Platform } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { colors, spacing, radii } from "@/src/theme";
 import { useAuth } from "@/src/auth/AuthContext";
 import { useConfirm } from "@/src/ui/ConfirmDialog";
+import { api } from "@/src/api/client";
+import { showAlert } from "@/src/utils/dialog";
 
 export default function ProfileScreen() {
   const router = useRouter();
   const { user, logout } = useAuth();
   const confirm = useConfirm();
+
+  const exportData = async () => {
+    try {
+      const data = await api<any>("/me/export");
+      const json = JSON.stringify(data, null, 2);
+      if (Platform.OS === "web") {
+        const blob = new Blob([json], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `cinemaries-mes-donnees-${new Date().toISOString().slice(0, 10)}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        showAlert("Export RGPD", "Vos données ont été téléchargées au format JSON.");
+      } else {
+        // Native: try to share / save via FileSystem
+        try {
+          const FS = await import("expo-file-system");
+          const Sharing = await import("expo-sharing");
+          const fileUri = `${FS.documentDirectory}cinemaries-mes-donnees-${Date.now()}.json`;
+          await FS.writeAsStringAsync(fileUri, json, { encoding: FS.EncodingType.UTF8 });
+          if (await Sharing.isAvailableAsync()) {
+            await Sharing.shareAsync(fileUri, { mimeType: "application/json" });
+          } else {
+            showAlert("Export RGPD", `Fichier enregistré : ${fileUri}`);
+          }
+        } catch {
+          showAlert("Export RGPD", "Données exportées. Aperçu :\n\n" + json.slice(0, 400) + "...");
+        }
+      }
+    } catch (e: any) {
+      showAlert("Erreur", e?.message || "Impossible d'exporter vos données.");
+    }
+  };
+
+  const deleteAccount = async () => {
+    const ok = await confirm({
+      title: "Supprimer mon compte",
+      message:
+        "Cette action est IRRÉVERSIBLE. Toutes vos données personnelles (compte, codes, déblocages, demandes) seront supprimées définitivement. Pensez à résilier votre abonnement Stripe avant. Continuer ?",
+      confirmText: "Supprimer définitivement",
+      destructive: true,
+      icon: "trash-outline",
+    });
+    if (!ok) return;
+    const ok2 = await confirm({
+      title: "Confirmation finale",
+      message: "Êtes-vous absolument sûr ? Cette suppression est définitive et conforme au RGPD.",
+      confirmText: "Oui, supprimer",
+      destructive: true,
+      icon: "warning-outline",
+    });
+    if (!ok2) return;
+    try {
+      await api("/me", { method: "DELETE" });
+      await logout();
+      showAlert("Compte supprimé", "Toutes vos données ont été effacées. À bientôt !");
+      router.replace("/(tabs)/home");
+    } catch (e: any) {
+      showAlert("Erreur", e?.message || "Impossible de supprimer le compte.");
+    }
+  };
 
   if (!user) {
     return (
@@ -104,8 +170,25 @@ export default function ProfileScreen() {
         )}
 
         <Section title="Application">
+          <Item icon="information-circle-outline" label="À propos / Contact" onPress={() => router.push("/about")} testID="profile-about-btn" />
+          <Item icon="document-text-outline" label="Documents légaux" onPress={() => router.push("/legal")} testID="profile-legal-btn" />
           <Item icon="tv-outline" label="Version TV (bientôt)" disabled testID="profile-tv-btn" />
-          <Item icon="information-circle-outline" label="À propos" disabled testID="profile-about-btn" />
+        </Section>
+
+        <Section title="Vie privée & RGPD">
+          <Item
+            icon="download-outline"
+            label="Exporter mes données (JSON)"
+            onPress={exportData}
+            testID="profile-export-btn"
+          />
+          <Item
+            icon="trash-outline"
+            label="Supprimer mon compte"
+            onPress={deleteAccount}
+            testID="profile-delete-btn"
+            destructive
+          />
         </Section>
 
         <TouchableOpacity style={styles.logoutBtn} onPress={onLogout} testID="profile-logout-btn">
@@ -113,8 +196,26 @@ export default function ProfileScreen() {
           <Text style={styles.logoutTxt}>Déconnexion</Text>
         </TouchableOpacity>
 
+        <View style={styles.legalFooter}>
+          <TouchableOpacity onPress={() => router.push("/legal/mentions")}>
+            <Text style={styles.legalFooterLink}>Mentions légales</Text>
+          </TouchableOpacity>
+          <Text style={styles.legalFooterDot}>·</Text>
+          <TouchableOpacity onPress={() => router.push("/legal/privacy")}>
+            <Text style={styles.legalFooterLink}>Confidentialité</Text>
+          </TouchableOpacity>
+          <Text style={styles.legalFooterDot}>·</Text>
+          <TouchableOpacity onPress={() => router.push("/legal/cgu")}>
+            <Text style={styles.legalFooterLink}>CGU</Text>
+          </TouchableOpacity>
+          <Text style={styles.legalFooterDot}>·</Text>
+          <TouchableOpacity onPress={() => router.push("/legal/cgv")}>
+            <Text style={styles.legalFooterLink}>CGV</Text>
+          </TouchableOpacity>
+        </View>
+
         <Text style={styles.footerTxt}>CINÉMARIÉS · v1.0</Text>
-        <Text style={styles.footerSub}>by Creative Industry France</Text>
+        <Text style={styles.footerSub}>by Creativindustry France</Text>
       </ScrollView>
     </SafeAreaView>
   );
@@ -136,6 +237,7 @@ function Item({
   testID,
   disabled,
   accent,
+  destructive,
 }: {
   icon: any;
   label: string;
@@ -143,7 +245,9 @@ function Item({
   testID: string;
   disabled?: boolean;
   accent?: boolean;
+  destructive?: boolean;
 }) {
+  const tint = destructive ? colors.error : accent ? colors.gold : colors.ivory;
   return (
     <TouchableOpacity
       style={[styles.item, disabled && { opacity: 0.4 }]}
@@ -151,8 +255,10 @@ function Item({
       activeOpacity={0.7}
       testID={testID}
     >
-      <Ionicons name={icon} size={20} color={accent ? colors.gold : colors.ivory} />
-      <Text style={[styles.itemLabel, accent && { color: colors.gold, fontWeight: "700" }]}>{label}</Text>
+      <Ionicons name={icon} size={20} color={tint} />
+      <Text style={[styles.itemLabel, { color: tint, fontWeight: destructive || accent ? "700" : "400" }]}>
+        {label}
+      </Text>
       {!disabled && <Ionicons name="chevron-forward" size={18} color={colors.textSecondary} />}
     </TouchableOpacity>
   );
@@ -224,6 +330,9 @@ const styles = StyleSheet.create({
     borderColor: "rgba(211,47,47,0.4)",
   },
   logoutTxt: { color: colors.error, fontWeight: "600" },
-  footerTxt: { color: colors.textDisabled, fontSize: 11, textAlign: "center", marginTop: spacing.lg, letterSpacing: 1 },
+  legalFooter: { flexDirection: "row", flexWrap: "wrap", justifyContent: "center", alignItems: "center", gap: 4, marginTop: spacing.lg },
+  legalFooterLink: { color: colors.textSecondary, fontSize: 11, paddingHorizontal: 4, paddingVertical: 4 },
+  legalFooterDot: { color: colors.textDisabled, fontSize: 10 },
+  footerTxt: { color: colors.textDisabled, fontSize: 11, textAlign: "center", marginTop: spacing.md, letterSpacing: 1 },
   footerSub: { color: colors.textDisabled, fontSize: 10, textAlign: "center", marginTop: 4, marginBottom: spacing.md, fontStyle: "italic", opacity: 0.7 },
 });

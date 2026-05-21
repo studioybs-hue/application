@@ -29,6 +29,7 @@ export default function SubscriptionScreen() {
   const [selectedTier, setSelectedTier] = useState<"basic" | "unlimited">(
     (params.tier as any) === "unlimited" ? "unlimited" : "basic"
   );
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
 
   useEffect(() => {
     if (params.status === "success") {
@@ -52,6 +53,13 @@ export default function SubscriptionScreen() {
   const subscribe = async () => {
     if (!user) {
       router.push("/auth/login");
+      return;
+    }
+    if (!acceptedTerms) {
+      showAlert(
+        "Acceptation requise",
+        "Vous devez accepter les CGV, CGU et la Politique de confidentialité pour procéder au paiement."
+      );
       return;
     }
     setLoading(true);
@@ -193,32 +201,66 @@ export default function SubscriptionScreen() {
               </TouchableOpacity>
             </View>
           ) : (
-            <TouchableOpacity
-              style={styles.cta}
-              onPress={subscribe}
-              disabled={loading || verifying}
-              testID="subscribe-btn"
-            >
-              {loading || verifying ? (
-                <ActivityIndicator color="#0A0A0A" />
-              ) : (
-                <>
-                  <Text style={styles.ctaTxt}>
-                    {selectedTier === "unlimited" ? "S'abonner — 2,30€/mois" : "S'abonner — 1,99€/mois"}
-                  </Text>
-                  <Ionicons name="arrow-forward" size={18} color="#0A0A0A" />
-                </>
-              )}
-            </TouchableOpacity>
+            <>
+              {/* Consentement CGV obligatoire */}
+              <TouchableOpacity
+                style={styles.consentRow}
+                onPress={() => setAcceptedTerms(!acceptedTerms)}
+                activeOpacity={0.7}
+                testID="sub-consent-checkbox"
+              >
+                <View style={[styles.checkbox, acceptedTerms && styles.checkboxChecked]}>
+                  {acceptedTerms ? <Ionicons name="checkmark" size={14} color="#0A0A0A" /> : null}
+                </View>
+                <Text style={styles.consentTxt}>
+                  J'accepte les{" "}
+                  <Text style={styles.consentLink} onPress={() => router.push("/legal/cgv")}>CGV</Text>
+                  ,{" "}
+                  <Text style={styles.consentLink} onPress={() => router.push("/legal/cgu")}>CGU</Text>
+                  {" "}et la{" "}
+                  <Text style={styles.consentLink} onPress={() => router.push("/legal/privacy")}>Politique de confidentialité</Text>
+                  . Je demande l'accès immédiat au service et renonce expressément à mon droit de rétractation.
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.cta, !acceptedTerms && { opacity: 0.5 }]}
+                onPress={subscribe}
+                disabled={loading || verifying || !acceptedTerms}
+                testID="subscribe-btn"
+              >
+                {loading || verifying ? (
+                  <ActivityIndicator color="#0A0A0A" />
+                ) : (
+                  <>
+                    <Text style={styles.ctaTxt}>
+                      {selectedTier === "unlimited" ? "S'abonner — 2,30€/mois" : "S'abonner — 1,99€/mois"}
+                    </Text>
+                    <Ionicons name="arrow-forward" size={18} color="#0A0A0A" />
+                  </>
+                )}
+              </TouchableOpacity>
+            </>
           )}
 
           <View style={styles.legal}>
             <Text style={styles.legalTxt}>
-              Paiement sécurisé par Stripe. Vous serez redirigé vers une page de paiement sécurisée.
+              Paiement sécurisé par Stripe. Renouvellement automatique mensuel, résiliable à tout moment depuis votre profil.
             </Text>
-            <TouchableOpacity onPress={() => Linking.openURL("https://stripe.com/fr/legal")}>
-              <Text style={styles.legalLink}>Conditions générales</Text>
-            </TouchableOpacity>
+            <View style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: "center", gap: 12, marginTop: 4 }}>
+              <TouchableOpacity onPress={() => router.push("/legal/cgv")}>
+                <Text style={styles.legalLink}>CGV</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => router.push("/legal/cgu")}>
+                <Text style={styles.legalLink}>CGU</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => router.push("/legal/privacy")}>
+                <Text style={styles.legalLink}>Confidentialité</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => Linking.openURL("https://stripe.com/fr/legal")}>
+                <Text style={styles.legalLink}>Stripe</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </ScrollView>
       </SafeAreaView>
@@ -257,6 +299,11 @@ const styles = StyleSheet.create({
   priceBig: { color: colors.gold, fontSize: 48, fontWeight: "800", letterSpacing: -1 },
   priceSmall: { color: colors.ivory, fontSize: 18, fontWeight: "400" },
   priceNote: { color: colors.textSecondary, fontSize: 12, marginTop: 6 },
+  consentRow: { flexDirection: "row", alignItems: "flex-start", marginVertical: spacing.md, gap: 10, paddingHorizontal: 4 },
+  checkbox: { width: 20, height: 20, borderRadius: 5, borderWidth: 1.5, borderColor: colors.border, alignItems: "center", justifyContent: "center", backgroundColor: colors.surface, marginTop: 2 },
+  checkboxChecked: { backgroundColor: colors.gold, borderColor: colors.gold },
+  consentTxt: { color: colors.textSecondary, fontSize: 12, flex: 1, lineHeight: 17 },
+  consentLink: { color: colors.gold, textDecorationLine: "underline", fontWeight: "600" },
   tiersWrap: { gap: 12, marginVertical: spacing.lg },
   tierCard: {
     backgroundColor: colors.surface,

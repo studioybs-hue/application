@@ -29,6 +29,7 @@ export default function HostScreen() {
   const [deliveryMethod, setDeliveryMethod] = useState<"upload_link" | "external_link" | "usb_office">("upload_link");
 
   const [submitting, setSubmitting] = useState(false);
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
 
   // Pre-fill contact email with the logged-in user's email
@@ -77,6 +78,13 @@ export default function HostScreen() {
     }
     if (!contactEmail.includes("@") || !contactEmail.includes(".")) {
       showAlert("Email invalide", "Veuillez saisir un email valide (ex: vous@email.com) pour qu'on puisse vous recontacter.");
+      return;
+    }
+    if (!acceptedTerms) {
+      showAlert(
+        "Acceptation requise",
+        "Vous devez accepter les CGV, CGU et la Politique de confidentialité pour procéder au paiement de 90€."
+      );
       return;
     }
     setSubmitting(true);
@@ -273,7 +281,27 @@ export default function HostScreen() {
                   multiline
                 />
 
-                <TouchableOpacity style={styles.cta} onPress={submit} disabled={submitting} testID="host-pay-btn">
+                <TouchableOpacity
+                  style={styles.consentRow}
+                  onPress={() => setAcceptedTerms(!acceptedTerms)}
+                  activeOpacity={0.7}
+                  testID="host-consent-checkbox"
+                >
+                  <View style={[styles.checkbox, acceptedTerms && styles.checkboxChecked]}>
+                    {acceptedTerms ? <Ionicons name="checkmark" size={14} color="#0A0A0A" /> : null}
+                  </View>
+                  <Text style={styles.consentTxt}>
+                    J'accepte les{" "}
+                    <Text style={styles.consentLink} onPress={() => router.push("/legal/cgv")}>CGV</Text>
+                    ,{" "}
+                    <Text style={styles.consentLink} onPress={() => router.push("/legal/cgu")}>CGU</Text>
+                    {" "}et la{" "}
+                    <Text style={styles.consentLink} onPress={() => router.push("/legal/privacy")}>Politique de confidentialité</Text>
+                    . Je demande le démarrage immédiat du service et renonce expressément à mon droit de rétractation.
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity style={[styles.cta, !acceptedTerms && { opacity: 0.5 }]} onPress={submit} disabled={submitting || !acceptedTerms} testID="host-pay-btn">
                   {submitting ? (
                     <ActivityIndicator color="#0A0A0A" />
                   ) : (
@@ -392,6 +420,11 @@ const styles = StyleSheet.create({
   benefitTxt: { color: colors.ivory, fontSize: 13 },
   cta: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, backgroundColor: colors.gold, paddingVertical: 16, borderRadius: radii.sm },
   ctaTxt: { color: "#0A0A0A", fontWeight: "700", fontSize: 16 },
+  consentRow: { flexDirection: "row", alignItems: "flex-start", marginVertical: spacing.md, gap: 10, paddingHorizontal: 4 },
+  checkbox: { width: 20, height: 20, borderRadius: 5, borderWidth: 1.5, borderColor: colors.border, alignItems: "center", justifyContent: "center", backgroundColor: colors.surface, marginTop: 2 },
+  checkboxChecked: { backgroundColor: colors.gold, borderColor: colors.gold },
+  consentTxt: { color: colors.textSecondary, fontSize: 12, flex: 1, lineHeight: 17 },
+  consentLink: { color: colors.gold, textDecorationLine: "underline", fontWeight: "600" },
   fine: { color: colors.textDisabled, fontSize: 11, textAlign: "center", marginTop: spacing.md, lineHeight: 16, fontStyle: "italic" },
   secondaryBtn: { alignSelf: "center", paddingVertical: 12, marginTop: 8 },
   secondaryTxt: { color: colors.textSecondary, textDecorationLine: "underline" },

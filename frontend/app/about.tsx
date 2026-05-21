@@ -346,6 +346,26 @@ export default function AboutScreen() {
             <TouchableOpacity onPress={() => Linking.openURL(COMPANY.website)}>
               <Text style={styles.footerParent}>{COMPANY.name}</Text>
             </TouchableOpacity>
+
+            {/* Legal links (RGPD / LCEN obligation) */}
+            <View style={styles.legalFooterRow}>
+              <TouchableOpacity onPress={() => router.push("/legal/mentions")}>
+                <Text style={styles.legalFooterLink}>Mentions légales</Text>
+              </TouchableOpacity>
+              <Text style={styles.legalFooterDot}>·</Text>
+              <TouchableOpacity onPress={() => router.push("/legal/privacy")}>
+                <Text style={styles.legalFooterLink}>Confidentialité</Text>
+              </TouchableOpacity>
+              <Text style={styles.legalFooterDot}>·</Text>
+              <TouchableOpacity onPress={() => router.push("/legal/cgu")}>
+                <Text style={styles.legalFooterLink}>CGU</Text>
+              </TouchableOpacity>
+              <Text style={styles.legalFooterDot}>·</Text>
+              <TouchableOpacity onPress={() => router.push("/legal/cgv")}>
+                <Text style={styles.legalFooterLink}>CGV</Text>
+              </TouchableOpacity>
+            </View>
+
             <Text style={styles.footerCopyright}>
               © {new Date().getFullYear()} — Tous droits réservés
             </Text>
@@ -642,5 +662,23 @@ const styles = StyleSheet.create({
     color: colors.textDisabled,
     fontSize: 11,
     marginTop: spacing.sm,
+  },
+  legalFooterRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 4,
+    marginTop: spacing.md,
+  },
+  legalFooterLink: {
+    color: colors.gold,
+    fontSize: 12,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  legalFooterDot: {
+    color: colors.textDisabled,
+    fontSize: 11,
   },
 });

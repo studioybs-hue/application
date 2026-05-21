@@ -23,6 +23,7 @@ export default function RegisterScreen() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -38,6 +39,10 @@ export default function RegisterScreen() {
     }
     if (password.length < 6) {
       setError("Le mot de passe doit contenir au moins 6 caractères");
+      return;
+    }
+    if (!acceptedTerms) {
+      setError("Vous devez accepter les CGU et la Politique de confidentialité pour créer un compte.");
       return;
     }
     setLoading(true);
@@ -103,6 +108,25 @@ export default function RegisterScreen() {
 
           {error ? <Text style={styles.error} testID="register-error">{error}</Text> : null}
 
+          {/* Consentement CGU / Confidentialité (obligatoire RGPD) */}
+          <TouchableOpacity
+            style={styles.consentRow}
+            onPress={() => setAcceptedTerms(!acceptedTerms)}
+            activeOpacity={0.7}
+            testID="register-consent-checkbox"
+          >
+            <View style={[styles.checkbox, acceptedTerms && styles.checkboxChecked]}>
+              {acceptedTerms ? <Ionicons name="checkmark" size={16} color="#0A0A0A" /> : null}
+            </View>
+            <Text style={styles.consentTxt}>
+              J'accepte les{" "}
+              <Text style={styles.consentLink} onPress={() => router.push("/legal/cgu")}>CGU</Text>
+              {" "}et la{" "}
+              <Text style={styles.consentLink} onPress={() => router.push("/legal/privacy")}>Politique de confidentialité</Text>
+              .
+            </Text>
+          </TouchableOpacity>
+
           <TouchableOpacity style={styles.primaryBtn} onPress={submit} disabled={loading} testID="register-submit-btn">
             {loading ? <ActivityIndicator color="#0A0A0A" /> : <Text style={styles.primaryTxt}>S&apos;inscrire</Text>}
           </TouchableOpacity>
@@ -148,6 +172,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   primaryTxt: { color: "#0A0A0A", fontWeight: "700", fontSize: 15, letterSpacing: 0.5 },
+  consentRow: { flexDirection: "row", alignItems: "center", marginTop: spacing.md, gap: 10, paddingHorizontal: 2 },
+  checkbox: { width: 22, height: 22, borderRadius: 6, borderWidth: 1.5, borderColor: colors.border, alignItems: "center", justifyContent: "center", backgroundColor: colors.surface },
+  checkboxChecked: { backgroundColor: colors.gold, borderColor: colors.gold },
+  consentTxt: { color: colors.textSecondary, fontSize: 13, flex: 1, lineHeight: 18 },
+  consentLink: { color: colors.gold, textDecorationLine: "underline", fontWeight: "600" },
   linkRow: { alignItems: "center", marginTop: spacing.lg },
   linkTxt: { color: colors.textSecondary, fontSize: 14 },
 });

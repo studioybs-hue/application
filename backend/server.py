@@ -293,6 +293,69 @@ async def me(current: dict = Depends(get_current_user)):
     return user_to_public(current)
 
 
+# --- RGPD: Export & Delete ---
+@api_router.get("/me/export")
+async def export_my_data(current: dict = Depends(get_current_user)):
+    """RGPD Article 20 - Right to data portability.
+    Export ALL personal data tied to the current user as JSON."""
+    uid = current["id"]
+    safe_user = {k: v for k, v in current.items() if k != "password_hash"}
+
+    unlocks = await db.user_unlocks.find({"user_id": uid}, {"_id": 0}).to_list(1000)
+    codes_created = await db.unlock_codes.find({"created_by": uid}, {"_id": 0}).to_list(1000)
+    hostings = await db.hosting_requests.find({"user_id": uid}, {"_id": 0}).to_list(1000)
+    checkouts = await db.checkout_sessions.find({"user_id": uid}, {"_id": 0}).to_list(1000)
+    contacts = await db.contact_requests.find({"email": current.get("email")}, {"_id": 0}).to_list(1000)
+
+    return {
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "exported_for": current.get("email"),
+        "legal_basis": "RGPD Article 20 - Droit à la portabilité",
+        "data": {
+            "account": safe_user,
+            "video_unlocks": unlocks,
+            "codes_created": codes_created,
+            "hosting_requests": hostings,
+            "payment_sessions": checkouts,
+            "contact_requests": contacts,
+        },
+        "note": "Conservez ce fichier en lieu sûr. Pour toute question : contact@creativindustry.com",
+    }
+
+
+@api_router.delete("/me")
+async def delete_my_account(current: dict = Depends(get_current_user)):
+    """RGPD Article 17 - Right to erasure ('right to be forgotten').
+    Cascades: deletes user + their unlocks, codes, hosting requests, contact requests.
+    Videos uploaded by admin are preserved (business data).
+    Stripe subscription cancellation should be done by user before deletion."""
+    uid = current["id"]
+    email = current.get("email")
+
+    # Refuse if user is the unique admin (safety)
+    if current.get("is_admin"):
+        admin_count = await db.users.count_documents({"is_admin": True})
+        if admin_count <= 1:
+            raise HTTPException(
+                status_code=400,
+                detail="Impossible de supprimer le dernier compte admin. Créez d'abord un autre admin.",
+            )
+
+    # Cascade deletes (preserve business records by anonymizing where needed)
+    await db.user_unlocks.delete_many({"user_id": uid})
+    await db.unlock_codes.delete_many({"created_by": uid, "used_count": 0})
+    # Codes already used: anonymize creator (keep stats but remove personal link)
+    await db.unlock_codes.update_many(
+        {"created_by": uid}, {"$set": {"created_by": "deleted_user"}}
+    )
+    await db.hosting_requests.delete_many({"user_id": uid})
+    await db.checkout_sessions.delete_many({"user_id": uid})
+    if email:
+        await db.contact_requests.delete_many({"email": email})
+    await db.users.delete_one({"id": uid})
+    return {"deleted": True, "email": email}
+
+
 # --- VIDEOS ---
 @api_router.get("/videos/public")
 async def list_public_videos():

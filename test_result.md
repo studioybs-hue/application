@@ -472,3 +472,102 @@ agent_communication:
             • GET /api/admin/weddings (admin) → 200 with 2 weddings; sarahaline-elarif has video_count=2 as expected.
           No 5xx errors observed; backend logs clean. Contact + admin CRUD endpoints are production-ready.
 
+test_plan:
+  current_focus:
+    - "RGPD — DELETE /api/me (right to erasure + cascade)"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+  - agent: "testing"
+    message: |
+      ✅ RGPD endpoints partially verified — 1 CRITICAL bug found in cascade logic.
+
+      GET /api/me/export — WORKING.
+        • 401 without token, 200 with token. Payload contains exported_at (ISO), exported_for (email), legal_basis ('RGPD Article 20 …'), data.{account, video_unlocks, codes_created, hosting_requests, payment_sessions, contact_requests}. password_hash absent from data.account and from full JSON.
+        • Caveat: data.codes_created uses the DB query {"created_by": uid} — same bug as below — so user-generated codes will never appear in their export.
+
+      DELETE /api/me — PARTIALLY WORKING (CRITICAL CASCADE BUG):
+        • 401 without token ✅
+        • Admin (last admin) → 400, admin preserved ✅
+        • Non-admin user → 200 with {deleted:true, email:…}, user removed from db.users, login refused afterwards ✅
+        • Cascade verified for user_unlocks, hosting_requests, checkout_sessions, contact_requests (all 0 post-delete) ✅
+        • ❌ unlock_codes ARE NOT CASCADED. The handler queries by 'created_by', but the /api/client/codes endpoint inserts user-owned codes with field 'owner_user_id' (and 'owner_email'). grep "created_by" /app/backend/server.py shows the field is ONLY referenced in the RGPD handler — never set anywhere. Concrete repro: after deleting rgpd_user_0276c864@example.com, both codes 69SF58HF (unused) and Z3UUDRQX (used, bound to device) remained in db.unlock_codes with owner_user_id, owner_email, bound_device_ip (10.232.130.66), bound_device_ua, bound_device_label intact. This is an RGPD violation — personal data of the deleted user persists.
+
+      FIX SUGGESTION for main agent — Option A (preferred):
+        Update /app/backend/server.py @ delete_my_account to use owner_user_id and also scrub the device fingerprints stored at unlock time. Apply same field name change to export_my_data so users see their own codes:
+          # in delete_my_account:
+          await db.unlock_codes.delete_many({"owner_user_id": uid, "current_uses": 0})
+          await db.unlock_codes.update_many(
+              {"owner_user_id": uid},
+              {"$set": {"owner_user_id": "deleted_user", "owner_email": None,
+                        "bound_device_ip": None, "bound_device_ua": None, "bound_device_label": None}}
+          )
+          # in export_my_data:
+          codes_created = await db.unlock_codes.find({"owner_user_id": uid}, {"_id": 0}).to_list(1000)
+
+      I cleaned up the 2 orphan codes left in DB by my repro (db.unlock_codes.delete_many({owner_email: /^rgpd_user_/})). The bug itself is independent of my cleanup.
+
+      No other backend changes needed. Once the cascade is fixed, please flag for retest (only the DELETE /api/me task needs re-verification).
+
+
+  - task: "RGPD — GET /api/me/export (data portability)"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          Tested against https://mariagevideo.preview.emergentagent.com/api (see /app/backend_test_rgpd.py).
+          • GET /api/me/export without Authorization header → HTTP 401.
+          • GET /api/me/export with a valid Bearer token → HTTP 200.
+          • Response payload structure verified:
+              - exported_at = ISO 8601 string with timezone (e.g. '2026-05-21T03:50:47.123+00:00').
+              - exported_for = user email.
+              - legal_basis contains 'RGPD Article 20 - Droit à la portabilité'.
+              - data object contains all 6 sub-keys: account, video_unlocks, codes_created, hosting_requests, payment_sessions, contact_requests; each list is a JSON array.
+              - data.account contains id and email but NOT password_hash. Recursive scan of the full export JSON also confirmed 'password_hash' substring is absent.
+          • MINOR (functional issue, not a security issue): data.codes_created uses the DB query {"created_by": uid}, but unlock codes generated via POST /api/client/codes store the user identity under 'owner_user_id'/'owner_email', not 'created_by'. So a basic-tier user who has generated codes via the self-service endpoint will see an EMPTY codes_created array in their export. The export is otherwise safe and complete; see DELETE /api/me task for the related cascade bug that has the same root cause.
+      
+  - task: "RGPD — DELETE /api/me (right to erasure + cascade)"
+    implemented: true
+    working: false
+    file: "/app/backend/server.py"
+    stuck_count: 1
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: false
+        agent: "testing"
+        comment: |
+          Tested against https://mariagevideo.preview.emergentagent.com/api (see /app/backend_test_rgpd.py).
+          PASSING aspects:
+          • DELETE /api/me without Authorization header → HTTP 401.
+          • DELETE /api/me with admin token (last admin) → HTTP 400 with French detail mentioning impossibility to delete the last admin. Admin account remains intact in DB (admin_count unchanged). Verified admin@wedding.fr still queryable afterwards.
+          • DELETE /api/me with a fresh non-admin test user (rgpd_user_<uuid>@example.com) → HTTP 200 with body {"deleted": true, "email": "..."}.
+          • After deletion the user document is removed from db.users; user can no longer login (HTTP 4xx).
+          • Cascade VERIFIED for: db.user_unlocks (removed by user_id), db.hosting_requests (removed by user_id), db.checkout_sessions (removed by user_id), db.contact_requests (removed by email matching). All counts went to 0 in DB.
+
+          ❌ CRITICAL BUG — unlock_codes cascade does NOT work (RGPD violation):
+          • The DELETE /api/me handler runs:
+              db.unlock_codes.delete_many({"created_by": uid, "used_count": 0})
+              db.unlock_codes.update_many({"created_by": uid}, {"$set": {"created_by": "deleted_user"}})
+            but codes generated by users via POST /api/client/codes are INSERTED with fields {"owner_user_id": current["id"], "owner_email": current.get("email"), "source": "client"} — there is NO "created_by" field anywhere in the server.py code (grepped — only the RGPD handler references it). 
+          • Repro: registered rgpd_user_0276c864@example.com → admin assigned wedding hanifa-et-dali → POST /api/client/codes twice produced codes 69SF58HF (unused) and Z3UUDRQX (then unlocked via /weddings/unlock so used_count=1, bound_device_id set, bound_device_ip+ua persisted). After DELETE /api/me returned 200, both codes were STILL in db.unlock_codes with their full owner_user_id and owner_email pointing to the now-deleted user (also bound_device_ip='10.232.130.66', bound_device_ua='python-requests/2.34.1', label='RGPD test code' / 'RGPD used code'). Personal data is retained — incompatible with RGPD Article 17 ('right to erasure').
+          • Same root cause also breaks GET /api/me/export → data.codes_created is queried by {"created_by": uid}, so users will never see codes they've generated in their export.
+
+          FIX SUGGESTION (one of):
+          (a) Change the DELETE /api/me handler to query/anonymize using owner_user_id (and clear owner_email + bound_device_ip + bound_device_ua + bound_device_label) and apply the same fix to the export endpoint. E.g.
+              await db.unlock_codes.delete_many({"owner_user_id": uid, "current_uses": 0})
+              await db.unlock_codes.update_many({"owner_user_id": uid}, {"$set": {"owner_user_id": "deleted_user", "owner_email": None, "bound_device_ip": None, "bound_device_ua": None, "bound_device_label": None}})
+              codes_created = await db.unlock_codes.find({"owner_user_id": uid}, {"_id": 0}).to_list(1000)
+          (b) Add a "created_by" field at insertion time in /api/client/codes (and any admin endpoint) and keep the current handler.
+          Option (a) is preferred as it ALSO scrubs the device fingerprints (IP / UA / label) that were captured during /weddings/unlock — those are also personal data.
+
+          NOTE: I cleaned up the 2 orphan codes (69SF58HF, Z3UUDRQX) left in db.unlock_codes after the test to keep the database clean. The bug itself is unrelated to my test cleanup.
+
