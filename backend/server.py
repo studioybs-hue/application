@@ -2200,8 +2200,7 @@ async def admin_delete_contact_request(req_id: str, _: dict = Depends(require_ad
 
 
 
-@api_router.get("/uploads/{name:path}")
-@api_router.head("/uploads/{name:path}")
+@api_router.api_route("/uploads/{name:path}", methods=["GET", "HEAD"])
 async def serve_upload(name: str, request: Request):
     """Serve uploaded files with HTTP Range support (required for Chromecast / video streaming).
     Also handles HEAD requests (used by some video players to get file metadata before streaming)."""
