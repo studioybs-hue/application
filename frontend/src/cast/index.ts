@@ -5,7 +5,7 @@
 // IMPORTANT: react-native-google-cast requires a NATIVE BUILD (EAS Build).
 // It does NOT work in Expo Go. Use `eas build --profile preview --platform android`
 // and install the APK on a real device.
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 
 let GoogleCast: any = null;
 let CastButtonMod: any = null;
@@ -13,6 +13,7 @@ let CastState: any = null;
 let useCastDeviceLib: any = null;
 let useCastSessionLib: any = null;
 let useMediaStatusLib: any = null;
+let useRemoteMediaClientLib: any = null;
 
 try {
   // Dynamically require so this file doesn't crash on a JS engine without the native module.
@@ -23,42 +24,30 @@ try {
   useCastDeviceLib = lib.useCastDevice;
   useCastSessionLib = lib.useCastSession;
   useMediaStatusLib = lib.useMediaStatus;
+  useRemoteMediaClientLib = lib.useRemoteMediaClient;
 } catch (e) {
   // Module not available (Expo Go / dev client without the plugin)
   GoogleCast = null;
 }
 
+type PendingMedia = { url: string; title: string; poster?: string };
+
 export function useCast() {
   const [available, setAvailable] = useState(false);
   const [connected, setConnected] = useState(false);
   const [deviceName, setDeviceName] = useState<string | null>(null);
+  const pendingMediaRef = useRef<PendingMedia | null>(null);
 
   // Hooks must be unconditional, so call them but ignore if lib missing
   const castDevice = useCastDeviceLib ? useCastDeviceLib() : null;
   const castSession = useCastSessionLib ? useCastSessionLib() : null;
+  const remoteMediaClient = useRemoteMediaClientLib ? useRemoteMediaClientLib() : null;
 
   useEffect(() => {
-    if (!GoogleCast) {
-      setAvailable(false);
-      return;
-    }
-    setAvailable(true);
-
-    // Listen to cast state
-    const sub = GoogleCast.SessionManager?.onSessionStarted?.(() => {
-      setConnected(true);
-    });
-    const sub2 = GoogleCast.SessionManager?.onSessionEnded?.(() => {
-      setConnected(false);
-      setDeviceName(null);
-    });
-
-    return () => {
-      try { sub?.remove?.(); } catch {}
-      try { sub2?.remove?.(); } catch {}
-    };
+    setAvailable(!!GoogleCast);
   }, []);
 
+  // Track connection via cast device
   useEffect(() => {
     if (castDevice) {
       setConnected(true);
@@ -69,61 +58,84 @@ export function useCast() {
     }
   }, [castDevice]);
 
+  // When a remote media client becomes available AND we have pending media → load it
+  useEffect(() => {
+    const m = pendingMediaRef.current;
+    if (remoteMediaClient && m) {
+      pendingMediaRef.current = null;
+      (async () => {
+        try {
+          const contentType = m.url.toLowerCase().endsWith(".webm")
+            ? "video/webm"
+            : m.url.toLowerCase().endsWith(".m3u8")
+              ? "application/x-mpegURL"
+              : "video/mp4";
+          await remoteMediaClient.loadMedia({
+            mediaInfo: {
+              contentUrl: m.url,
+              contentType,
+              metadata: {
+                type: "movie",
+                title: m.title,
+                images: m.poster ? [{ url: m.poster }] : undefined,
+              },
+            },
+            autoplay: true,
+          });
+        } catch (e) {
+          console.warn("Cast loadMedia error", e);
+        }
+      })();
+    }
+  }, [remoteMediaClient]);
+
   const cast = useCallback(
     async (url: string, title: string, poster?: string): Promise<{ ok: boolean; error?: string }> => {
       if (!GoogleCast) {
         return {
           ok: false,
-          error: "Module Chromecast non disponible. Cette fonctionnalité nécessite l'application installée via EAS Build (pas Expo Go).",
+          error: "Module Chromecast non disponible. Cette fonctionnalité nécessite l'application installée via EAS Build.",
         };
       }
       try {
-        // Ensure session is active
-        const session = await GoogleCast.SessionManager?.getCurrentCastSession?.();
-        if (!session) {
-          // Show the cast device picker
-          await GoogleCast.showCastDialog?.();
-          // Wait briefly for user to pick
-          await new Promise((r) => setTimeout(r, 800));
-          const s2 = await GoogleCast.SessionManager?.getCurrentCastSession?.();
-          if (!s2) {
-            return { ok: false, error: "Aucun appareil Chromecast sélectionné." };
-          }
-        }
-        const activeSession = await GoogleCast.SessionManager?.getCurrentCastSession?.();
-        if (!activeSession) {
-          return { ok: false, error: "Pas de session Cast active." };
-        }
-
-        const contentType = url.toLowerCase().endsWith(".webm")
-          ? "video/webm"
-          : url.toLowerCase().endsWith(".m3u8")
-            ? "application/x-mpegURL"
-            : "video/mp4";
-
-        await activeSession.loadMedia({
-          mediaInfo: {
-            contentUrl: url,
-            contentType,
-            metadata: {
-              type: "movie",
-              title,
-              images: poster ? [{ url: poster }] : undefined,
+        // If already connected with an active media client, load right now
+        if (remoteMediaClient) {
+          const contentType = url.toLowerCase().endsWith(".webm")
+            ? "video/webm"
+            : url.toLowerCase().endsWith(".m3u8")
+              ? "application/x-mpegURL"
+              : "video/mp4";
+          await remoteMediaClient.loadMedia({
+            mediaInfo: {
+              contentUrl: url,
+              contentType,
+              metadata: {
+                type: "movie",
+                title,
+                images: poster ? [{ url: poster }] : undefined,
+              },
             },
-          },
-          autoplay: true,
-        });
+            autoplay: true,
+          });
+          return { ok: true };
+        }
+
+        // No active session — queue the media and show the device picker.
+        // The effect above will pick it up automatically when the session becomes active.
+        pendingMediaRef.current = { url, title, poster };
+        await GoogleCast.showCastDialog?.();
         return { ok: true };
       } catch (e: any) {
         return { ok: false, error: e?.message || "Erreur Chromecast inconnue." };
       }
     },
-    []
+    [remoteMediaClient]
   );
 
   const stop = useCallback(async () => {
     if (!GoogleCast) return;
     try {
+      pendingMediaRef.current = null;
       await GoogleCast.SessionManager?.endCurrentSession?.(true);
     } catch (e) {
       console.warn("Cast stop error", e);

@@ -68,10 +68,27 @@ export default function VideoScreen() {
   const playableUrl = (isUnlocked ? video.full_url : null) || video.trailer_url || video.full_url || "";
 
   // Native video player (expo-video) for Android/iOS - supports H.264, HEVC, .m4v, .mp4, .mov etc
-  const player = useVideoPlayer(playing && Platform.OS !== "web" ? playableUrl : null, (p) => {
+  // Force contentType "progressive" so ExoPlayer treats .m4v / .mov / .mp4 the same way (MP4 container).
+  const videoSource = playing && Platform.OS !== "web" && playableUrl
+    ? { uri: playableUrl, contentType: "progressive" as const, useCaching: false }
+    : null;
+  const player = useVideoPlayer(videoSource, (p) => {
     p.loop = false;
     if (playing) p.play();
   });
+
+  // Surface playback errors to the user
+  useEffect(() => {
+    if (!player) return;
+    const sub = player.addListener?.("statusChange", (event: any) => {
+      if (event?.status === "error" || event?.error) {
+        const msg = event?.error?.message || event?.error || "Erreur de lecture inconnue";
+        showAlert("Erreur de lecture", `Impossible de lire cette vidéo.\n\n${msg}\n\nVérifiez votre connexion ou contactez l'administrateur.`);
+        setPlaying(false);
+      }
+    });
+    return () => { try { sub?.remove?.(); } catch {} };
+  }, [player]);
 
   const onCastPress = async () => {
     if (!castApi.available) {
