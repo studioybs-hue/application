@@ -18,6 +18,8 @@ from pydantic import BaseModel, EmailStr, Field
 from typing import List, Optional
 from datetime import datetime, timedelta, timezone
 
+from mailer import send_email, render_email, is_configured as smtp_configured
+
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
@@ -325,14 +327,13 @@ async def export_my_data(current: dict = Depends(get_current_user)):
 
 @api_router.delete("/me")
 async def delete_my_account(current: dict = Depends(get_current_user)):
-    """RGPD Article 17 - Right to erasure ('right to be forgotten').
-    Cascades: deletes user + their unlocks, codes, hosting requests, contact requests.
-    Videos uploaded by admin are preserved (business data).
-    Stripe subscription cancellation should be done by user before deletion."""
+    """RGPD Article 17 - Right to erasure.
+    Creates a moderation request (admin must approve within 30 days as per RGPD).
+    Immediate cascade is preserved as fallback if NO admin moderation is desired.
+    """
     uid = current["id"]
     email = current.get("email")
 
-    # Refuse if user is the unique admin (safety)
     if current.get("is_admin"):
         admin_count = await db.users.count_documents({"is_admin": True})
         if admin_count <= 1:
@@ -341,9 +342,78 @@ async def delete_my_account(current: dict = Depends(get_current_user)):
                 detail="Impossible de supprimer le dernier compte admin. Créez d'abord un autre admin.",
             )
 
-    # Cascade deletes (preserve business records by anonymizing where needed)
+    # Check if user already has a pending request
+    existing = await db.deletion_requests.find_one({"user_id": uid, "status": "pending"})
+    if existing:
+        return {
+            "queued": True,
+            "request_id": existing["id"],
+            "status": "pending",
+            "message": "Votre demande est déjà en cours de traitement.",
+        }
+
+    req = {
+        "id": str(uuid.uuid4()),
+        "user_id": uid,
+        "email": email,
+        "full_name": current.get("full_name"),
+        "status": "pending",
+        "requested_at": datetime.now(timezone.utc),
+        "reason": None,
+        "processed_at": None,
+        "processed_by": None,
+        "admin_note": None,
+    }
+    await db.deletion_requests.insert_one(req)
+
+    # Notify user
+    try:
+        user_html = render_email(
+            "Votre demande de suppression a bien été reçue",
+            f"""<p>Bonjour {current.get('full_name') or ''},</p>
+            <p>Nous avons bien reçu votre demande de suppression de compte conformément à l'article 17 du RGPD.</p>
+            <p>Conformément à nos obligations légales, votre demande sera traitée sous <b>30 jours maximum</b>. Vous recevrez un email de confirmation dès que la suppression sera effective.</p>
+            <p>Si vous souhaitez annuler cette demande, contactez-nous à <a href="mailto:contact@creativindustry.com" style="color:#D4AF37">contact@creativindustry.com</a>.</p>
+            <p><b>Référence :</b> {req['id'][:8].upper()}</p>""",
+        )
+        if email:
+            await send_email(email, "CINÉMARIÉS — Demande de suppression de compte reçue", user_html)
+
+        # Notify admin
+        admin_notify = os.environ.get("ADMIN_NOTIFY_EMAIL", "")
+        if admin_notify:
+            admin_html = render_email(
+                "Nouvelle demande de suppression de compte",
+                f"""<p>Un utilisateur a demandé la suppression de son compte (RGPD Art. 17).</p>
+                <ul>
+                  <li><b>Email :</b> {email}</li>
+                  <li><b>Nom :</b> {current.get('full_name') or '—'}</li>
+                  <li><b>ID utilisateur :</b> {uid}</li>
+                  <li><b>Référence :</b> {req['id']}</li>
+                  <li><b>Date de la demande :</b> {req['requested_at'].strftime('%d/%m/%Y %H:%M')} UTC</li>
+                </ul>
+                <p><b>Action requise sous 30 jours.</b></p>""",
+                cta_label="Ouvrir l'admin",
+                cta_url="https://cinemaries.fr/admin/deletion-requests",
+            )
+            await send_email(admin_notify, "[ADMIN] Demande de suppression — " + (email or "inconnu"), admin_html)
+    except Exception as e:
+        logging.error("Email error on deletion request: %s", e)
+
+    return {
+        "queued": True,
+        "request_id": req["id"],
+        "status": "pending",
+        "message": "Votre demande a été enregistrée. Vous recevrez un email de confirmation sous 30 jours.",
+    }
+
+
+async def _execute_account_deletion(user_doc: dict) -> dict:
+    """Internal helper that actually wipes a user's data (cascades).
+    Called by admin endpoint after approval, OR directly if needed in scripts."""
+    uid = user_doc["id"]
+    email = user_doc.get("email")
     await db.user_unlocks.delete_many({"user_id": uid})
-    # Unused codes: delete completely. Used codes: anonymize (preserve usage stats but remove PII)
     await db.unlock_codes.delete_many({"owner_user_id": uid, "current_uses": 0})
     await db.unlock_codes.update_many(
         {"owner_user_id": uid},
@@ -361,6 +431,112 @@ async def delete_my_account(current: dict = Depends(get_current_user)):
         await db.contact_requests.delete_many({"email": email})
     await db.users.delete_one({"id": uid})
     return {"deleted": True, "email": email}
+
+
+@api_router.get("/me/deletion-request")
+async def my_deletion_request(current: dict = Depends(get_current_user)):
+    """Show current user's pending deletion request status (if any)."""
+    req = await db.deletion_requests.find_one(
+        {"user_id": current["id"], "status": "pending"}, {"_id": 0}
+    )
+    return {"request": req}
+
+
+# --- Admin: Moderate deletion requests ---
+async def get_current_admin(current: dict = Depends(get_current_user)) -> dict:
+    if not current.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Admin requis")
+    return current
+
+
+@api_router.get("/admin/deletion-requests")
+async def admin_list_deletion_requests(status: str = "pending", admin: dict = Depends(get_current_admin)):
+    """List all deletion requests (filterable by status: pending/approved/rejected/all)."""
+    q = {} if status == "all" else {"status": status}
+    items = await db.deletion_requests.find(q, {"_id": 0}).sort("requested_at", -1).to_list(500)
+    return {"items": items, "count": len(items)}
+
+
+@api_router.post("/admin/deletion-requests/{request_id}/approve")
+async def admin_approve_deletion(request_id: str, admin: dict = Depends(get_current_admin)):
+    req = await db.deletion_requests.find_one({"id": request_id})
+    if not req:
+        raise HTTPException(status_code=404, detail="Demande introuvable")
+    if req["status"] != "pending":
+        raise HTTPException(status_code=400, detail=f"Demande déjà traitée (statut: {req['status']})")
+    user = await db.users.find_one({"id": req["user_id"]})
+    if not user:
+        # User already deleted manually, mark as processed
+        await db.deletion_requests.update_one(
+            {"id": request_id},
+            {"$set": {"status": "approved", "processed_at": datetime.now(timezone.utc), "processed_by": admin["id"], "admin_note": "Utilisateur déjà supprimé"}},
+        )
+        return {"approved": True, "already_deleted": True}
+
+    # Safety: refuse to delete last admin
+    if user.get("is_admin"):
+        admin_count = await db.users.count_documents({"is_admin": True})
+        if admin_count <= 1:
+            raise HTTPException(status_code=400, detail="Impossible de supprimer le dernier admin.")
+
+    await _execute_account_deletion(user)
+    await db.deletion_requests.update_one(
+        {"id": request_id},
+        {"$set": {"status": "approved", "processed_at": datetime.now(timezone.utc), "processed_by": admin["id"]}},
+    )
+
+    # Confirmation email to deleted user
+    try:
+        email = req.get("email")
+        if email:
+            html = render_email(
+                "Votre compte a été supprimé",
+                f"""<p>Bonjour,</p>
+                <p>Conformément à votre demande et à l'article 17 du RGPD, nous confirmons que toutes vos données personnelles ont été <b>définitivement supprimées</b> de nos systèmes.</p>
+                <p>Cela inclut : votre compte, vos déblocages vidéo, vos codes générés, vos demandes d'hébergement, vos sessions de paiement.</p>
+                <p>Si vous souhaitez à nouveau utiliser nos services, vous pourrez créer un nouveau compte à tout moment.</p>
+                <p>Merci d'avoir fait confiance à CINÉMARIÉS.</p>""",
+            )
+            await send_email(email, "CINÉMARIÉS — Confirmation de suppression de compte", html)
+    except Exception as e:
+        logging.error("Email error after deletion approval: %s", e)
+    return {"approved": True, "deleted": True}
+
+
+@api_router.post("/admin/deletion-requests/{request_id}/reject")
+async def admin_reject_deletion(request_id: str, body: dict, admin: dict = Depends(get_current_admin)):
+    reason = (body or {}).get("reason", "").strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail="Un motif de rejet est obligatoire.")
+    req = await db.deletion_requests.find_one({"id": request_id})
+    if not req:
+        raise HTTPException(status_code=404, detail="Demande introuvable")
+    if req["status"] != "pending":
+        raise HTTPException(status_code=400, detail=f"Demande déjà traitée (statut: {req['status']})")
+    await db.deletion_requests.update_one(
+        {"id": request_id},
+        {"$set": {
+            "status": "rejected",
+            "processed_at": datetime.now(timezone.utc),
+            "processed_by": admin["id"],
+            "admin_note": reason,
+        }},
+    )
+    # Notify user
+    try:
+        email = req.get("email")
+        if email:
+            html = render_email(
+                "Votre demande de suppression a été rejetée",
+                f"""<p>Bonjour,</p>
+                <p>Votre demande de suppression de compte a été examinée par notre équipe et n'a pas pu être traitée pour le motif suivant :</p>
+                <blockquote style="border-left:3px solid #D4AF37;padding-left:14px;margin:16px 0;color:#E5E2D6">{reason}</blockquote>
+                <p>Si vous souhaitez en discuter ou contester cette décision, contactez-nous à <a href="mailto:contact@creativindustry.com" style="color:#D4AF37">contact@creativindustry.com</a>.</p>""",
+            )
+            await send_email(email, "CINÉMARIÉS — Décision sur votre demande de suppression", html)
+    except Exception as e:
+        logging.error("Email error after deletion rejection: %s", e)
+    return {"rejected": True, "reason": reason}
 
 
 # --- VIDEOS ---
@@ -1168,6 +1344,26 @@ async def cancel_subscription(current: dict = Depends(get_current_user)):
     try:
         stripe.Subscription.modify(sub_id, cancel_at_period_end=True)
         return {"ok": True, "message": "Abonnement programmé pour résiliation à la fin de la période."}
+    except stripe.error.StripeError as e:  # type: ignore[attr-defined]
+        raise HTTPException(status_code=502, detail=f"Erreur Stripe: {str(e)}")
+
+
+@api_router.post("/billing/portal")
+async def billing_portal(current: dict = Depends(get_current_user)):
+    """Create a Stripe Customer Portal session so the user can manage their
+    subscription (payment method, invoices, cancellation) on Stripe's hosted UI."""
+    if not STRIPE_API_KEY:
+        raise HTTPException(status_code=503, detail="Stripe non configuré")
+    cust_id = current.get("stripe_customer_id")
+    if not cust_id:
+        raise HTTPException(status_code=404, detail="Aucun client Stripe associé. Souscrivez d'abord à un abonnement.")
+    try:
+        return_url = f"{APP_PUBLIC_URL}/(tabs)/profile" if APP_PUBLIC_URL else "https://cinemaries.fr/(tabs)/profile"
+        session = stripe.billing_portal.Session.create(
+            customer=cust_id,
+            return_url=return_url,
+        )
+        return {"url": session.url}
     except stripe.error.StripeError as e:  # type: ignore[attr-defined]
         raise HTTPException(status_code=502, detail=f"Erreur Stripe: {str(e)}")
 

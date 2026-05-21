@@ -608,3 +608,94 @@ agent_communication:
 
           NOTE: I cleaned up the 2 orphan codes (69SF58HF, Z3UUDRQX) left in db.unlock_codes after the test to keep the database clean. The bug itself is unrelated to my test cleanup.
 
+
+
+  - task: "RGPD — DELETE /api/me refactor to moderation queue + admin moderation"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          ALL 38/38 assertions PASSED against https://mariagevideo.preview.emergentagent.com/api (see /app/backend_test_deletion_queue.py).
+
+          DELETE /api/me (refactored from immediate cascade → queued moderation request):
+            • Unauth → 401.
+            • As last admin (admin@wedding.fr) → 400 'Impossible de supprimer le dernier compte admin. Créez d'abord un autre admin.' and NO deletion_requests document created for admin (verified via GET /admin/deletion-requests?status=pending).
+            • As fresh non-admin user (queue_test_<uuid>@example.com) → 200 with body {queued:true, request_id:<uuid>, status:'pending', message:<French>}. Body no longer contains 'deleted' key.
+            • User can still login afterwards (not deleted yet) — confirms queue behaviour.
+            • Idempotency: second DELETE /api/me returns SAME request_id with queued:true and message 'Votre demande est déjà en cours de traitement.' — no duplicate doc created.
+            • Endpoint completes successfully even if SMTP not configured (email is in try/except — no crash observed).
+
+          GET /api/me/deletion-request:
+            • Unauth → 401.
+            • Before any request → 200 {request:null}.
+            • After DELETE /api/me → 200 {request:{id, user_id, email, full_name, status:'pending', requested_at, reason:null, processed_at:null, processed_by:null, admin_note:null}}.
+
+          GET /api/admin/deletion-requests:
+            • Unauth → 401, non-admin (newly registered test user) → 403.
+            • Default (no status param) → 200 {items:[...], count} with our pending request included.
+            • Status filters: ?status=pending → includes, ?status=approved → excludes, ?status=rejected → excludes, ?status=all → includes. All return 200 with correct filtering.
+
+          POST /api/admin/deletion-requests/{id}/approve:
+            • Unauth → 401, non-admin → 403, invalid id → 404.
+            • Valid pending request as admin → 200 {approved:true, deleted:true}. Request status updated to 'approved' with processed_at (ISO) and processed_by=<admin_id>.
+            • Cascade delete VERIFIED: approved user can no longer login (401 'Identifiants incorrects').
+            • Already-processed → 400 'Demande déjà traitée (statut: approved)'.
+            • Last admin safety: cannot trigger via DELETE /api/me (refuses to queue), so the 400-on-approve path is implicitly safe.
+
+          POST /api/admin/deletion-requests/{id}/reject:
+            • Unauth → 401, non-admin → 403, invalid id → 404.
+            • Empty reason → 400 'Un motif de rejet est obligatoire.', missing reason → 400.
+            • Valid {reason} as admin → 200 {rejected:true, reason}. Request persisted with status='rejected', admin_note=reason, processed_at, processed_by=<admin_id>.
+            • Rejected user can still login (not deleted from db.users).
+            • Already-processed → 400 'Demande déjà traitée (statut: rejected)'.
+
+          POST /api/billing/portal:
+            • Unauth → 401.
+            • Fresh user without stripe_customer_id → 404 'Aucun client Stripe associé. Souscrivez d'abord à un abonnement.'
+            • Admin user (has stripe_customer_id from prior tests) → 200 {url:'https://billing.stripe.com/p/session/test_...'} — verified URL hosted on billing.stripe.com.
+
+          SMTP behaviour:
+            • DELETE /api/me did not crash despite SMTP not being fully configured (errors wrapped in try/except in server.py @lines 370-401). Endpoint always returns 200 with queue payload. CONFIRMED working.
+
+          Cleanup: portal_test_<uuid> and queue_reject_<uuid> users were queued for deletion then approved by admin to leave DB clean. No 5xx errors. No backend log errors related to new endpoints. Endpoints are production-ready.
+
+agent_communication:
+  - agent: "testing"
+    message: |
+      ✅ RGPD moderation queue + Stripe Customer Portal — ALL 38/38 assertions PASSED against https://mariagevideo.preview.emergentagent.com/api (see /app/backend_test_deletion_queue.py).
+
+      DELETE /api/me REFACTOR (immediate cascade → queued):
+        • Returns {queued:true, request_id, status:'pending', message} now. 'deleted' key removed.
+        • Idempotent: 2nd call returns SAME request_id with the 'déjà en cours' message.
+        • User remains in db.users and can login until admin approves.
+        • Last-admin refusal (400) still works; no queue entry created for admin.
+        • SMTP failures don't crash the endpoint (try/except verified).
+
+      GET /api/me/deletion-request:
+        • 401 unauth, 200 with {request:null} or {request:{...full doc...}} as expected.
+
+      GET /api/admin/deletion-requests:
+        • 401 unauth, 403 non-admin, 200 admin.
+        • All status filters (pending/approved/rejected/all) work correctly.
+
+      POST /api/admin/deletion-requests/{id}/approve:
+        • 401/403 properly guarded, 404 on bogus id.
+        • Valid → 200, executes _execute_account_deletion cascade (user gone, codes anonymized — already verified in earlier RGPD task).
+        • Already-processed → 400 with French status detail.
+
+      POST /api/admin/deletion-requests/{id}/reject:
+        • 401/403 properly guarded, 404 on bogus id, 400 on empty/missing reason.
+        • Valid → 200, persists status='rejected', admin_note=reason, processed_at, processed_by.
+        • User NOT deleted (can still login). Already-processed → 400.
+
+      POST /api/billing/portal:
+        • 401 unauth, 404 for fresh user (no stripe_customer_id).
+        • Admin (has stripe_customer_id from earlier subscription/webhook tests) → 200 with URL pointing to billing.stripe.com — Stripe Customer Portal session created successfully.
+
+      No critical issues. Backend logs clean — only the expected 401/403/400/404 responses for negative tests. Endpoints are production-ready. No frontend testing performed (out of scope).

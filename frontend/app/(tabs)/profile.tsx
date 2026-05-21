@@ -51,29 +51,44 @@ export default function ProfileScreen() {
 
   const deleteAccount = async () => {
     const ok = await confirm({
-      title: "Supprimer mon compte",
+      title: "Demander la suppression",
       message:
-        "Cette action est IRRÉVERSIBLE. Toutes vos données personnelles (compte, codes, déblocages, demandes) seront supprimées définitivement. Pensez à résilier votre abonnement Stripe avant. Continuer ?",
-      confirmText: "Supprimer définitivement",
+        "Cette action enverra une demande à notre équipe qui la traitera sous 30 jours (RGPD Art. 17). Vous serez notifié par email à chaque étape. Pensez à résilier votre abonnement Stripe avant. Continuer ?",
+      confirmText: "Envoyer la demande",
       destructive: true,
       icon: "trash-outline",
     });
     if (!ok) return;
     const ok2 = await confirm({
       title: "Confirmation finale",
-      message: "Êtes-vous absolument sûr ? Cette suppression est définitive et conforme au RGPD.",
-      confirmText: "Oui, supprimer",
+      message: "Êtes-vous sûr de vouloir envoyer cette demande de suppression définitive de compte ?",
+      confirmText: "Oui, envoyer",
       destructive: true,
       icon: "warning-outline",
     });
     if (!ok2) return;
     try {
-      await api("/me", { method: "DELETE" });
-      await logout();
-      showAlert("Compte supprimé", "Toutes vos données ont été effacées. À bientôt !");
-      router.replace("/(tabs)/home");
+      const r = await api<any>("/me", { method: "DELETE" });
+      showAlert(
+        "Demande envoyée",
+        r?.message || "Votre demande a été enregistrée. Vous recevrez un email de confirmation sous 30 jours."
+      );
     } catch (e: any) {
-      showAlert("Erreur", e?.message || "Impossible de supprimer le compte.");
+      showAlert("Erreur", e?.message || "Impossible d'envoyer la demande.");
+    }
+  };
+
+  const openStripePortal = async () => {
+    try {
+      const r = await api<{ url: string }>("/billing/portal", { method: "POST" });
+      if (Platform.OS === "web") {
+        window.location.href = r.url;
+      } else {
+        const WebBrowser = await import("expo-web-browser");
+        await WebBrowser.openBrowserAsync(r.url);
+      }
+    } catch (e: any) {
+      showAlert("Erreur", e?.message || "Impossible d'ouvrir le portail Stripe.");
     }
   };
 
@@ -149,6 +164,14 @@ export default function ProfileScreen() {
             testID="profile-subscription-btn"
             accent={!user.is_subscribed}
           />
+          {user.is_subscribed && (
+            <Item
+              icon="receipt-outline"
+              label="Portail Stripe (factures, moyens de paiement)"
+              onPress={openStripePortal}
+              testID="profile-stripe-portal-btn"
+            />
+          )}
           <Item
             icon="bookmark-outline"
             label="Ma bibliothèque"

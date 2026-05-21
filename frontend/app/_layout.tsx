@@ -8,6 +8,7 @@ import { ConfirmProvider } from "@/src/ui/ConfirmDialog";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { colors } from "@/src/theme";
+import { CookieNotice } from "@/src/ui/CookieNotice";
 
 export default function RootLayout() {
   // Immersive mode on Android: hide the system navigation bar (Home / Back / Recent)
@@ -40,6 +41,7 @@ export default function RootLayout() {
                 animation: "fade",
               }}
             />
+            <CookieNotice />
           </ConfirmProvider>
         </AuthProvider>
       </SafeAreaProvider>

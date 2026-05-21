@@ -133,6 +133,13 @@ export default function AdminDashboard() {
               onPress={() => router.push("/admin/contact")}
               testID="admin-contact-btn"
             />
+            <ActionRow
+              icon="trash-outline"
+              label="Suppressions RGPD"
+              hint="Demandes de suppression de compte à modérer"
+              onPress={() => router.push("/admin/deletion-requests")}
+              testID="admin-deletion-btn"
+            />
           </View>
 
           <Text style={styles.h2}>Top vidéos</Text>
