@@ -473,8 +473,7 @@ agent_communication:
           No 5xx errors observed; backend logs clean. Contact + admin CRUD endpoints are production-ready.
 
 test_plan:
-  current_focus:
-    - "RGPD — DELETE /api/me (right to erasure + cascade)"
+  current_focus: []
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -482,7 +481,31 @@ test_plan:
 agent_communication:
   - agent: "testing"
     message: |
-      ✅ RGPD endpoints partially verified — 1 CRITICAL bug found in cascade logic.
+      ✅ RGPD cascade fix RETEST — ALL 57/57 assertions passed against https://mariagevideo.preview.emergentagent.com/api (see /app/backend_test_rgpd.py).
+
+      DELETE /api/me cascade for unlock_codes — FIX VERIFIED:
+        • Created rgpd_user_30f64c45@example.com, admin-assigned hanifa-et-dali, generated 2 codes via /api/client/codes (B43WW6LG unused, 3BKBJL58 used + bound to device via /weddings/unlock with bound_device_ip/ua/label populated).
+        • After DELETE /api/me (200):
+          - Unused code B43WW6LG: completely deleted from db.unlock_codes.
+          - Used code 3BKBJL58: PRESERVED but ANONYMIZED → owner_user_id='deleted_user', owner_email=None, bound_device_ip=None, bound_device_ua=None, bound_device_label=None.
+          - db.unlock_codes.count({owner_user_id: <user_id>}) == 0.
+          - db.unlock_codes.count({owner_email: <email>}) == 0. NO PII LEFT.
+
+      GET /api/me/export — FIX VERIFIED:
+        • data.codes_created now contains both generated codes (B43WW6LG + 3BKBJL58), each with owner_user_id == test user id. Previously empty.
+        • exported_at ISO, exported_for=email, legal_basis mentions 'RGPD Article 20', all 6 data sub-keys present.
+        • password_hash absent from data.account and from the full JSON payload.
+
+      Sanity checks still PASS:
+        • DELETE /api/me unauth → 401.
+        • DELETE /api/me as last admin → 400 with French detail; admin still in DB.
+        • Cascade verified for user_unlocks, hosting_requests, checkout_sessions, contact_requests (all 0).
+        • Post-delete login → 401.
+
+      No remaining issues on RGPD endpoints. No frontend testing performed (out of scope).
+
+  - agent: "main"
+    message: "RGPD cascade fix applied to /api/me/export and DELETE /api/me — switched from non-existent 'created_by' to actual 'owner_user_id', from 'used_count' to 'current_uses', and added anonymization of owner_email/bound_device_ip/ua/label for used codes. Please retest."
 
       GET /api/me/export — WORKING.
         • 401 without token, 200 with token. Payload contains exported_at (ISO), exported_for (email), legal_basis ('RGPD Article 20 …'), data.{account, video_unlocks, codes_created, hosting_requests, payment_sessions, contact_requests}. password_hash absent from data.account and from full JSON.
@@ -536,16 +559,30 @@ agent_communication:
       
   - task: "RGPD — DELETE /api/me (right to erasure + cascade)"
     implemented: true
-    working: false
+    working: true
     file: "/app/backend/server.py"
-    stuck_count: 1
+    stuck_count: 0
     priority: "high"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          RETEST after cascade fix — ALL 57/57 assertions PASSED against https://mariagevideo.preview.emergentagent.com/api (see /app/backend_test_rgpd.py).
+          • DELETE /api/me unauth → 401 ✅
+          • DELETE /api/me as last admin → 400 "Impossible de supprimer le dernier compte admin…" ; admin still in DB ✅
+          • DELETE /api/me as non-admin test user → 200 {deleted:true, email:…} ✅
+          • Cascade verified: user_unlocks=0, hosting_requests=0, checkout_sessions=0, contact_requests=0 post-delete ✅
+          • UNLOCK_CODES CASCADE NOW WORKS (was the bug):
+              - Repro: created test user rgpd_user_30f64c45@example.com, assigned hanifa-et-dali, generated 2 codes via /api/client/codes (B43WW6LG unused, 3BKBJL58 used + bound to device via /weddings/unlock).
+              - Pre-delete: db.unlock_codes had 2 docs with owner_user_id=<test user id>, used code had bound_device_ip/ua/label populated.
+              - Post-delete: unused code B43WW6LG fully removed (deleted_many path). Used code 3BKBJL58 PRESERVED but ANONYMIZED — owner_user_id='deleted_user', owner_email=None, bound_device_ip=None, bound_device_ua=None, bound_device_label=None. db.unlock_codes.count({owner_user_id:<test user id>}) == 0. db.unlock_codes.count({owner_email:<test user email>}) == 0. No PII remains for the deleted user.
+          • Deleted user cannot login (401) ✅.
+          RGPD Article 17 compliance restored.
       - working: false
         agent: "testing"
         comment: |
-          Tested against https://mariagevideo.preview.emergentagent.com/api (see /app/backend_test_rgpd.py).
+          (Historical — bug since FIXED). Tested against https://mariagevideo.preview.emergentagent.com/api (see /app/backend_test_rgpd.py).
           PASSING aspects:
           • DELETE /api/me without Authorization header → HTTP 401.
           • DELETE /api/me with admin token (last admin) → HTTP 400 with French detail mentioning impossibility to delete the last admin. Admin account remains intact in DB (admin_count unchanged). Verified admin@wedding.fr still queryable afterwards.

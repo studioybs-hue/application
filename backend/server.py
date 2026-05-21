@@ -302,7 +302,7 @@ async def export_my_data(current: dict = Depends(get_current_user)):
     safe_user = {k: v for k, v in current.items() if k != "password_hash"}
 
     unlocks = await db.user_unlocks.find({"user_id": uid}, {"_id": 0}).to_list(1000)
-    codes_created = await db.unlock_codes.find({"created_by": uid}, {"_id": 0}).to_list(1000)
+    codes_created = await db.unlock_codes.find({"owner_user_id": uid}, {"_id": 0}).to_list(1000)
     hostings = await db.hosting_requests.find({"user_id": uid}, {"_id": 0}).to_list(1000)
     checkouts = await db.checkout_sessions.find({"user_id": uid}, {"_id": 0}).to_list(1000)
     contacts = await db.contact_requests.find({"email": current.get("email")}, {"_id": 0}).to_list(1000)
@@ -343,10 +343,17 @@ async def delete_my_account(current: dict = Depends(get_current_user)):
 
     # Cascade deletes (preserve business records by anonymizing where needed)
     await db.user_unlocks.delete_many({"user_id": uid})
-    await db.unlock_codes.delete_many({"created_by": uid, "used_count": 0})
-    # Codes already used: anonymize creator (keep stats but remove personal link)
+    # Unused codes: delete completely. Used codes: anonymize (preserve usage stats but remove PII)
+    await db.unlock_codes.delete_many({"owner_user_id": uid, "current_uses": 0})
     await db.unlock_codes.update_many(
-        {"created_by": uid}, {"$set": {"created_by": "deleted_user"}}
+        {"owner_user_id": uid},
+        {"$set": {
+            "owner_user_id": "deleted_user",
+            "owner_email": None,
+            "bound_device_ip": None,
+            "bound_device_ua": None,
+            "bound_device_label": None,
+        }},
     )
     await db.hosting_requests.delete_many({"user_id": uid})
     await db.checkout_sessions.delete_many({"user_id": uid})
