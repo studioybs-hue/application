@@ -8,7 +8,6 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
-  Alert,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -17,6 +16,19 @@ import { LinearGradient } from "expo-linear-gradient";
 import { colors, spacing, radii } from "@/src/theme";
 import { useAuth } from "@/src/auth/AuthContext";
 import { api } from "@/src/api/client";
+import { storage } from "@/src/utils/storage";
+import { getDeviceId, getDeviceLabel } from "@/src/utils/deviceId";
+import { showAlert } from "@/src/utils/dialog";
+
+const CODES_KEY = "ws_unlocked_codes"; // same key as wedding/[clientId].tsx
+
+async function saveCode(clientId: string, code: string) {
+  const raw = await storage.getItem<string>(CODES_KEY, "{}");
+  let map: Record<string, string> = {};
+  try { map = JSON.parse(raw || "{}"); } catch {}
+  map[clientId] = code;
+  await storage.setItem(CODES_KEY, JSON.stringify(map));
+}
 
 export default function UnlockScreen() {
   const router = useRouter();
@@ -27,17 +39,6 @@ export default function UnlockScreen() {
 
   const submit = async () => {
     setError("");
-    if (!user) {
-      Alert.alert(
-        "Connexion requise",
-        "Vous devez être connecté pour utiliser un code de déblocage.",
-        [
-          { text: "Annuler", style: "cancel" },
-          { text: "Se connecter", onPress: () => router.push("/auth/login") },
-        ]
-      );
-      return;
-    }
     const clean = code.trim().toUpperCase();
     if (clean.length < 4) {
       setError("Code invalide");
@@ -45,14 +46,16 @@ export default function UnlockScreen() {
     }
     setLoading(true);
     try {
+      const device_id = await getDeviceId();
+      const device_label = getDeviceLabel();
       const r = await api<{ ok: boolean; client_id: string; client_name: string; video_count: number }>("/weddings/unlock", {
         method: "POST",
-        body: { code: clean },
+        body: { code: clean, device_id, device_label },
       });
-      Alert.alert("✓ Mariage débloqué", `Vous avez accès aux ${r.video_count} vidéo${r.video_count > 1 ? "s" : ""} de « ${r.client_name} ».`, [
-        { text: "Voir maintenant", onPress: () => router.replace(`/wedding/${r.client_id}`) },
-        { text: "Plus tard", style: "cancel", onPress: () => router.back() },
-      ]);
+      // Persist the code locally so future visits/refresh keep the wedding unlocked.
+      await saveCode(r.client_id, clean);
+      // Go straight to the wedding space — no need for a confirmation modal on web (it would block).
+      router.replace(`/wedding/${r.client_id}`);
     } catch (e: any) {
       setError(e.message || "Code invalide");
     } finally {
@@ -81,6 +84,10 @@ export default function UnlockScreen() {
             <Text style={styles.title}>Code de déblocage</Text>
             <Text style={styles.sub}>
               Entrez le code unique fourni par votre vidéaste pour accéder à votre film de mariage.
+              {"\n"}
+              <Text style={{ color: colors.textDisabled, fontSize: 12, fontStyle: "italic" }}>
+                Pas besoin de compte — utilisable sur 3 appareils maximum.
+              </Text>
             </Text>
 
             <View style={styles.codeField}>
