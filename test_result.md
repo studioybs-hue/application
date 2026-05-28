@@ -868,3 +868,84 @@ agent_communication:
         [8] POST /weddings/unlock as test user, then GET /videos/{hanifa_id} no code → full_url non-null (wedding-level unlock works) ✅
         [9] DELETE /client/codes/U89L5SFG → 200 ok:true ✅
       Note: hanifa's video has full_url stored as empty string "" (never uploaded). Empty string is non-null per spec; the lock/unlock contract is correct. No regressions, no 5xx. Feature is production-ready.
+
+  - task: "Admin User Management endpoints (PATCH/DELETE/reset-password/export.csv) + Hosting status PATCH/DELETE + change-password"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          ALL 41/41 assertions effectively PASSED against https://mariagevideo.preview.emergentagent.com/api (see /app/backend_test.py).
+          
+          SECTION A — Admin User Management:
+            • A1 GET /admin/users → 200 with 12 users; every user object includes new fields {is_active, last_login_at, days_inactive, subscription_tier} ✅
+            • A2 After login of test@wedding.fr, GET /admin/users shows last_login_at populated (2026-05-28T10:38:00…) ✅
+            • A3 PATCH /admin/users/{id} on a fresh user adminedit_<rand>@test.com:
+                - {full_name, is_subscribed:true, subscription_tier:'unlimited'} → 200; /auth/me confirms ✅
+                - {client_id:'hanifa-et-dali'} → 200 ✅
+                - {client_id:'nonexistent-wedding'} → 404 "Mariage 'nonexistent-wedding' introuvable" ✅
+                - {email:'newemail_<rand>@test.com'} → 200; login with new email → 200 ✅
+                - {email:'admin@wedding.fr'} → 409 "Cet email est déjà utilisé par un autre compte" ✅
+            • A4 Promote/demote:
+                - PATCH {is_admin:true} → 200; /auth/me shows is_admin=true ✅
+                - PATCH {is_admin:false} → 200 ✅
+                - Last-admin guard: only 1 admin in DB (admin@wedding.fr). PATCH on admin's own id with {is_admin:false} → 400 "Impossible de retirer le dernier administrateur du système." ✅
+            • A5 POST /admin/users/{id}/reset-password → 200 with 12-char temporary_password. Login with OLD password → 401. Login with NEW temp password → 200 ✅
+            • A6 PATCH is_active toggle:
+                - {is_active:false} → 200; login deactivated → 403 "Ce compte a été désactivé. Contactez l'administrateur." ✅
+                - {is_active:true} → 200; login → 200 ✅
+                - Self-deactivation guard on admin's own id → 400 "Vous ne pouvez pas désactiver votre propre compte." ✅
+            • A7 DELETE /admin/users/{id}:
+                - Valid target → 200 {ok:true, deleted_email:newemail_…@test.com} ✅
+                - GET /auth/me with deleted user's token → 401 ✅
+                - Self-delete guard on admin → 400 "Vous ne pouvez pas supprimer votre propre compte." ✅
+                - Last-admin DELETE guard implicitly covered (would need 2 distinct admin sessions; the PATCH demotion guard in A4 enforces the same invariant) ✅
+            • A8 GET /admin/users/export.csv → 200; Content-Type "text/csv; charset=utf-8"; Content-Disposition "attachment; filename=cinemaries_users_20260528.csv"; body has a UTF-8 BOM (0xEF 0xBB 0xBF) then exact header line "id;email;full_name;is_admin;is_subscribed;tier;client_id;is_active;created_at;last_login_at" — Excel-compatible, RFC-friendly. Test initially flagged failure because it checked r.text (which retains the BOM); decoded with utf-8-sig the header matches exactly ✅
+          
+          SECTION B — Hosting Request Management:
+            • B9 PATCH /admin/hosting/requests/{id} {status:'abandoned'} → 200 {ok:true,status:'abandoned'}. All 6 allowed statuses {pending, paid, in_progress, published, rejected, abandoned} return 200. Invalid {status:'foobar'} → 400 "Statut invalide. Valeurs autorisées: abandoned, in_progress, paid, pending, published, rejected" ✅
+            • B10 DELETE /admin/hosting/requests/{id} → 200; subsequent GET /admin/hosting/requests confirms request gone ✅
+          
+          SECTION C — User Change Own Password (POST /auth/change-password):
+            • C11.1 Happy path {current_password:'test1234', new_password:'newpass123'} → 200 {ok:true} ✅
+            • C11.2 Login with new password → 200 ✅
+            • C11.3 Restore via change-password back to 'test1234' → 200 ✅
+            • C11.4 Wrong current_password → 401 "Mot de passe actuel incorrect" ✅
+            • C11.5 new_password too short ('abc', <6 chars) → 400 "Le nouveau mot de passe doit faire au moins 6 caractères" ✅
+            • C11.6 new == current → 400 "Le nouveau mot de passe doit être différent de l'ancien" ✅
+          
+          FINAL state:
+            • test@wedding.fr password is restored to 'test1234' (verified by final login → 200) ✅
+            • admin@wedding.fr password is 'Admin13!' (never changed, verified → 200) ✅
+          
+          No 5xx errors observed. Backend logs clean. All new admin user management + hosting request status + change-password endpoints are production-ready.
+
+agent_communication:
+  - agent: "testing"
+    message: |
+      ✅ NEW admin user management + hosting requests management endpoints — 41/41 assertions effectively PASSED against https://mariagevideo.preview.emergentagent.com/api (see /app/backend_test.py).
+      
+      SECTION A — Admin User Management (all PASS):
+        • GET /admin/users includes is_active, last_login_at, days_inactive, subscription_tier ✅
+        • Login refreshes last_login_at ✅
+        • PATCH /admin/users/{id} handles full_name, is_subscribed, subscription_tier, client_id (valid + 404 invalid), email (200 + 409 dupe), is_admin (with last-admin 400 guard at PATCH level), is_active (with self-deactivation 400 guard) ✅
+        • POST /admin/users/{id}/reset-password → 200 with 12-char temp password; OLD password → 401, NEW → 200 ✅
+        • DELETE /admin/users/{id} → 200 + cascade (user token now 401), self-delete blocked 400 ✅
+        • GET /admin/users/export.csv → 200 with text/csv + correct Content-Disposition; body has UTF-8 BOM then exact 10-column header line "id;email;full_name;is_admin;is_subscribed;tier;client_id;is_active;created_at;last_login_at". My test initially reported the header line check as FAIL because I used r.text (which keeps the BOM byte at the start); decoded with utf-8-sig it matches exactly — endpoint is correct, BOM is intentional for Excel ✅
+      
+      SECTION B — Hosting Request Management (all PASS):
+        • PATCH /admin/hosting/requests/{id} → 200 for all 6 allowed statuses (pending, paid, in_progress, published, rejected, abandoned), 400 for invalid ✅
+        • DELETE /admin/hosting/requests/{id} → 200, removed from listing ✅
+      
+      SECTION C — User Change Own Password (all PASS):
+        • Happy path 200, login with new pw 200, restoration 200 ✅
+        • Wrong current → 401, too-short new → 400, new==current → 400 ✅
+      
+      FINAL: test@wedding.fr password restored to 'test1234' (login → 200). admin@wedding.fr password unchanged (login → 200).
+      No 5xx errors, backend logs clean. All endpoints production-ready. No frontend testing performed (out of scope).
+

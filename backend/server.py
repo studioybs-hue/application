@@ -288,6 +288,11 @@ async def login(body: LoginRequest):
     u = await db.users.find_one({"email": body.email.lower()}, {"_id": 0})
     if not u or not verify_password(body.password, u.get("password_hash", "")):
         raise HTTPException(status_code=401, detail="Identifiants incorrects")
+    if u.get("is_active") is False:
+        raise HTTPException(status_code=403, detail="Ce compte a été désactivé. Contactez l'administrateur.")
+    # Track last login for inactivity-based admin filtering
+    await db.users.update_one({"id": u["id"]}, {"$set": {"last_login_at": utcnow()}})
+    u["last_login_at"] = utcnow()
     token = create_jwt(u["id"])
     return TokenResponse(access_token=token, user=user_to_public(u))
 
@@ -295,6 +300,27 @@ async def login(body: LoginRequest):
 @api_router.get("/auth/me", response_model=UserPublic)
 async def me(current: dict = Depends(get_current_user)):
     return user_to_public(current)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+@api_router.post("/auth/change-password")
+async def change_password(body: ChangePasswordRequest, current: dict = Depends(get_current_user)):
+    """User changes their OWN password. Requires the current password for verification."""
+    if not verify_password(body.current_password, current.get("password_hash", "")):
+        raise HTTPException(status_code=401, detail="Mot de passe actuel incorrect")
+    if len(body.new_password) < 6:
+        raise HTTPException(status_code=400, detail="Le nouveau mot de passe doit faire au moins 6 caractères")
+    if body.new_password == body.current_password:
+        raise HTTPException(status_code=400, detail="Le nouveau mot de passe doit être différent de l'ancien")
+    await db.users.update_one({"id": current["id"]}, {"$set": {
+        "password_hash": hash_password(body.new_password),
+        "password_changed_at": utcnow(),
+    }})
+    return {"ok": True, "message": "Mot de passe mis à jour avec succès"}
 
 
 # --- RGPD: Export & Delete ---
@@ -2035,19 +2061,193 @@ async def admin_list_users(_: dict = Depends(require_admin)):
     pipe = [{"$group": {"_id": "$user_id", "count": {"$sum": 1}}}]
     counts = {x["_id"]: x["count"] for x in await db.user_unlocks.aggregate(pipe).to_list(2000)}
     out = []
+    now = utcnow()
     for u in users:
+        last = u.get("last_login_at")
+        days_inactive = None
+        if last:
+            try:
+                days_inactive = max(0, (now - last).days)
+            except Exception:
+                days_inactive = None
         out.append({
             "id": u["id"],
             "email": u["email"],
             "full_name": u.get("full_name", ""),
             "is_subscribed": u.get("is_subscribed", False),
             "is_admin": u.get("is_admin", False),
-            "subscription_tier": u.get("subscription_tier"),
+            "is_active": u.get("is_active", True),
+            "subscription_tier": u.get("subscription_tier") or u.get("tier"),
             "client_id": u.get("client_id"),
             "unlocks": counts.get(u["id"], 0),
             "created_at": u.get("created_at").isoformat() if u.get("created_at") else None,
+            "last_login_at": last.isoformat() if last else None,
+            "days_inactive": days_inactive,
         })
     return {"users": out}
+
+
+class AdminUserUpdate(BaseModel):
+    email: Optional[str] = None
+    full_name: Optional[str] = None
+    is_admin: Optional[bool] = None
+    is_subscribed: Optional[bool] = None
+    is_active: Optional[bool] = None
+    subscription_tier: Optional[str] = None  # "basic" | "unlimited" | None
+    client_id: Optional[str] = None
+
+
+@api_router.patch("/admin/users/{user_id}")
+async def admin_update_user(user_id: str, body: AdminUserUpdate, current: dict = Depends(require_admin)):
+    """Update any field of any user. Admins can promote/demote, change email, tier, etc.
+    Safeguard: cannot demote the LAST remaining admin (system must always have at least 1)."""
+    target = await db.users.find_one({"id": user_id}, {"_id": 0})
+    if not target:
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+
+    updates: dict = {}
+    if body.email is not None:
+        new_email = body.email.strip().lower()
+        if not new_email or "@" not in new_email:
+            raise HTTPException(status_code=400, detail="Email invalide")
+        # check email is not taken by someone else
+        existing = await db.users.find_one({"email": new_email, "id": {"$ne": user_id}}, {"_id": 0, "id": 1})
+        if existing:
+            raise HTTPException(status_code=409, detail="Cet email est déjà utilisé par un autre compte")
+        updates["email"] = new_email
+    if body.full_name is not None:
+        updates["full_name"] = body.full_name.strip()[:120]
+    if body.is_admin is not None:
+        # If demoting an admin → make sure at least 1 admin remains
+        if target.get("is_admin") and body.is_admin is False:
+            other_admins = await db.users.count_documents({"is_admin": True, "id": {"$ne": user_id}})
+            if other_admins == 0:
+                raise HTTPException(status_code=400, detail="Impossible de retirer le dernier administrateur du système.")
+        updates["is_admin"] = bool(body.is_admin)
+    if body.is_subscribed is not None:
+        updates["is_subscribed"] = bool(body.is_subscribed)
+    if body.is_active is not None:
+        # prevent self-deactivation
+        if user_id == current["id"] and body.is_active is False:
+            raise HTTPException(status_code=400, detail="Vous ne pouvez pas désactiver votre propre compte.")
+        updates["is_active"] = bool(body.is_active)
+    if body.subscription_tier is not None:
+        if body.subscription_tier not in (None, "", "basic", "unlimited"):
+            raise HTTPException(status_code=400, detail="Tier invalide (basic / unlimited / vide)")
+        updates["subscription_tier"] = body.subscription_tier or None
+        updates["tier"] = body.subscription_tier or None  # backward compat
+    if body.client_id is not None:
+        if body.client_id == "":
+            updates["client_id"] = None
+        else:
+            # verify wedding exists
+            all_v = await db.videos.find({}, {"_id": 0, "client_id": 1, "title": 1}).to_list(500)
+            slugs = {(v.get("client_id") or slugify(v.get("title", ""))) for v in all_v}
+            if body.client_id not in slugs:
+                raise HTTPException(status_code=404, detail=f"Mariage '{body.client_id}' introuvable")
+            updates["client_id"] = body.client_id
+
+    if not updates:
+        raise HTTPException(status_code=400, detail="Aucun champ à modifier")
+
+    updates["updated_at"] = utcnow()
+    await db.users.update_one({"id": user_id}, {"$set": updates})
+    updated = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
+    logging.info(f"[admin-update] {current.get('email')} → modified user {target.get('email')} fields={list(updates.keys())}")
+    return {"ok": True, "user": user_to_public(updated)}
+
+
+def _gen_temp_password(length: int = 12) -> str:
+    import secrets, string
+    alphabet = string.ascii_letters + string.digits
+    # Always include at least 1 upper, 1 lower, 1 digit
+    pwd = [
+        secrets.choice(string.ascii_uppercase),
+        secrets.choice(string.ascii_lowercase),
+        secrets.choice(string.digits),
+    ]
+    pwd += [secrets.choice(alphabet) for _ in range(length - 3)]
+    secrets.SystemRandom().shuffle(pwd)
+    return "".join(pwd)
+
+
+@api_router.post("/admin/users/{user_id}/reset-password")
+async def admin_reset_password(user_id: str, current: dict = Depends(require_admin)):
+    """Generate a random temporary password and store its hash. The plaintext password
+    is returned ONCE to the admin so they can transmit it to the user (WhatsApp/email)."""
+    target = await db.users.find_one({"id": user_id}, {"_id": 0})
+    if not target:
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+    new_pw = _gen_temp_password(12)
+    await db.users.update_one({"id": user_id}, {"$set": {
+        "password_hash": hash_password(new_pw),
+        "password_reset_at": utcnow(),
+        "password_reset_by": current["id"],
+    }})
+    logging.info(f"[admin-reset-pwd] {current.get('email')} → reset password for {target.get('email')}")
+    return {
+        "ok": True,
+        "email": target.get("email"),
+        "temporary_password": new_pw,
+        "message": "Communiquez ce mot de passe temporaire au client. Il devra le modifier après connexion."
+    }
+
+
+@api_router.delete("/admin/users/{user_id}")
+async def admin_delete_user(user_id: str, current: dict = Depends(require_admin)):
+    """Permanently delete a user and all their related data (unlocks, codes, hosting requests).
+    Safeguards: cannot delete self, cannot delete last admin."""
+    target = await db.users.find_one({"id": user_id}, {"_id": 0})
+    if not target:
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+    if user_id == current["id"]:
+        raise HTTPException(status_code=400, detail="Vous ne pouvez pas supprimer votre propre compte. Demandez à un autre administrateur.")
+    if target.get("is_admin"):
+        other_admins = await db.users.count_documents({"is_admin": True, "id": {"$ne": user_id}})
+        if other_admins == 0:
+            raise HTTPException(status_code=400, detail="Impossible de supprimer le dernier administrateur du système.")
+
+    # Cascade delete
+    await db.user_unlocks.delete_many({"user_id": user_id})
+    await db.unlock_codes.update_many({"owner_user_id": user_id}, {"$set": {"is_active": False, "owner_revoked_at": utcnow()}})
+    await db.hosting_requests.delete_many({"user_id": user_id})
+    await db.deletion_requests.delete_many({"user_id": user_id})
+    await db.checkout_sessions.delete_many({"user_id": user_id})
+    await db.users.delete_one({"id": user_id})
+    logging.info(f"[admin-delete-user] {current.get('email')} → deleted user {target.get('email')}")
+    return {"ok": True, "deleted_email": target.get("email")}
+
+
+@api_router.get("/admin/users/export.csv")
+async def admin_users_export_csv(_: dict = Depends(require_admin)):
+    """Export the full user directory as CSV (for archives / accounting)."""
+    import csv, io
+    users = await db.users.find({}, {"_id": 0, "password_hash": 0}).sort("created_at", -1).to_list(5000)
+    buf = io.StringIO()
+    w = csv.writer(buf, delimiter=";")
+    w.writerow([
+        "id", "email", "full_name", "is_admin", "is_subscribed", "tier",
+        "client_id", "is_active", "created_at", "last_login_at",
+    ])
+    for u in users:
+        w.writerow([
+            u.get("id", ""),
+            u.get("email", ""),
+            u.get("full_name", ""),
+            "yes" if u.get("is_admin") else "",
+            "yes" if u.get("is_subscribed") else "",
+            u.get("subscription_tier") or u.get("tier") or "",
+            u.get("client_id") or "",
+            "no" if u.get("is_active") is False else "yes",
+            u.get("created_at").isoformat() if u.get("created_at") else "",
+            u.get("last_login_at").isoformat() if u.get("last_login_at") else "",
+        ])
+    csv_bytes = buf.getvalue().encode("utf-8-sig")
+    return Response(
+        content=csv_bytes,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename=cinemaries_users_{utcnow().strftime('%Y%m%d')}.csv"},
+    )
 
 
 @api_router.post("/admin/users/{user_id}/assign-wedding")
@@ -2139,6 +2339,37 @@ async def admin_reject_hosting(request_id: str, _: dict = Depends(require_admin)
     if not r:
         raise HTTPException(status_code=404, detail="Demande introuvable")
     await db.hosting_requests.update_one({"id": request_id}, {"$set": {"status": "rejected"}})
+    return {"ok": True}
+
+
+class HostingStatusUpdate(BaseModel):
+    status: str  # 'pending', 'paid', 'in_progress', 'published', 'rejected', 'abandoned'
+
+
+@api_router.patch("/admin/hosting/requests/{request_id}")
+async def admin_update_hosting_status(request_id: str, body: HostingStatusUpdate, _: dict = Depends(require_admin)):
+    """Manually change the status of a hosting request (e.g. mark as abandoned without deleting)."""
+    allowed = {"pending", "paid", "in_progress", "published", "rejected", "abandoned"}
+    if body.status not in allowed:
+        raise HTTPException(status_code=400, detail=f"Statut invalide. Valeurs autorisées: {', '.join(sorted(allowed))}")
+    r = await db.hosting_requests.find_one({"id": request_id}, {"_id": 0})
+    if not r:
+        raise HTTPException(status_code=404, detail="Demande introuvable")
+    await db.hosting_requests.update_one(
+        {"id": request_id},
+        {"$set": {"status": body.status, "status_changed_at": utcnow()}},
+    )
+    return {"ok": True, "status": body.status}
+
+
+@api_router.delete("/admin/hosting/requests/{request_id}")
+async def admin_delete_hosting_request(request_id: str, _: dict = Depends(require_admin)):
+    """Permanently delete a hosting request (typically for unfulfilled / abandoned ones).
+    Files in uploads/ftp_drop/ tied to the request are NOT deleted automatically."""
+    r = await db.hosting_requests.find_one({"id": request_id}, {"_id": 0})
+    if not r:
+        raise HTTPException(status_code=404, detail="Demande introuvable")
+    await db.hosting_requests.delete_one({"id": request_id})
     return {"ok": True}
 
 
