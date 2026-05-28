@@ -36,6 +36,12 @@ STRIPE_WEBHOOK_SECRET = os.environ.get('STRIPE_WEBHOOK_SECRET', '')
 STRIPE_PRICE_AMOUNT = int(os.environ.get('STRIPE_PRICE_AMOUNT', '199'))
 STRIPE_PRICE_AMOUNT_UNLIMITED = int(os.environ.get('STRIPE_PRICE_AMOUNT_UNLIMITED', '230'))
 STRIPE_PRICE_CURRENCY = os.environ.get('STRIPE_PRICE_CURRENCY', 'eur')
+# Optional pre-created Stripe Price IDs (created via scripts/create_stripe_products.py)
+# When set, the backend uses these Price IDs in Checkout sessions instead of inline price_data.
+# Benefits: proper product catalog, clean receipts, accurate Stripe analytics.
+STRIPE_PRICE_ID_ANNUAL_COMMIT = os.environ.get('STRIPE_PRICE_ID_ANNUAL_COMMIT', '').strip()
+STRIPE_PRICE_ID_ANNUAL_FREE = os.environ.get('STRIPE_PRICE_ID_ANNUAL_FREE', '').strip()
+STRIPE_PRICE_ID_MONTHLY_FREE = os.environ.get('STRIPE_PRICE_ID_MONTHLY_FREE', '').strip()
 # Plan limits: Basic = 3 codes max, Unlimited = unlimited codes
 BASIC_MAX_CODES = int(os.environ.get('BASIC_MAX_CODES', '3'))
 # Max devices that a single code can be activated on (1 code = up to N devices)
@@ -155,6 +161,7 @@ PLANS = {
         "interval": "year",
         "tier": "basic",
         "engagement": True,
+        "price_id": STRIPE_PRICE_ID_ANNUAL_COMMIT,
     },
     "annual_free": {
         "label": "Premium Annuel — Sans engagement",
@@ -162,6 +169,7 @@ PLANS = {
         "interval": "year",
         "tier": "unlimited",
         "engagement": False,
+        "price_id": STRIPE_PRICE_ID_ANNUAL_FREE,
     },
     "monthly_free": {
         "label": "Premium Mensuel — Sans engagement",
@@ -169,6 +177,7 @@ PLANS = {
         "interval": "month",
         "tier": "unlimited",
         "engagement": False,
+        "price_id": STRIPE_PRICE_ID_MONTHLY_FREE,
     },
 }
 
@@ -1602,11 +1611,14 @@ async def create_checkout(body: CheckoutRequest, current: dict = Depends(get_cur
         interval = plan_cfg["interval"]
         product_name = "CINÉMARIÉS — " + plan_cfg["label"]
         tier = plan_cfg["tier"]
+        price_id = plan_cfg.get("price_id", "")
 
-        session = stripe.checkout.Session.create(
-            mode="subscription",
-            customer=customer_id,
-            line_items=[{
+        # Prefer pre-created Stripe Price ID (clean catalog + analytics) when set,
+        # otherwise fall back to inline price_data (legacy behavior).
+        if price_id:
+            line_item = {"price": price_id, "quantity": 1}
+        else:
+            line_item = {
                 "price_data": {
                     "currency": STRIPE_PRICE_CURRENCY,
                     "product_data": {"name": product_name},
@@ -1614,7 +1626,12 @@ async def create_checkout(body: CheckoutRequest, current: dict = Depends(get_cur
                     "unit_amount": price_amount,
                 },
                 "quantity": 1,
-            }],
+            }
+
+        session = stripe.checkout.Session.create(
+            mode="subscription",
+            customer=customer_id,
+            line_items=[line_item],
             success_url=success_url,
             cancel_url=cancel_url,
             metadata={"user_id": current["id"], "tier": tier, "plan": plan_code, "engagement": "1" if plan_cfg.get("engagement") else "0"},
