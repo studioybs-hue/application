@@ -2514,7 +2514,35 @@ async def on_start():
     await db.users.create_index("email", unique=True)
     await db.videos.create_index("id", unique=True)
     await db.unlock_codes.create_index("code", unique=True)
-    await db.user_unlocks.create_index([("user_id", 1), ("video_id", 1)], unique=True)
+    # user_unlocks: drop legacy strict index that breaks wedding-level docs
+    # (multiple wedding-level docs per user have video_id=null and clash).
+    try:
+        existing_indexes = await db.user_unlocks.index_information()
+        for name, info in existing_indexes.items():
+            keys = info.get("key", [])
+            if (
+                name != "_id_"
+                and info.get("unique")
+                and keys == [("user_id", 1), ("video_id", 1)]
+                and not info.get("partialFilterExpression")
+            ):
+                await db.user_unlocks.drop_index(name)
+                logging.info(f"[startup] Dropped legacy strict unique index '{name}' on user_unlocks")
+    except Exception as e:
+        logging.warning(f"[startup] user_unlocks legacy index cleanup skipped: {e}")
+    # New partial unique index: only enforce uniqueness for VIDEO-level unlocks
+    # (video_id present). Wedding-level docs (video_id null) can coexist freely.
+    await db.user_unlocks.create_index(
+        [("user_id", 1), ("video_id", 1)],
+        unique=True,
+        partialFilterExpression={"video_id": {"$type": "string"}},
+        name="user_unlocks_video_unique",
+    )
+    # Helper index for wedding-level lookups (not unique).
+    await db.user_unlocks.create_index(
+        [("user_id", 1), ("client_id", 1)],
+        name="user_unlocks_wedding_lookup",
+    )
     await _seed()
     await _seed_admin()
 
