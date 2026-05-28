@@ -3576,9 +3576,250 @@ async def user_unread_count(current=Depends(get_current_user)):
     return {"unread": int(total)}
 
 
+# ==========================================================================
+# QUOTE REQUESTS (Devis) — Public form + Admin management
+# ==========================================================================
+# Collection: db.quote_requests {
+#   id, status, created_at, updated_at,
+#   wedding_date, location, guests_count, ceremony_types[],
+#   coverage_items[], options_items[], deliverables_items[],
+#   custom_message,
+#   contact_name, partner_name, email, phone, source, accepted_terms,
+#   admin_notes,
+#   computed_total_min (cents)
+# }
+
+ALLOWED_QUOTE_STATUSES = {"new", "in_progress", "sent", "accepted", "refused", "archived"}
+
+# Source of truth for the items + their prices (only some have prices on creativindustry.com)
+QUOTE_ITEMS_CATALOG = {
+    "couverture": [
+        {"id": "prep_mariee", "label": "Préparatifs Mariée", "price": 0},
+        {"id": "prep_marie", "label": "Préparatifs Marié", "price": 0},
+        {"id": "cer_civile", "label": "Cérémonie Civile", "price": 0},
+        {"id": "cer_religieuse", "label": "Cérémonie Religieuse", "price": 0},
+        {"id": "cer_laique", "label": "Cérémonie Laïque", "price": 0},
+        {"id": "vin_honneur", "label": "Vin d'honneur", "price": 0},
+        {"id": "soiree", "label": "Soirée & Réception", "price": 350},
+        {"id": "maoulid", "label": "Maoulid", "price": 0},
+        {"id": "oukoumbi", "label": "Oukoumbi", "price": 0},
+        {"id": "mlazomoina", "label": "mlazomoina", "price": 0},
+        {"id": "mtaho", "label": "mtaho", "price": 0},
+        {"id": "henne", "label": "henné", "price": 0},
+        {"id": "photographe_journees", "label": "Photographe journées", "price": 0},
+    ],
+    "options": [
+        {"id": "drone", "label": "Drone", "price": 400},
+        {"id": "seance_couple", "label": "Séance Couple", "price": 300},
+        {"id": "photobooth", "label": "Photobooth", "price": 450},
+        {"id": "livre_or", "label": "Livre d'or numérique", "price": 200},
+    ],
+    "livrables": [
+        {"id": "film_teaser", "label": "Film Teaser 3min", "price": 300},
+        {"id": "album_photo", "label": "Album Photo 30 pages", "price": 400},
+    ],
+}
+
+
+def _item_label(category: str, item_id: str) -> Optional[dict]:
+    for it in QUOTE_ITEMS_CATALOG.get(category, []):
+        if it["id"] == item_id:
+            return it
+    return None
+
+
+class QuoteCreate(BaseModel):
+    wedding_date: Optional[str] = None
+    location: Optional[str] = ""
+    guests_count: Optional[int] = None
+    ceremony_types: Optional[List[str]] = None
+    coverage_items: Optional[List[str]] = None
+    options_items: Optional[List[str]] = None
+    deliverables_items: Optional[List[str]] = None
+    custom_message: Optional[str] = ""
+    contact_name: str
+    partner_name: Optional[str] = ""
+    email: EmailStr
+    phone: str
+    source: Optional[str] = ""
+    accepted_terms: bool = False
+
+
+class QuoteStatusUpdate(BaseModel):
+    status: Optional[str] = None
+    admin_notes: Optional[str] = None
+
+
+@api_router.get("/devis/catalog")
+async def get_quote_catalog():
+    """Public: returns the catalog of items the user can pick."""
+    return {"catalog": QUOTE_ITEMS_CATALOG}
+
+
+@api_router.post("/devis")
+async def create_quote_request(body: QuoteCreate, current=Depends(get_optional_user)):
+    if not body.accepted_terms:
+        raise HTTPException(status_code=400, detail="Vous devez accepter le traitement de vos données (RGPD).")
+    if not body.email or not body.phone or not body.contact_name:
+        raise HTTPException(status_code=400, detail="Nom, email et téléphone sont obligatoires.")
+
+    coverage = body.coverage_items or []
+    options = body.options_items or []
+    livrables = body.deliverables_items or []
+    if not coverage and not options and not livrables:
+        raise HTTPException(status_code=400, detail="Sélectionnez au moins une prestation.")
+
+    # Resolve labels + min total
+    def resolve(cat: str, ids: List[str]) -> List[dict]:
+        out = []
+        for i in ids:
+            it = _item_label(cat, i)
+            if it:
+                out.append({"id": it["id"], "label": it["label"], "price": it["price"]})
+        return out
+
+    coverage_full = resolve("couverture", coverage)
+    options_full = resolve("options", options)
+    livrables_full = resolve("livrables", livrables)
+    computed_total_min = sum((x.get("price") or 0) for x in (coverage_full + options_full + livrables_full))
+
+    quote_id = str(uuid.uuid4())
+    now = utcnow()
+    doc = {
+        "id": quote_id,
+        "status": "new",
+        "user_id": current["id"] if current else None,
+        "wedding_date": body.wedding_date or "",
+        "location": (body.location or "")[:200],
+        "guests_count": body.guests_count,
+        "ceremony_types": body.ceremony_types or [],
+        "coverage_items": coverage_full,
+        "options_items": options_full,
+        "deliverables_items": livrables_full,
+        "custom_message": (body.custom_message or "")[:4000],
+        "contact_name": body.contact_name[:120],
+        "partner_name": (body.partner_name or "")[:120],
+        "email": body.email.lower(),
+        "phone": body.phone[:40],
+        "source": (body.source or "")[:80],
+        "accepted_terms": True,
+        "admin_notes": "",
+        "computed_total_min": computed_total_min,
+        "created_at": now,
+        "updated_at": now,
+    }
+    await db.quote_requests.insert_one(doc)
+
+    # Build recap for the email
+    def format_items_html(items: List[dict]) -> str:
+        if not items:
+            return "<li><em>Aucun</em></li>"
+        out = []
+        for it in items:
+            price_str = f" — <strong>{it['price']}€</strong>" if it.get("price") else ""
+            out.append(f"<li>{it['label']}{price_str}</li>")
+        return "".join(out)
+
+    couple_line = body.partner_name and f"{body.contact_name} & {body.partner_name}" or body.contact_name
+    total_line = f"<p style='color:#D4AF37;font-weight:bold;font-size:16px'>Total estimé minimum : {computed_total_min}€</p>" if computed_total_min else ""
+
+    admin_html = render_email(
+        title=f"📝 Nouvelle demande de devis — {couple_line}",
+        body_html=(
+            f"<p><strong>Couple :</strong> {couple_line}</p>"
+            f"<p><strong>Date du mariage :</strong> {body.wedding_date or 'À définir'}</p>"
+            f"<p><strong>Lieu :</strong> {body.location or '-'}</p>"
+            f"<p><strong>Nombre d'invités :</strong> {body.guests_count or '-'}</p>"
+            f"<p><strong>Email :</strong> <a href='mailto:{body.email}' style='color:#D4AF37'>{body.email}</a></p>"
+            f"<p><strong>Téléphone :</strong> <a href='tel:{body.phone}' style='color:#D4AF37'>{body.phone}</a></p>"
+            f"<p><strong>Comment nous a-t-il connu :</strong> {body.source or '-'}</p>"
+            f"<hr style='border-color:#333'/>"
+            f"<h3 style='color:#D4AF37'>🎬 Couverture</h3><ul style='color:#F5F1E8'>{format_items_html(coverage_full)}</ul>"
+            f"<h3 style='color:#D4AF37'>✨ Options</h3><ul style='color:#F5F1E8'>{format_items_html(options_full)}</ul>"
+            f"<h3 style='color:#D4AF37'>🎁 Livrables</h3><ul style='color:#F5F1E8'>{format_items_html(livrables_full)}</ul>"
+            f"{total_line}"
+            + (f"<hr style='border-color:#333'/><h3 style='color:#D4AF37'>💬 Message du couple</h3><p style='background:#0A0A0A;padding:12px;border-radius:6px;color:#F5F1E8'>{body.custom_message}</p>" if body.custom_message else "")
+        ),
+        cta_label="Voir dans l'admin",
+        cta_url=f"{APP_PUBLIC_URL.rstrip('/')}/admin/devis/{quote_id}",
+    )
+
+    client_html = render_email(
+        title="✓ Nous avons bien reçu votre demande",
+        body_html=(
+            f"<p>Bonjour {body.contact_name},</p>"
+            f"<p>Merci de votre confiance ! Nous avons bien reçu votre demande de devis pour votre mariage{(' du ' + body.wedding_date) if body.wedding_date else ''}.</p>"
+            f"<p>Notre équipe étudie votre projet et vous recontactera <strong style='color:#D4AF37'>sous 48 heures</strong> pour vous proposer une formule personnalisée.</p>"
+            f"<p style='color:#9A9A9A;font-size:12px'>Si votre demande est urgente, vous pouvez nous joindre au <strong>07 49 20 89 22</strong>.</p>"
+            f"<p style='color:#9A9A9A;font-size:12px;margin-top:24px'>À très vite,<br/>L'équipe CINÉMARIÉS / CREATIVINDUSTRY</p>"
+        ),
+        cta_label="Visiter notre site",
+        cta_url=APP_PUBLIC_URL or "https://cinemaries.fr",
+    )
+
+    # Send emails (best-effort)
+    admin_to = os.environ.get("ADMIN_NOTIFY_EMAIL") or os.environ.get("SMTP_FROM_EMAIL") or "contact@creativindustry.com"
+    try:
+        await send_email(admin_to, f"📝 Devis — {couple_line}", admin_html)
+    except Exception as e:
+        logging.warning(f"[devis] admin email failed: {e}")
+    try:
+        await send_email(body.email, "✓ Devis CINÉMARIÉS reçu", client_html)
+    except Exception as e:
+        logging.warning(f"[devis] client confirmation email failed: {e}")
+
+    doc_ret = {**doc}
+    doc_ret.pop("_id", None)
+    return {"quote": doc_ret}
+
+
+@api_router.get("/admin/devis")
+async def admin_list_devis(status: Optional[str] = None, _: dict = Depends(require_admin)):
+    q: dict = {}
+    if status and status in ALLOWED_QUOTE_STATUSES:
+        q["status"] = status
+    quotes = await db.quote_requests.find(q, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    # Counts
+    pipeline = [{"$group": {"_id": "$status", "count": {"$sum": 1}}}]
+    counts_arr = await db.quote_requests.aggregate(pipeline).to_list(20)
+    counts = {c["_id"]: c["count"] for c in counts_arr}
+    return {"quotes": quotes, "counts": counts, "total": sum(counts.values())}
+
+
+@api_router.get("/admin/devis/{quote_id}")
+async def admin_get_devis(quote_id: str, _: dict = Depends(require_admin)):
+    q = await db.quote_requests.find_one({"id": quote_id}, {"_id": 0})
+    if not q:
+        raise HTTPException(status_code=404, detail="Devis introuvable")
+    return {"quote": q}
+
+
+@api_router.patch("/admin/devis/{quote_id}")
+async def admin_update_devis(quote_id: str, body: QuoteStatusUpdate, _: dict = Depends(require_admin)):
+    updates: dict = {"updated_at": utcnow()}
+    if body.status is not None:
+        if body.status not in ALLOWED_QUOTE_STATUSES:
+            raise HTTPException(status_code=400, detail="Statut invalide")
+        updates["status"] = body.status
+    if body.admin_notes is not None:
+        updates["admin_notes"] = body.admin_notes[:4000]
+    res = await db.quote_requests.update_one({"id": quote_id}, {"$set": updates})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Devis introuvable")
+    q = await db.quote_requests.find_one({"id": quote_id}, {"_id": 0})
+    return {"quote": q}
+
+
+@api_router.delete("/admin/devis/{quote_id}")
+async def admin_delete_devis(quote_id: str, _: dict = Depends(require_admin)):
+    res = await db.quote_requests.delete_one({"id": quote_id})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Devis introuvable")
+    return {"ok": True}
+
+
 # Include router
 app.include_router(api_router)
-
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,

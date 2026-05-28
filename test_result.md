@@ -1246,6 +1246,63 @@ agent_communication:
          10. POST /api/billing/reactivate with {plan:"monthly_free"} on a deactivated user → 200 with {url}. user.is_active becomes true. (If Stripe key invalid, 502/503 is also acceptable.)
          11. SMOKE: existing /api/support/*, /api/admin/users, /api/auth/me, /api/weddings/unlock still pass.
 
+
+  - agent: "main"
+    message: |
+      Implemented Feature 2 — Quote Requests (Devis) form mirroring creativindustry.com/devis-mariage.
+
+      BACKEND (server.py — appended before app.include_router):
+        Catalog (QUOTE_ITEMS_CATALOG) with 3 categories:
+          • couverture: prep_mariee, prep_marie, cer_civile, cer_religieuse, cer_laique, vin_honneur, soiree(350€), maoulid, oukoumbi, mlazomoina, mtaho, henne, photographe_journees
+          • options: drone(400€), seance_couple(300€), photobooth(450€), livre_or(200€)
+          • livrables: film_teaser(300€), album_photo(400€)
+
+        Statuses (ALLOWED_QUOTE_STATUSES): new, in_progress, sent, accepted, refused, archived
+
+        ENDPOINTS:
+        • GET /api/devis/catalog (public) — returns the catalog dict.
+        • POST /api/devis (public, accepts optional auth via get_optional_user) — body QuoteCreate { wedding_date?, location?, guests_count?, ceremony_types?, coverage_items?, options_items?, deliverables_items?, custom_message?, contact_name*, partner_name?, email*, phone*, source?, accepted_terms*:bool }.
+            – Validates accepted_terms (400 if false), contact_name/email/phone required (400), at least 1 item selected (400).
+            – Stores in db.quote_requests with status="new", computed_total_min from item prices.
+            – Sends 2 emails via mailer.render_email + send_email:
+                · Admin email to ADMIN_NOTIFY_EMAIL (or SMTP_FROM_EMAIL, defaulting to contact@creativindustry.com) with full recap (couple, date, location, items by category with prices, total, custom message).
+                · Client confirmation email to body.email ("Devis reçu, réponse sous 48h").
+            – Both emails are best-effort (warnings on failure, doesn't block the response).
+        • GET /api/admin/devis?status=... — admin only. Returns { quotes, counts (per-status), total }.
+        • GET /api/admin/devis/{id} — admin only. Returns single quote.
+        • PATCH /api/admin/devis/{id} — admin only. Body QuoteStatusUpdate { status?, admin_notes? }. Validates status against ALLOWED_QUOTE_STATUSES (400 if invalid). Returns updated quote.
+        • DELETE /api/admin/devis/{id} — admin only. 200 / 404.
+
+      FRONTEND (Expo Router):
+        • /app/frontend/app/devis.tsx — NEW. 3-step form matching creativindustry.com:
+            - Step 1 "Options": search bar + 3 sections (Couverture, Options, Livrables) with item cards (checkbox-style toggle, prices shown when > 0). Validates ≥1 item selected.
+            - Step 2 "Date": wedding date (text input, accepts free format), location, guests count (numeric), ceremony types (multi-chip).
+            - Step 3 "Coordonnées": contact_name + partner_name + email + phone (required), source (single-chip: Instagram/Google/Recommandation/TikTok/Mariages.net/Autre), custom_message textarea, RGPD checkbox (required to submit).
+            - Stepper UI at top with dot indicators (active=gold, done=gold-check).
+            - Success screen on submit: gold check icon, confirmation message, email/time/phone cards, "Retour à l'accueil" button.
+        • /app/frontend/app/admin/devis.tsx — NEW. Admin list & detail:
+            - Filter chips by status (Tous/Nouveau/En cours/Devis envoyé/Accepté/Refusé/Archivé) with counts.
+            - Card per quote (highlights new in gold), shows couple name, email+phone, wedding date, location, guests count, items count, ~total€, date.
+            - Tap → full-screen Modal with status picker, all sections (couple, événement, couverture, options, livrables, total, message), admin notes editor (PATCH).
+            - Trash icon in modal header → delete with confirm.
+        • /app/frontend/app/(tabs)/profile.tsx — added "Demander un devis" link.
+        • /app/frontend/app/admin/index.tsx — updated "Demandes de devis" ActionRow to route to /admin/devis (was /admin/contact).
+
+      NEEDS BACKEND TESTING:
+        Auth: admin@wedding.fr / Admin13!
+
+        Test scenarios:
+          1. GET /api/devis/catalog (no auth) → 200, contains couverture/options/livrables arrays with the right items and prices (e.g. soiree:350, drone:400, photobooth:450, livre_or:200, film_teaser:300, album_photo:400).
+          2. POST /api/devis (no auth, public) with valid body → 200, returns {quote: {...}}. db.quote_requests has new doc with status="new", computed_total_min = sum of selected item prices.
+          3. POST /api/devis with accepted_terms=false → 400.
+          4. POST /api/devis with empty contact_name OR empty email OR empty phone → 400.
+          5. POST /api/devis with no items selected at all (empty arrays) → 400 "Sélectionnez au moins une prestation".
+          6. POST /api/devis triggers 2 emails (no 5xx). Check backend logs for "[mailer]" or absence of "[devis] admin email failed"/"client confirmation email failed".
+          7. GET /api/admin/devis (admin) → 200 with {quotes, counts, total}. The doc created in step 2 should appear.
+          8. GET /api/admin/devis (non-admin) → 403.
+          9. PATCH /api/admin/devis/{id} with {"status":"in_progress"} → 200. With invalid status → 400. With admin_notes → updates and returns updated quote.
+         10. DELETE /api/admin/devis/{id} → 200, then GET /admin/devis/{id} → 404.
+         11. SMOKE: existing endpoints still work (auth/me, weddings/public, billing/config, admin/users).
         IMPORTANT: at the end, RESTORE test@wedding.fr to is_active=true and clear subscription_plan/subscription_ends_at.
 
   - agent: "testing"
@@ -1280,3 +1337,46 @@ agent_communication:
       BACKEND LOGS: no 5xx errors from any /api/billing/* or /api/auth/* during the test run (verified backend.out.log). The two 500s visible in logs are pre-existing /api/weddings/unlock DuplicateKeyError on user_unlocks unique index (already documented in prior testing notes) — UNRELATED to this refactor.
 
       Subscription refactor is PRODUCTION-READY. No issues found.
+
+
+  - agent: "testing"
+    message: |
+      ✅ Quote Requests (Devis) — ALL 73 backend assertions PASSED against https://mariagevideo.preview.emergentagent.com/api (see /app/backend_test_devis.py).
+
+      A) GET /api/devis/catalog (no auth) → 200. couverture has 13 items including soiree=350€. options has 4 items (drone=400, seance_couple=300, photobooth=450, livre_or=200). livrables has 2 items (film_teaser=300, album_photo=400). All prices match catalog ✅.
+
+      B) POST /api/devis (public, no auth) — happy path with sample body — 200 with quote{id, status:"new", computed_total_min=1050 (350+400+300), all fields persisted (location, guests_count, source, accepted_terms=true), coverage/options/deliverables resolved to {id,label,price} arrays} ✅.
+
+      C) Validation errors on POST /api/devis (all returned the expected French detail):
+         • accepted_terms=false → 400 "RGPD/données" ✅
+         • contact_name="" → 400 "obligatoires" ✅
+         • email missing → 422 (pydantic required) ✅
+         • phone="" → 400 ✅; phone missing → 422 ✅
+         • All items arrays empty → 400 "Sélectionnez au moins une prestation" ✅
+         • email="not-an-email" → 422 (EmailStr) ✅
+
+      D) Emails (best-effort): admin email to contact@creativindustry.com succeeded ("[mailer] Email sent ... 📝 Devis — Sophie & Lucas"). Client confirmation to sophie.lucas.test@example.com failed at SMTP (556 invalid DNS MX for the dummy example.com address) — caught by the try/except in the endpoint, NO 5xx returned to caller. No 500 responses observed.
+
+      E) GET /api/admin/devis:
+         • No auth → 401 ✅
+         • Non-admin (test@wedding.fr) → 403 ✅
+         • Admin → 200 with {quotes, counts, total}; created quote present; counts.new ≥ 1; ?status=new filter returns only status=="new" docs ✅
+
+      F) GET /api/admin/devis/{id}: existing → 200 matching id, unknown id → 404 ✅.
+
+      G) PATCH /api/admin/devis/{id} (admin):
+         • {"status":"in_progress"} → 200, applied ✅
+         • Invalid status "weird" → 400 "Statut invalide" ✅
+         • {"admin_notes":"Notes test"} → 200, applied ✅
+         • Both {status:"sent", admin_notes:"Devis envoyé"} → 200, both applied ✅
+         • Missing id → 404 ✅
+
+      H) DELETE /api/admin/devis/{id}: 200 {ok:true}; subsequent GET → 404; second DELETE → 404 ✅.
+
+      I) Smoke regression (admin token + test user): GET /auth/me (200), GET /weddings/public (200), GET /admin/users (200), GET /billing/config (200, has plans array + price_amount), POST /support/tickets (200). All green.
+
+      CLEANUP: the test quote created in step B (id 1a55589a-c838-4ddd-9509-a5e4f1feff49) was deleted at end of run; db.quote_requests is back to 0 docs. Support ticket created in smoke also cleaned. No user password changes.
+
+      Note: backend.err.log still shows a stale NameError("get_current_user_optional") from a previous reload — the live process is fine (current code uses get_optional_user) and all /api/devis endpoints respond correctly. Safe to ignore.
+
+      Devis backend is PRODUCTION-READY. No issues found.

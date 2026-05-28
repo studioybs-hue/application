@@ -136,8 +136,8 @@ export default function AdminDashboard() {
             <ActionRow
               icon="mail-unread-outline"
               label="Demandes de devis"
-              hint="Contacts reçus via la page À propos"
-              onPress={() => router.push("/admin/contact")}
+              hint="Demandes reçues via le formulaire devis"
+              onPress={() => router.push("/admin/devis")}
               testID="admin-contact-btn"
             />
             <ActionRow
