@@ -1,0 +1,64 @@
+# .easignore — Files excluded from the EAS Build upload (same syntax as .gitignore)
+# Mobile build only needs the JS/TS sources + package.json + app.json + assets.
+# Everything else (web builds, video uploads, caches) bloats the upload to 20GB+.
+
+# Web build outputs
+dist/
+web-build/
+
+# Caches
+.expo/
+.expo-shared/
+.metro-cache/
+.metro/
+node_modules/.cache/
+
+# Backend (not needed for mobile build)
+../backend/
+../uploads/
+../ftp_drop/
+backend/
+uploads/
+ftp_drop/
+
+# Logs
+*.log
+yarn-error.log
+npm-debug.log*
+
+# Git
+.git/
+.gitignore
+
+# Local env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test reports
+test_result.md
+backend_test*.py
+*.test.tsx.snap
+
+# Documentation
+*.md
+!README.md
+
+# Build artifacts
+android/build/
+ios/build/
+*.apk
+*.aab
+*.ipa
+
+# Temporary files
+*.tmp
+*.swp
+*~
