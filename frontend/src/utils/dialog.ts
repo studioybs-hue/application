@@ -36,3 +36,27 @@ export function showAlert(title: string, message: string, onClose?: () => void) 
   }
   Alert.alert(title, message, onClose ? [{ text: "OK", onPress: onClose }] : undefined);
 }
+
+/**
+ * Promise-based confirm dialog. Resolves true on confirm, false on cancel.
+ * Cross-platform.
+ */
+export function showConfirm(
+  title: string,
+  message: string,
+  options?: { confirmText?: string; cancelText?: string; destructive?: boolean }
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    const confirmText = options?.confirmText || "Confirmer";
+    const cancelText = options?.cancelText || "Annuler";
+    if (Platform.OS === "web") {
+      const ok = typeof window !== "undefined" && window.confirm(`${title}\n\n${message}`);
+      resolve(!!ok);
+      return;
+    }
+    Alert.alert(title, message, [
+      { text: cancelText, style: "cancel", onPress: () => resolve(false) },
+      { text: confirmText, style: options?.destructive ? "destructive" : "default", onPress: () => resolve(true) },
+    ], { cancelable: true, onDismiss: () => resolve(false) });
+  });
+}

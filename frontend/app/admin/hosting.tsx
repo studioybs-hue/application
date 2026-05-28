@@ -7,7 +7,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { api } from "@/src/api/client";
 import { colors, spacing, radii } from "@/src/theme";
-import { showAlert, confirmAction } from "@/src/utils/dialog";
+import { showAlert, confirmAction, showConfirm } from "@/src/utils/dialog";
 
 type HReq = {
   id: string;
@@ -21,7 +21,7 @@ type HReq = {
   description?: string;
   drive_link?: string;
   notes?: string;
-  status: "pending_payment" | "paid" | "in_progress" | "published" | "rejected";
+  status: "pending_payment" | "paid" | "in_progress" | "published" | "rejected" | "abandoned" | "pending";
   amount?: number;
   currency?: string;
   client_id?: string | null;
@@ -32,10 +32,12 @@ type HReq = {
 
 const STATUS_LABELS: Record<string, { label: string; color: string }> = {
   pending_payment: { label: "EN ATTENTE PAIEMENT", color: "#888" },
+  pending: { label: "EN ATTENTE PAIEMENT", color: "#888" },
   paid: { label: "PAYÉ • À MONTER", color: "#D4AF37" },
   in_progress: { label: "EN COURS", color: "#3B82F6" },
   published: { label: "PUBLIÉ", color: "#10B981" },
   rejected: { label: "REJETÉ", color: "#EF4444" },
+  abandoned: { label: "ABANDONNÉ", color: "#6B7280" },
 };
 
 export default function AdminHosting() {
@@ -98,6 +100,42 @@ export default function AdminHosting() {
     );
   };
 
+  const markAbandoned = async (h: HReq) => {
+    const ok = await showConfirm(
+      "Marquer comme abandonné",
+      `Marquer la demande de « ${h.couple_name} » comme ABANDONNÉE ? (Vous pourrez toujours la supprimer plus tard.)`,
+    );
+    if (!ok) return;
+    setActing(h.id);
+    try {
+      await api(`/admin/hosting/requests/${h.id}`, { method: "PATCH", body: { status: "abandoned" } });
+      await load();
+    } catch (e: any) {
+      showAlert("Erreur", e.message);
+    } finally {
+      setActing(null);
+    }
+  };
+
+  const deleteRequest = async (h: HReq) => {
+    const ok = await showConfirm(
+      "Supprimer définitivement ?",
+      `Cette action est IRRÉVERSIBLE. La demande de « ${h.couple_name} » sera effacée de la base.`,
+      { destructive: true, confirmText: "Supprimer" }
+    );
+    if (!ok) return;
+    setActing(h.id);
+    try {
+      await api(`/admin/hosting/requests/${h.id}`, { method: "DELETE" });
+      await load();
+      showAlert("✓ Supprimé", `Demande de ${h.couple_name} supprimée.`);
+    } catch (e: any) {
+      showAlert("Erreur", e.message);
+    } finally {
+      setActing(null);
+    }
+  };
+
   const pending = requests.filter((r) => r.status === "paid" || r.status === "in_progress");
   const published = requests.filter((r) => r.status === "published");
   const other = requests.filter((r) => !["paid", "in_progress", "published"].includes(r.status));
@@ -135,7 +173,7 @@ export default function AdminHosting() {
                 <>
                   <Text style={styles.sectionTitle}>🔥 À traiter ({pending.length})</Text>
                   {pending.map((h) => (
-                    <Card key={h.id} req={h} onPublish={publish} onReject={reject} acting={acting === h.id} />
+                    <Card key={h.id} req={h} onPublish={publish} onReject={reject} onAbandon={markAbandoned} onDelete={deleteRequest} acting={acting === h.id} />
                   ))}
                 </>
               )}
@@ -143,15 +181,15 @@ export default function AdminHosting() {
                 <>
                   <Text style={[styles.sectionTitle, { marginTop: spacing.lg }]}>✓ Publiés ({published.length})</Text>
                   {published.map((h) => (
-                    <Card key={h.id} req={h} onPublish={publish} onReject={reject} acting={acting === h.id} />
+                    <Card key={h.id} req={h} onPublish={publish} onReject={reject} onAbandon={markAbandoned} onDelete={deleteRequest} acting={acting === h.id} />
                   ))}
                 </>
               )}
               {other.length > 0 && (
                 <>
-                  <Text style={[styles.sectionTitle, { marginTop: spacing.lg }]}>Autres</Text>
+                  <Text style={[styles.sectionTitle, { marginTop: spacing.lg }]}>Autres ({other.length})</Text>
                   {other.map((h) => (
-                    <Card key={h.id} req={h} onPublish={publish} onReject={reject} acting={acting === h.id} />
+                    <Card key={h.id} req={h} onPublish={publish} onReject={reject} onAbandon={markAbandoned} onDelete={deleteRequest} acting={acting === h.id} />
                   ))}
                 </>
               )}
@@ -164,9 +202,10 @@ export default function AdminHosting() {
 }
 
 function Card({
-  req, onPublish, onReject, acting,
-}: { req: HReq; onPublish: (r: HReq) => void; onReject: (r: HReq) => void; acting: boolean }) {
+  req, onPublish, onReject, onAbandon, onDelete, acting,
+}: { req: HReq; onPublish: (r: HReq) => void; onReject: (r: HReq) => void; onAbandon: (r: HReq) => void; onDelete: (r: HReq) => void; acting: boolean }) {
   const sl = STATUS_LABELS[req.status] || STATUS_LABELS.pending_payment;
+  const isActionable = req.status === "paid" || req.status === "in_progress";
   return (
     <View style={styles.card}>
       <View style={styles.cardHeader}>
@@ -190,8 +229,8 @@ function Card({
       {req.paid_at ? <Row icon="checkmark-circle" label="Payé le" value={new Date(req.paid_at).toLocaleString("fr-FR")} /> : null}
       {req.client_id ? <Row icon="link" label="Mariage" value={req.client_id} /> : null}
 
-      {(req.status === "paid" || req.status === "in_progress") && (
-        <View style={styles.actions}>
+      <View style={styles.actions}>
+        {isActionable && (
           <TouchableOpacity style={styles.publishBtn} onPress={() => onPublish(req)} disabled={acting} testID={`publish-${req.id}`}>
             {acting ? <ActivityIndicator color="#0A0A0A" /> : (
               <>
@@ -200,11 +239,24 @@ function Card({
               </>
             )}
           </TouchableOpacity>
+        )}
+        {req.status !== "published" && req.status !== "abandoned" && (
+          <TouchableOpacity style={styles.secondaryBtn} onPress={() => onAbandon(req)} disabled={acting} testID={`abandon-${req.id}`}>
+            <Ionicons name="archive-outline" size={14} color={colors.textSecondary} />
+            <Text style={styles.secondaryTxt}>Abandonné</Text>
+          </TouchableOpacity>
+        )}
+        {isActionable && (
           <TouchableOpacity style={styles.rejectBtn} onPress={() => onReject(req)} disabled={acting}>
             <Ionicons name="close" size={16} color={colors.error} />
           </TouchableOpacity>
-        </View>
-      )}
+        )}
+        {req.status !== "published" && (
+          <TouchableOpacity style={styles.deleteBtn} onPress={() => onDelete(req)} disabled={acting} testID={`delete-req-${req.id}`}>
+            <Ionicons name="trash-outline" size={16} color={colors.error} />
+          </TouchableOpacity>
+        )}
+      </View>
     </View>
   );
 }
@@ -241,10 +293,13 @@ const styles = StyleSheet.create({
   row: { flexDirection: "row", alignItems: "flex-start", gap: 6, marginBottom: 6 },
   rowLabel: { color: colors.textSecondary, fontSize: 11, fontWeight: "700", textTransform: "uppercase" },
   rowValue: { color: colors.ivory, fontSize: 12, flex: 1 },
-  actions: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 12 },
+  actions: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 12, flexWrap: "wrap" },
   publishBtn: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, backgroundColor: colors.gold, paddingVertical: 12, borderRadius: 8 },
   publishTxt: { color: "#0A0A0A", fontWeight: "700", fontSize: 13 },
   rejectBtn: { width: 44, height: 44, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: colors.error, borderRadius: 8 },
+  secondaryBtn: { flexDirection: "row", alignItems: "center", gap: 4, borderWidth: 1, borderColor: colors.border, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8 },
+  secondaryTxt: { color: colors.textSecondary, fontSize: 12, fontWeight: "600" },
+  deleteBtn: { width: 44, height: 44, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: colors.error, borderRadius: 8, backgroundColor: "rgba(239, 68, 68, 0.08)" },
   empty: { alignItems: "center", paddingTop: 80, gap: 12 },
   emptyTxt: { color: colors.ivory, fontSize: 16, fontWeight: "600" },
   emptySub: { color: colors.textSecondary, fontSize: 13, textAlign: "center", paddingHorizontal: spacing.lg, lineHeight: 18 },
