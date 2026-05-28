@@ -22,6 +22,7 @@ import { storage } from "@/src/utils/storage";
 import { showAlert } from "@/src/utils/dialog";
 import { colors, spacing, radii } from "@/src/theme";
 import { FtpPicker } from "@/src/ui/FtpPicker";
+import { NotifyPanel } from "@/src/admin/NotifyPanel";
 
 const BASE = process.env.EXPO_PUBLIC_BACKEND_URL || "";
 const CATEGORIES = ["À l'affiche", "Cérémonies", "Soirées", "Best Of"];
@@ -530,6 +531,11 @@ export default function VideoEdit() {
               uploading ? <Text style={styles.saveTxt}>Upload en cours…</Text> : <Text style={styles.saveTxt}>{isNew ? "Créer la vidéo" : "Enregistrer"}</Text>
             )}
           </TouchableOpacity>
+
+          {/* NOTIFICATION PANEL — only when video exists and has a full_url */}
+          {!isNew && !!form.full_url && (
+            <NotifyPanel videoId={id as string} clientName={form.client_name} />
+          )}
         </ScrollView>
       </KeyboardAvoidingView>
 

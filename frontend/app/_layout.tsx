@@ -1,4 +1,4 @@
-import { Stack } from "expo-router";
+import { Stack, useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { Platform } from "react-native";
 import { useEffect } from "react";
@@ -11,6 +11,7 @@ import { colors } from "@/src/theme";
 import { CookieNotice } from "@/src/ui/CookieNotice";
 
 export default function RootLayout() {
+  const router = useRouter();
   // Immersive mode on Android: hide the system navigation bar (Home / Back / Recent)
   // The bar reappears with a swipe and auto-hides after a moment.
   useEffect(() => {
@@ -27,6 +28,34 @@ export default function RootLayout() {
       })();
     }
   }, []);
+
+  // Handle push notification taps — navigate to deep link in `data.path`
+  useEffect(() => {
+    if (Platform.OS === "web") return;
+    let sub: { remove?: () => void } | null = null;
+    (async () => {
+      try {
+        const Notifications = await import("expo-notifications");
+        // App opened FROM notification (cold start)
+        const last = await Notifications.getLastNotificationResponseAsync();
+        const handle = (response: any) => {
+          try {
+            const data = response?.notification?.request?.content?.data || {};
+            const path = data?.path;
+            if (path && typeof path === "string") {
+              setTimeout(() => router.push(path as any), 250);
+            }
+          } catch {}
+        };
+        if (last) handle(last);
+        const listener = Notifications.addNotificationResponseReceivedListener(handle);
+        sub = listener;
+      } catch {}
+    })();
+    return () => {
+      try { sub?.remove?.(); } catch {}
+    };
+  }, [router]);
 
   return (
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: colors.bg }}>

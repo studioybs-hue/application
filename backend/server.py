@@ -19,6 +19,7 @@ from typing import List, Optional
 from datetime import datetime, timedelta, timezone
 
 from mailer import send_email, render_email, is_configured as smtp_configured
+import httpx
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -2796,6 +2797,282 @@ async def _seed_admin():
         "created_at": utcnow(),
     })
     logging.info(f"Admin seeded: {ADMIN_EMAIL}")
+
+
+# ==========================================================================
+# PUSH NOTIFICATIONS (Expo Push API)
+# ==========================================================================
+# DB schema: db.push_tokens = {
+#   user_id: str,
+#   expo_push_token: str,        # ExponentPushToken[xxx]
+#   platform: "ios"|"android"|"web",
+#   device_id: Optional[str],
+#   created_at: datetime,
+#   last_seen_at: datetime,
+# }
+# Unique on (user_id, expo_push_token).
+
+EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send"
+
+
+class PushTokenIn(BaseModel):
+    expo_push_token: str
+    platform: Optional[str] = None
+    device_id: Optional[str] = None
+
+
+@api_router.post("/notifications/register-token")
+async def register_push_token(body: PushTokenIn, current=Depends(get_current_user)):
+    """Register an Expo Push token for the current user.
+    Idempotent — updates last_seen_at if token already exists.
+    """
+    tok = (body.expo_push_token or "").strip()
+    if not tok or not (tok.startswith("ExponentPushToken[") or tok.startswith("ExpoPushToken[")):
+        raise HTTPException(status_code=400, detail="Token Expo invalide")
+    user_id = current["id"]
+    now = utcnow()
+    await db.push_tokens.update_one(
+        {"user_id": user_id, "expo_push_token": tok},
+        {
+            "$set": {
+                "platform": (body.platform or "unknown")[:16],
+                "device_id": (body.device_id or "")[:80],
+                "last_seen_at": now,
+            },
+            "$setOnInsert": {
+                "user_id": user_id,
+                "expo_push_token": tok,
+                "created_at": now,
+            },
+        },
+        upsert=True,
+    )
+    return {"ok": True}
+
+
+@api_router.delete("/notifications/token")
+async def unregister_push_token(token: str = "", current=Depends(get_current_user)):
+    """Unregister a token (called on logout). If `token` query is empty, removes all tokens of the user."""
+    user_id = current["id"]
+    q: dict = {"user_id": user_id}
+    if token:
+        q["expo_push_token"] = token
+    res = await db.push_tokens.delete_many(q)
+    return {"ok": True, "deleted": res.deleted_count}
+
+
+async def _send_expo_push(tokens: list[str], title: str, body: str, data: Optional[dict] = None) -> dict:
+    """Send a batch of push notifications via Expo Push API.
+    Expo accepts up to 100 messages per request. Returns {sent, failed, errors}.
+    """
+    if not tokens:
+        return {"sent": 0, "failed": 0, "errors": []}
+    # Dedupe + sanitize
+    uniq = list({t for t in tokens if t})
+    sent = 0
+    failed = 0
+    errors: list[str] = []
+    invalid_tokens: list[str] = []
+    # Batch 100
+    async with httpx.AsyncClient(timeout=20) as http:
+        for i in range(0, len(uniq), 100):
+            batch = uniq[i : i + 100]
+            messages = [
+                {
+                    "to": t,
+                    "sound": "default",
+                    "title": title,
+                    "body": body,
+                    "data": data or {},
+                    "priority": "high",
+                    "channelId": "default",
+                }
+                for t in batch
+            ]
+            try:
+                r = await http.post(EXPO_PUSH_URL, json=messages, headers={"Accept": "application/json", "Content-Type": "application/json"})
+                jr = r.json() if r.content else {}
+                tickets = jr.get("data", []) if isinstance(jr, dict) else []
+                if not isinstance(tickets, list):
+                    tickets = []
+                for idx, tk in enumerate(tickets):
+                    if isinstance(tk, dict) and tk.get("status") == "ok":
+                        sent += 1
+                    else:
+                        failed += 1
+                        err = (tk or {}).get("message", "Unknown error") if isinstance(tk, dict) else "Unknown"
+                        errors.append(err)
+                        # Invalid token detection
+                        details = (tk or {}).get("details") if isinstance(tk, dict) else None
+                        if isinstance(details, dict) and details.get("error") in ("DeviceNotRegistered", "InvalidCredentials"):
+                            invalid_tokens.append(batch[idx])
+            except Exception as e:
+                failed += len(batch)
+                errors.append(str(e))
+    # Cleanup invalid tokens
+    if invalid_tokens:
+        try:
+            await db.push_tokens.delete_many({"expo_push_token": {"$in": invalid_tokens}})
+        except Exception:
+            pass
+    return {"sent": sent, "failed": failed, "errors": errors[:5]}
+
+
+async def _resolve_video_recipients(video_id: str, include_guests: bool) -> dict:
+    """Return push_tokens + emails for a video's owner couple (and guests if asked)."""
+    v = await db.videos.find_one({"id": video_id}, {"_id": 0})
+    if not v:
+        raise HTTPException(status_code=404, detail="Vidéo introuvable")
+    client_id = v.get("client_id") or slugify(v.get("client_name") or v.get("title", ""))
+
+    # OWNER user(s) — users whose client_id matches AND who are not admin
+    owner_q = {"client_id": client_id, "is_admin": {"$ne": True}}
+    owners = await db.users.find(owner_q, {"_id": 0, "id": 1, "email": 1, "full_name": 1}).to_list(50)
+    owner_ids = [u["id"] for u in owners]
+    owner_emails = [u["email"] for u in owners if u.get("email")]
+
+    guest_ids: list[str] = []
+    guest_emails: list[str] = []
+    if include_guests:
+        # Guests = users who unlocked this wedding via code (user_unlocks), excluding owners
+        unlocks = await db.user_unlocks.find(
+            {"$or": [{"video_id": video_id}, {"client_id": client_id}]},
+            {"_id": 0, "user_id": 1},
+        ).to_list(2000)
+        guest_user_ids_set = {u["user_id"] for u in unlocks if u.get("user_id")}
+        # Exclude owners and admins
+        guest_user_ids_set -= set(owner_ids)
+        if guest_user_ids_set:
+            gu = await db.users.find(
+                {"id": {"$in": list(guest_user_ids_set)}, "is_admin": {"$ne": True}},
+                {"_id": 0, "id": 1, "email": 1},
+            ).to_list(2000)
+            guest_ids = [u["id"] for u in gu]
+            guest_emails = [u["email"] for u in gu if u.get("email")]
+
+    all_user_ids = list(set(owner_ids + guest_ids))
+    tokens_docs = (
+        await db.push_tokens.find(
+            {"user_id": {"$in": all_user_ids}} if all_user_ids else {"_id": None},
+            {"_id": 0, "expo_push_token": 1, "user_id": 1},
+        ).to_list(5000)
+        if all_user_ids
+        else []
+    )
+    tokens = [t["expo_push_token"] for t in tokens_docs if t.get("expo_push_token")]
+
+    return {
+        "video": v,
+        "client_id": client_id,
+        "owner_count": len(owners),
+        "owner_emails": owner_emails,
+        "guest_count": len(guest_ids),
+        "guest_emails": guest_emails,
+        "tokens": tokens,
+        "user_ids": all_user_ids,
+    }
+
+
+@api_router.get("/admin/videos/{video_id}/notify-recipients")
+async def admin_notify_recipients(video_id: str, include_guests: bool = False, _: dict = Depends(require_admin)):
+    """Preview the recipients before sending."""
+    info = await _resolve_video_recipients(video_id, include_guests)
+    return {
+        "video_id": video_id,
+        "video_title": info["video"].get("title"),
+        "client_name": info["video"].get("client_name"),
+        "client_id": info["client_id"],
+        "owners": info["owner_count"],
+        "guests": info["guest_count"],
+        "push_devices": len(info["tokens"]),
+        "emails": len(set(info["owner_emails"] + info["guest_emails"])),
+    }
+
+
+class NotifyVideoIn(BaseModel):
+    title: Optional[str] = None
+    message: Optional[str] = None
+    include_guests: bool = False
+    send_email: bool = True
+    send_push: bool = True
+
+
+@api_router.post("/admin/videos/{video_id}/notify")
+async def admin_notify_video(video_id: str, body: NotifyVideoIn, _: dict = Depends(require_admin)):
+    """Send push + email to the wedding owner couple (and optionally guests)."""
+    info = await _resolve_video_recipients(video_id, body.include_guests)
+    v = info["video"]
+    video_title = v.get("title", "Votre film de mariage")
+    client_name = v.get("client_name") or video_title
+
+    push_title = (body.title or "🎬 Votre film est en ligne !").strip()[:80]
+    push_body = (body.message or f"{client_name} — Le film de votre plus beau jour vous attend dans CINÉMARIÉS. Ouvrez l'app pour le regarder.").strip()[:240]
+
+    result_push = {"sent": 0, "failed": 0, "errors": []}
+    result_email = {"sent": 0, "failed": 0}
+
+    deep_link_path = f"/wedding/{info['client_id']}"
+
+    if body.send_push and info["tokens"]:
+        result_push = await _send_expo_push(
+            info["tokens"],
+            push_title,
+            push_body,
+            data={"type": "new_video", "video_id": video_id, "client_id": info["client_id"], "path": deep_link_path},
+        )
+
+    if body.send_email:
+        emails = list({e for e in (info["owner_emails"] + info["guest_emails"]) if e})
+        cta_url = f"{APP_PUBLIC_URL.rstrip('/') }{deep_link_path}"
+        html_body = render_email(
+            title=push_title,
+            body_html=(
+                f"<p>Bonjour,</p>"
+                f"<p>{push_body}</p>"
+                f"<p style='color:#9A9A9A;font-size:13px'>Mariage : <strong style='color:#D4AF37'>{client_name}</strong></p>"
+                f"<p style='color:#9A9A9A;font-size:12px;font-style:italic'>Pour profiter pleinement de votre film, vous pouvez aussi installer l'app CINÉMARIÉS sur votre téléphone.</p>"
+            ),
+            cta_label="Regarder mon film",
+            cta_url=cta_url,
+        )
+        for em in emails:
+            try:
+                ok = await send_email(em, push_title, html_body)
+                if ok:
+                    result_email["sent"] += 1
+                else:
+                    result_email["failed"] += 1
+            except Exception as e:
+                result_email["failed"] += 1
+                logging.warning(f"[notify-video] email failed to {em}: {e}")
+
+    # Log the notification event for audit
+    try:
+        await db.notification_log.insert_one({
+            "id": str(uuid.uuid4()),
+            "video_id": video_id,
+            "client_id": info["client_id"],
+            "title": push_title,
+            "message": push_body,
+            "include_guests": body.include_guests,
+            "push_result": result_push,
+            "email_result": result_email,
+            "created_at": utcnow(),
+        })
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "push": result_push,
+        "email": result_email,
+        "recipients": {
+            "owners": info["owner_count"],
+            "guests": info["guest_count"],
+            "push_devices": len(info["tokens"]),
+            "emails": len(set(info["owner_emails"] + info["guest_emails"])),
+        },
+    }
 
 
 # Include router

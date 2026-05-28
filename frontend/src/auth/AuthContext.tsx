@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
+import { Platform } from "react-native";
 import { auth as authApi } from "@/src/api/client";
 
 type User = {
@@ -22,6 +23,24 @@ type Ctx = {
 
 const AuthContext = createContext<Ctx | null>(null);
 
+// Lazy import push helper only on native platforms to avoid web bundling crashes
+async function _registerPush() {
+  if (Platform.OS === "web") return;
+  try {
+    const mod = await import("@/src/utils/notifications");
+    await mod.registerForPushNotificationsAsync();
+  } catch (e) {
+    // Silent — notifications are optional
+  }
+}
+async function _unregisterPush() {
+  if (Platform.OS === "web") return;
+  try {
+    const mod = await import("@/src/utils/notifications");
+    await mod.unregisterPushNotificationsAsync();
+  } catch {}
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User>(null);
   const [loading, setLoading] = useState(true);
@@ -30,6 +49,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const u = await authApi.me();
       setUser(u);
+      if (u?.id) _registerPush();
     } catch {
       setUser(null);
     }
@@ -45,12 +65,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const login = async (email: string, password: string) => {
     const r = await authApi.login(email, password);
     setUser(r.user);
+    if (r.user?.id) _registerPush();
   };
   const register = async (email: string, password: string, name: string) => {
     const r = await authApi.register(email, password, name);
     setUser(r.user);
+    if (r.user?.id) _registerPush();
   };
   const logout = async () => {
+    await _unregisterPush();
     await authApi.logout();
     setUser(null);
   };

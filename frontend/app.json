@@ -18,7 +18,8 @@
           "_googlecast._tcp"
         ],
         "NSPhotoLibraryUsageDescription": "Choisir une photo pour votre mariage.",
-        "NSCameraUsageDescription": "Prendre une photo pour votre mariage."
+        "NSCameraUsageDescription": "Prendre une photo pour votre mariage.",
+        "NSUserNotificationsUsageDescription": "Vous prévenir quand votre film est en ligne."
       }
     },
     "android": {
@@ -38,7 +39,11 @@
         "ACCESS_COARSE_LOCATION",
         "android.permission.NEARBY_WIFI_DEVICES",
         "android.permission.BLUETOOTH",
-        "android.permission.BLUETOOTH_CONNECT"
+        "android.permission.BLUETOOTH_CONNECT",
+        "android.permission.RECEIVE_BOOT_COMPLETED",
+        "android.permission.SCHEDULE_EXACT_ALARM",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.VIBRATE"
       ]
     },
     "web": {
@@ -65,7 +70,14 @@
           "androidReceiverAppId": "CC1AD845"
         }
       ],
-      "expo-video"
+      "expo-video",
+      [
+        "expo-notifications",
+        {
+          "color": "#D4AF37",
+          "defaultChannel": "default"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

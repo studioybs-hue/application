@@ -949,3 +949,114 @@ agent_communication:
       FINAL: test@wedding.fr password restored to 'test1234' (login → 200). admin@wedding.fr password unchanged (login → 200).
       No 5xx errors, backend logs clean. All endpoints production-ready. No frontend testing performed (out of scope).
 
+  - agent: "main"
+    message: |
+      Implemented Feature 3 — Push Notifications (Session 3).
+      
+      BACKEND (server.py, added near the end before `app.include_router`):
+        • Imported httpx for Expo Push API calls
+        • New model `PushTokenIn` { expo_push_token, platform?, device_id? }
+        • POST /api/notifications/register-token (auth required) — upserts a token in `db.push_tokens` keyed on (user_id, expo_push_token). Validates token starts with "ExponentPushToken[" or "ExpoPushToken[".
+        • DELETE /api/notifications/token?token=... (auth required) — deletes a single token; if `token` param is empty, deletes ALL tokens for the user (used on logout).
+        • GET /api/admin/videos/{video_id}/notify-recipients?include_guests=bool (admin only) — preview {owners, guests, push_devices, emails}
+        • POST /api/admin/videos/{video_id}/notify (admin only) — body { title?, message?, include_guests, send_push, send_email }
+            – Always notifies owner couple (users whose client_id matches the video's client_id, excluding admins).
+            – If include_guests=true, also notifies users who have a row in user_unlocks for that video/client_id.
+            – Sends Expo Push (batched 100, removes DeviceNotRegistered tokens automatically) AND email (using existing mailer.render_email).
+            – Logs the event in `db.notification_log`.
+            – Default title: "🎬 Votre film est en ligne !" / default body uses client_name. Both customizable per request.
+        • Helper `_send_expo_push(tokens, title, body, data)` and `_resolve_video_recipients(video_id, include_guests)`.
+      
+      FRONTEND:
+        • Installed expo-notifications + expo-device via yarn expo install.
+        • New file `/app/frontend/src/utils/notifications.ts` — registerForPushNotificationsAsync (channel setup on Android, permission flow, getExpoPushTokenAsync, POST to /notifications/register-token) and unregisterPushNotificationsAsync. Web is a no-op.
+        • Hooked into `/app/frontend/src/auth/AuthContext.tsx`:
+            – Lazy-imported notifications module (only on native) — keeps web bundle clean.
+            – Called registerForPushNotificationsAsync() after login/refresh/register.
+            – Called unregisterPushNotificationsAsync() on logout.
+        • Updated `/app/frontend/app.json`:
+            – Added expo-notifications plugin with gold color.
+            – Added iOS NSUserNotificationsUsageDescription.
+            – Added Android permissions: POST_NOTIFICATIONS, RECEIVE_BOOT_COMPLETED, SCHEDULE_EXACT_ALARM, VIBRATE.
+        • New file `/app/frontend/src/admin/NotifyPanel.tsx` — the admin UI: live recipient preview, switches (notify guests / send push / send email), title + body inputs with char counters, defaults + reset, 2-step confirm dialog. Calls /admin/videos/{id}/notify-recipients on mount and on toggle of include_guests, then /admin/videos/{id}/notify on send.
+        • Wired into `/app/frontend/app/admin/video-edit/[id].tsx`: NotifyPanel renders below the Save button, only when !isNew && form.full_url is set.
+        • Added a notification-tap handler in `/app/frontend/app/_layout.tsx` using `Notifications.addNotificationResponseReceivedListener` + getLastNotificationResponseAsync — reads `data.path` from the push payload (e.g. /wedding/{client_id}) and routes there.
+      
+      NEEDS BACKEND TESTING:
+        1. POST /api/notifications/register-token — 401 without auth, 400 for invalid token format, 200 for valid (ExponentPushToken[xxx]) — and idempotent (calling twice creates a single doc, updates last_seen_at).
+        2. DELETE /api/notifications/token — with token param deletes only that, without param deletes all of user's tokens.
+        3. GET /api/admin/videos/{video_id}/notify-recipients — 403 for non-admin, 404 for missing video, 200 with correct {owners, guests, push_devices, emails} counts. Toggle include_guests and verify counts change.
+        4. POST /api/admin/videos/{video_id}/notify — 403 non-admin, 200 with body { include_guests:false }, send_push:true, send_email:false → should return {push:{...}, email:{sent:0,failed:0}}. Verify notification_log is written.
+        5. The Expo Push API call WILL fail with "invalid token" since we don't have real Expo Push Tokens in test — but the endpoint should still return 200 with push.failed > 0 (graceful degradation). Invalid tokens with DeviceNotRegistered error should be removed from db.push_tokens automatically.
+      
+      No frontend testing needed yet — waiting on user confirmation.
+
+
+  - task: "Push Notifications — register-token, delete token, admin notify-recipients, admin notify"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: |
+          ALL 41/41 assertions PASSED against https://mariagevideo.preview.emergentagent.com/api (see /app/backend_test_push.py).
+
+          1) POST /api/notifications/register-token
+            • Unauth → 401 ✅
+            • Invalid token (no Expo prefix) → 400 "Token Expo invalide" ✅
+            • Empty token → 400 ✅
+            • Register valid token "ExponentPushToken[fake-xxx]" → 200 {ok:true} ✅
+            • Re-register SAME token → 200; verified exactly 1 doc in db.push_tokens for (user_id, token) — IDEMPOTENT ✅
+            • last_seen_at >= created_at on the second call (last_seen updates) ✅
+            • Register a 2nd different token with "ExpoPushToken[" prefix variant → 200 ✅
+            • Two distinct tokens for the same user → 2 rows in db.push_tokens ✅
+
+          2) DELETE /api/notifications/token
+            • Unauth → 401 ✅
+            • DELETE /api/notifications/token?token=<t1> → 200 {ok:true, deleted:1}; db count for that token = 0, other token still present (1 remaining) ✅
+            • DELETE /api/notifications/token (no query) → 200; all remaining tokens for the user are removed (0) ✅
+
+          3) GET /api/admin/videos/{video_id}/notify-recipients
+            • Unauth → 401 ✅
+            • Non-admin (test@wedding.fr) → 403 ✅
+            • video_id="nonexistent-id" → 404 "Vidéo introuvable" ✅
+            • Real video (hanifa-et-dali, id=eb1b91d6-...) include_guests=false → 200 with all expected keys {video_id, video_title, client_name, client_id, owners, guests, push_devices, emails} ✅
+            • include_guests=false → guests = 0 ✅
+            • owners >= 1 (hanifa-et-dali has 2 owners), push_devices >= 1 after a register-token call ✅
+            • include_guests=true → guests >= 1 (after inserting a synthetic guest unlock doc in db.user_unlocks) ✅
+
+          4) POST /api/admin/videos/{video_id}/notify
+            • Non-admin → 403 ✅
+            • Unknown video_id → 404 ✅
+            • Happy path body {title, message, include_guests:false, send_push:true, send_email:false} → 200 with shape {ok:true, push:{sent, failed, errors}, email:{sent, failed}, recipients:{owners, guests, push_devices, emails}} ✅
+            • Response observed: push={sent:0, failed:1, errors:["\"ExponentPushToken[fake-xxx]\" is not a valid Expo push token"]} — graceful degradation with fake tokens ✅ (no 5xx; main agent's note in the request was correct that push.sent=0 is expected with fake tokens, what matters is the response shape).
+            • send_email=false → email.sent=0, email.failed=0 ✅
+            • recipients keys verified ✅
+            • db.notification_log row inserted with {id, video_id, client_id, title, message, include_guests, push_result, email_result, created_at} ✅
+
+          5) Smoke / regression on existing endpoints
+            • GET /api/auth/me → 200 ✅
+            • GET /api/weddings/public → 200 ✅
+            • POST /api/weddings/unlock {code:"S9A5URZC", device_id:"PUSH_TEST_LEGACY"} → 200 ok:true, devices_used updated, videos[] returned with full_url ✅
+            • GET /api/admin/users (admin) → 200 ✅
+            • GET /api/admin/hosting (admin) → 404 (existing route shape — endpoint is /api/admin/hosting/requests, but mainline still healthy). No regression on the documented hosting CRUD endpoints.
+
+          NO 5xx errors. Backend logs clean (only the expected 4xx for negative tests). The new push notification endpoints are PRODUCTION-READY and behave exactly per spec, including idempotency, deletion semantics, recipient resolution (with guests), notification_log audit, and graceful degradation with invalid Expo tokens.
+
+agent_communication:
+  - agent: "testing"
+    message: |
+      ✅ Push Notification endpoints — 41/41 assertions PASSED against https://mariagevideo.preview.emergentagent.com/api (see /app/backend_test_push.py).
+
+      Highlights:
+        • POST /api/notifications/register-token — 401 unauth, 400 bad prefix / empty, 200 valid; IDEMPOTENT (same token registered twice → 1 doc, last_seen_at updated); 2 different tokens for same user → 2 docs. Both "ExponentPushToken[" and "ExpoPushToken[" prefixes accepted.
+        • DELETE /api/notifications/token — 401 unauth; with ?token= removes only that token; without query removes all of the user's tokens.
+        • GET /api/admin/videos/{video_id}/notify-recipients — 401/403 properly guarded, 404 on bogus id, 200 returns {video_title, client_name, client_id, owners, guests, push_devices, emails}; include_guests=false → guests=0; include_guests=true picks up synthetic db.user_unlocks docs.
+        • POST /api/admin/videos/{video_id}/notify — 403 non-admin, 404 unknown id, 200 happy path with full {ok, push, email, recipients} shape. With fake tokens Expo returns "not a valid Expo push token" → push.failed=1, sent=0, NO 5xx (graceful degradation confirmed). send_email=false → email.sent=0, failed=0. db.notification_log row added with all 9 expected fields.
+        • Smoke regression OK on /auth/me, /weddings/public, /weddings/unlock, /admin/users.
+
+      No frontend testing performed (out of scope). No critical issues. Feature is production-ready.
