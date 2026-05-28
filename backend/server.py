@@ -19,6 +19,7 @@ from typing import List, Optional
 from datetime import datetime, timedelta, timezone
 
 from mailer import send_email, render_email, is_configured as smtp_configured
+from photos import register_photo_routes
 import httpx
 
 ROOT_DIR = Path(__file__).parent
@@ -3836,6 +3837,13 @@ async def admin_delete_devis(quote_id: str, _: dict = Depends(require_admin)):
 
 
 # Include router
+register_photo_routes(
+    api_router=api_router,
+    db=db,
+    UPLOAD_DIR=UPLOAD_DIR,
+    get_current_user=get_optional_user,
+    require_admin=require_admin,
+)
 app.include_router(api_router)
 app.add_middleware(
     CORSMiddleware,

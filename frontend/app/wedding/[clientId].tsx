@@ -327,6 +327,26 @@ export default function WeddingScreen() {
               <Text style={styles.unlockedBannerTxt}>Espace privé débloqué — bonnes émotions !</Text>
             </View>
 
+            <TouchableOpacity
+              style={styles.photoGalleryBtn}
+              onPress={() => router.push({ pathname: "/photos/[clientId]", params: { clientId: String(clientId) } })}
+              testID="wedding-photos-btn"
+            >
+              <View style={styles.photoGalleryIcon}>
+                <Ionicons name="images" size={26} color={colors.gold} />
+              </View>
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <Text style={styles.photoGalleryTitle}>Galerie photo</Text>
+                <Text style={styles.photoGallerySub}>
+                  Découvrez toutes vos photos · Diaporama musical · Téléchargement
+                </Text>
+              </View>
+              <View style={styles.premiumBadge}>
+                <Ionicons name="diamond" size={12} color="#000" />
+                <Text style={styles.premiumBadgeTxt}>Premium</Text>
+              </View>
+            </TouchableOpacity>
+
             {wedding.is_my_wedding && (
               <TouchableOpacity style={styles.inviteBtn} onPress={openInvite} testID="invite-friends-btn">
                 <Ionicons name="people" size={20} color="#0A0A0A" />
@@ -565,6 +585,30 @@ const styles = StyleSheet.create({
   },
   inviteBtnTitle: { color: "#0A0A0A", fontWeight: "700", fontSize: 15 },
   inviteBtnSub: { color: "rgba(0,0,0,0.7)", fontSize: 11, marginTop: 2 },
+  photoGalleryBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.surfaceElevated,
+    padding: spacing.md,
+    borderRadius: radii.md,
+    marginBottom: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  photoGalleryIcon: {
+    width: 48, height: 48, borderRadius: 24,
+    backgroundColor: "rgba(212,175,55,0.12)",
+    alignItems: "center", justifyContent: "center",
+  },
+  photoGalleryTitle: { color: colors.ivory, fontWeight: "700", fontSize: 15 },
+  photoGallerySub: { color: colors.textSecondary, fontSize: 11, marginTop: 2 },
+  premiumBadge: {
+    flexDirection: "row", alignItems: "center", gap: 4,
+    backgroundColor: colors.gold,
+    paddingHorizontal: 8, paddingVertical: 4,
+    borderRadius: 999,
+  },
+  premiumBadgeTxt: { color: "#000", fontSize: 10, fontWeight: "700" },
   modalLabel: { color: colors.textSecondary, fontSize: 11, letterSpacing: 1, textTransform: "uppercase", marginBottom: 6 },
   modalInput: { backgroundColor: colors.bg, color: colors.ivory, padding: 14, borderRadius: 8, fontSize: 14, marginBottom: spacing.md, borderWidth: 1, borderColor: colors.border },
   planBadge: { flexDirection: "row", alignItems: "center", gap: 6, alignSelf: "flex-start", backgroundColor: "rgba(212,175,55,0.12)", borderWidth: 1, borderColor: colors.gold, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6 },

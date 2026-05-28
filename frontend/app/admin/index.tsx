@@ -113,6 +113,13 @@ export default function AdminDashboard() {
               testID="admin-codes-btn"
             />
             <ActionRow
+              icon="images-outline"
+              label="Galeries photos"
+              hint="Scanner SFTP, gérer photos & musique"
+              onPress={() => router.push("/admin/wedding-photos")}
+              testID="admin-photos-btn"
+            />
+            <ActionRow
               icon="people-outline"
               label="Utilisateurs"
               hint="Liste & abonnements"
