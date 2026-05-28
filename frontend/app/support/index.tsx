@@ -50,7 +50,7 @@ export default function SupportList() {
 
   useEffect(() => {
     if (!authLoading && !user) {
-      router.replace("/login?redirect=/support");
+      router.replace("/auth/login");
     }
   }, [authLoading, user, router]);
 
