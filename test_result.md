@@ -182,6 +182,52 @@ backend:
         agent: "testing"
         comment: "Regression check: GET /api/videos/public → 200 with featured+rows. GET /api/weddings/public → 200 with weddings list. POST /api/weddings/unlock {code:'S9A5URZC'} → 200 with ok:true (still an active code for 'Hanifa et Dali' equivalent). No 500s observed."
 
+  - task: "Support Chat / Tickets (user + admin endpoints)"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "Added complete support ticket system (collections db.support_tickets + db.support_messages). USER endpoints: POST/GET/PATCH /support/tickets, POST /messages, /mark-read, /unread-count, /upload. ADMIN endpoints: GET/PATCH/DELETE /admin/support/tickets, /admin/support/unread-count. Notifications (push + email) fire on every new message."
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ 51/51 assertions PASSED against https://mariagevideo.preview.emergentagent.com/api (see /app/backend_test_support.py).
+
+          Phase 1 — Auth gates (16 checks): every /support/* and /admin/support/* endpoint returns 401 without auth; every /admin/support/* returns 403 for non-admin. ✅
+
+          Phase 2 — Ticket creation: empty/whitespace subject → 400. Subject-only → 200 with unread_for_admin=0, status=open. Subject+initial_message → 200, ticket has 1 message in support_messages, unread_for_admin=1, last_sender_role="user". ✅
+
+          Phase 3 — GET /support/tickets returns the caller's tickets list (sorted by last_message_at desc). ✅
+
+          Phase 4 — Messages flow:
+            • POST /messages with empty text + no attachments → 400 {detail:"Message vide"}. ✅
+            • User POST /messages → unread_for_admin increments (1→2), last_sender_role="user". ✅
+            • Admin POST /messages → message.sender_role="admin", unread_for_user increments, last_sender_role="admin". ✅
+            • POST /mark-read as owner → unread_for_user reset to 0 (verified by re-fetching ticket). ✅
+            • PATCH ticket status=closed → 200; subsequent POST /messages → automatic reopen (status=open). ✅
+            • PATCH invalid status ("bogus") → 400. PATCH to "in_progress" allowed for user. ✅
+
+          Phase 5 — Cross-user access: a fresh registered user (support_other_2911cc09@example.com) trying to GET / POST on another user's ticket → 403. ✅
+
+          Phase 6 — Unread-count endpoints: GET /support/unread-count and GET /admin/support/unread-count both return {unread: int}. ✅
+
+          Phase 7 — Image upload: POST /support/upload with a real Pillow-generated JPEG (632 bytes) → 200 with {url, name, size}. The returned URL was successfully attached to a follow-up message (text="" + attachments=[{url,kind:"image"}]) → 200. ✅
+
+          Phase 8 — Admin endpoints: GET /admin/support/tickets returns shape {tickets, total_unread, open_count}. ?status=open filter works (all returned tickets have status=open). PATCH invalid status → 400. PATCH on bogus uuid → 404. PATCH valid → 200. ✅
+
+          Phase 9 — Admin DELETE cascades: created a fresh ticket with 3 messages (user msg, user msg, admin reply). DELETE /admin/support/tickets/{id} → 200. Subsequent GET → 404. Second DELETE → 404. Cascade works (msgs_before=3, ticket fully removed). ✅
+
+          Phase 10 — Smoke regression: GET /auth/me, GET /weddings/public, POST /weddings/unlock (S9A5URZC), GET /admin/users all return 200. ✅
+
+          Notification triggers fire correctly — backend logs confirm 6 successful "[mailer] Email sent to contact@creativindustry.com" entries for the support events (POST /messages from user, admin reply, etc.). Push notifications attempted gracefully (no real Expo tokens registered for admins/owners during test → no errors). NO 5xx returned by any /support/* or /admin/support/* call. The Exception in ASGI traces in backend.err.log are from the unrelated unlock_wedding DuplicateKeyError on db.user_unlocks (pre-existing) and do NOT impact support endpoints.
+
+          test@wedding.fr password NOT changed. Fresh user created for cross-user test.
+
 frontend:
   - task: "Subscription screen Cancel button + dialogs"
     implemented: true
@@ -1060,3 +1106,96 @@ agent_communication:
         • Smoke regression OK on /auth/me, /weddings/public, /weddings/unlock, /admin/users.
 
       No frontend testing performed (out of scope). No critical issues. Feature is production-ready.
+
+
+  - agent: "main"
+    message: |
+      Implemented Feature 4 — Support Chat / Tickets (Session 4).
+
+      BACKEND (server.py — appended block above app.include_router):
+        Collections used: db.support_tickets, db.support_messages, db.uploads (kind=support_image), db.push_tokens.
+        Status values allowed: "open", "in_progress", "closed".
+
+        USER endpoints (require login):
+          • POST /api/support/tickets — body {subject, initial_message?, attachments?}. Creates a ticket, optional first message + image attachments. If `initial_message` is present, a row is added to support_messages with sender_role="user", and admins are notified by push (to all is_admin users' tokens) + email (to ADMIN_NOTIFY_EMAIL or SMTP_FROM_EMAIL).
+          • GET /api/support/tickets — list my tickets, sorted by last_message_at desc.
+          • GET /api/support/tickets/{ticket_id} — returns {ticket, messages}. 403 if not owner and not admin.
+          • POST /api/support/tickets/{ticket_id}/messages — body {text?, attachments?}. Must have either text or attachments (else 400). Determines role: if requester is admin AND not the ticket owner → role=admin; otherwise role=user. Updates ticket counters (unread_for_user or unread_for_admin). If ticket was closed it reopens. Triggers notification to the OTHER side (push + email).
+          • POST /api/support/tickets/{ticket_id}/mark-read — resets unread counter for the current viewer (owner resets unread_for_user; admin viewing someone else's ticket resets unread_for_admin).
+          • PATCH /api/support/tickets/{ticket_id} — body {status}. User can close/reopen their own ticket. Validates status against ALLOWED_TICKET_STATUSES.
+          • GET /api/support/unread-count — sum of unread_for_user across user's tickets.
+          • POST /api/support/upload — multipart file upload for image attachments. Max 8 MB (returns 413 if larger). Only image extensions accepted: jpg/jpeg/png/webp/gif/heic/heif. Returns {url, name, size}. Authenticated user only.
+
+        ADMIN endpoints (require admin):
+          • GET /api/admin/support/tickets?status=open|in_progress|closed (optional filter) — returns {tickets, total_unread, open_count}.
+          • GET /api/admin/support/unread-count — sum of unread_for_admin across ALL tickets.
+          • PATCH /api/admin/support/tickets/{ticket_id} — body {status}. 400 if invalid status, 404 if not found.
+          • DELETE /api/admin/support/tickets/{ticket_id} — deletes ticket + cascades to support_messages.
+
+        Notifications helper `_notify_new_support_message(ticket, message, recipient_role)`:
+          • If recipient_role == "admin" (user sent a message): send push to all admin users' expo tokens (via _send_expo_push from Feature 3); send email to ADMIN_NOTIFY_EMAIL (or SMTP_FROM_EMAIL fallback).
+          • If recipient_role == "user" (admin replied): send push to the ticket owner's tokens; send email to ticket.user_email.
+          • Push payload includes `data.path` pointing to /admin/support/{id} (admin) or /support/{id} (user) so taps deep-link correctly through the _layout.tsx handler from Feature 3.
+
+      FRONTEND (mobile + web — Expo Router):
+        • New shared type `/app/frontend/src/support/types.ts` (Ticket, Message, STATUS_LABEL, STATUS_COLOR).
+        • New reusable `/app/frontend/src/support/ChatScreen.tsx` — full chat UI:
+            – Polls GET /support/tickets/{id} every 8 seconds while mounted.
+            – Marks-as-read on every load.
+            – Bubble layout (user-right gold, admin-left dark). Shows attachments as images. Date dividers.
+            – Composer with photo picker (web uses native input, mobile uses expo-image-picker) → uploads to /support/upload → sends message with attachment.
+            – Close/Reopen ticket button in header (calls PATCH /support/tickets/{id} or /admin/support/tickets/{id}).
+            – Closed state shows a banner "envoyer rouvre le ticket".
+        • `/app/frontend/app/support/index.tsx` — User ticket list, polls every 15s, badge with unread count, FAB "Nouvelle demande", auth guard redirect to /login if logged out.
+        • `/app/frontend/app/support/new.tsx` — Create ticket form with 6 subject presets ("Problème de lecture vidéo", "Code de mariage invalide", "Question sur l'abonnement Premium", "Demande d'hébergement vidéo", "Bug ou erreur dans l'app", "Autre"), subject input (max 140), message textarea (max 4000). On success, replaces route to /support/{id}.
+        • `/app/frontend/app/support/[id].tsx` — wraps `<ChatScreen ticketId={id} asAdmin={false} />`.
+        • `/app/frontend/app/admin/support/index.tsx` — Admin ticket list with filter chips (Tous/Ouverts/En cours/Clôturés). Polls every 10s. Shows status dot, user_name/email, ticket subject, unread badge. Long-press → delete (with confirm dialog). Header shows "{open_count} ouverts · {total_unread} non lus".
+        • `/app/frontend/app/admin/support/[id].tsx` — wraps `<ChatScreen ticketId={id} asAdmin={true} />`.
+
+        ENTRY POINTS added:
+          • Profile tab (`/(tabs)/profile.tsx`) — new "💬 Aide & Support" row in the Application section, routes to /support.
+          • Admin dashboard (`/admin/index.tsx`) — new "Support / Messages" ActionRow, routes to /admin/support.
+
+      NEEDS BACKEND TESTING (deep_testing_backend_v2):
+        Auth credentials:
+          • Admin: admin@wedding.fr / Admin13!
+          • User: test@wedding.fr / test1234 (or create a fresh user)
+
+        Test scenarios (all should return 200/201 unless noted):
+          1. AUTH GATE: all /support/* endpoints reject unauthenticated calls with 401.
+          2. POST /api/support/tickets — empty subject → 400; valid subject only (no initial_message) → 200, ticket created with last_sender_role=null, unread_for_admin=0; valid subject + initial_message → 200, ticket created, db.support_messages has 1 row with sender_role="user", unread_for_admin=1, AND notification flow triggered (check backend logs for "[mailer]" and Expo push POST — push will fail with fake-tokens but should not 5xx).
+          3. GET /api/support/tickets — returns only the calling user's tickets.
+          4. GET /api/support/tickets/{id} — 200 for owner, 200 for admin, 403 for another logged-in user.
+          5. POST /api/support/tickets/{id}/messages — text-only OK, empty text + empty attachments → 400, with text > 4000 chars truncated to 4000, with attachments array of {url, kind} → stored. As USER → role="user", unread_for_admin incremented; as ADMIN (different user from owner) → role="admin", unread_for_user incremented. If ticket.status="closed", sending re-opens it.
+          6. POST /api/support/tickets/{id}/mark-read — owner: resets unread_for_user; admin: resets unread_for_admin (only if admin is not the ticket owner).
+          7. PATCH /api/support/tickets/{id} — user can set status to "closed" or "open", invalid status → 400.
+          8. POST /api/support/upload — non-image extension → still saved (defaults to jpg); 8 MB+ payload → 413 (skip if you don't want to upload 8 MB, just verify a small image returns {url, name, size}).
+          9. GET /api/admin/support/tickets[?status=...] — non-admin → 403, admin → 200 with shape {tickets, total_unread, open_count}.
+         10. PATCH /api/admin/support/tickets/{id} — admin can set status to open/in_progress/closed, invalid → 400, missing ticket → 404.
+         11. DELETE /api/admin/support/tickets/{id} — 200 cascades to support_messages (verify count==0 for that ticket_id after).
+         12. GET /api/admin/support/unread-count + GET /api/support/unread-count — both return {unread: int}.
+         13. SMOKE: existing endpoints (auth/me, weddings/public, weddings/unlock, admin/users, admin/videos/{id}/notify) still work (no regression).
+
+      DO NOT change test@wedding.fr password permanently. Use a fresh user for delete-cascade test if needed. No frontend testing yet — will wait for user approval.
+
+  - agent: "testing"
+    message: |
+      ✅ Support Chat / Tickets — 51/51 assertions PASSED against https://mariagevideo.preview.emergentagent.com/api (see /app/backend_test_support.py).
+
+      Coverage:
+        • Auth gates (16): all /support/* → 401 without auth; all /admin/support/* → 401 without auth and → 403 for non-admin.
+        • Ticket creation: empty subject → 400; subject-only → unread_for_admin=0; subject+message → unread_for_admin=1, last_sender_role="user", 1 row in support_messages.
+        • Messages: empty text + no attachments → 400 "Message vide". User sends → unread_for_admin++. Admin sends → role="admin", unread_for_user++. mark-read clears the right counter. PATCH closed → message reopens (status=open). PATCH invalid status → 400.
+        • Cross-user: fresh registered user gets 403 on someone else's ticket (GET + POST).
+        • Unread-count endpoints return {unread: int}.
+        • POST /support/upload with real JPEG (Pillow) → 200 {url,name,size}; URL successfully attached to a follow-up message.
+        • Admin GET shape {tickets,total_unread,open_count} + ?status=open filter works. PATCH invalid → 400, bogus id → 404. DELETE cascades (msgs deleted, second DELETE → 404).
+        • Smoke regression on auth/me, weddings/public, weddings/unlock, admin/users → all 200.
+
+      Notifications confirmed in backend logs: 6 mailer.INFO emails sent (4 to admin, 2 to user "test@wedding.fr"). No 5xx on any /support/* call. The 4 "Exception in ASGI" entries visible in backend.err.log are pre-existing and come from /api/weddings/unlock (DuplicateKeyError on user_unlocks index user_id_1_video_id_1 with video_id:null) — UNRELATED to the support feature.
+
+      Notes for main agent:
+        • test@wedding.fr password was NOT modified.
+        • A fresh user (support_other_<rand>@example.com) was registered for the cross-access test and left in DB (harmless).
+        • Pre-existing unlock_wedding bug (DuplicateKeyError) is worth a separate follow-up but is outside this review scope.
+      Feature is production-ready. No frontend testing performed (out of scope per user policy).

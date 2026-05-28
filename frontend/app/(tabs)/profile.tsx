@@ -193,6 +193,7 @@ export default function ProfileScreen() {
         )}
 
         <Section title="Application">
+          <Item icon="chatbubbles-outline" label="Aide & Support" onPress={() => router.push("/support")} testID="profile-support-btn" />
           <Item icon="information-circle-outline" label="À propos / Contact" onPress={() => router.push("/about")} testID="profile-about-btn" />
           <Item icon="document-text-outline" label="Documents légaux" onPress={() => router.push("/legal")} testID="profile-legal-btn" />
           <Item icon="tv-outline" label="Version TV (bientôt)" disabled testID="profile-tv-btn" />

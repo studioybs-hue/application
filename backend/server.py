@@ -3075,6 +3075,347 @@ async def admin_notify_video(video_id: str, body: NotifyVideoIn, _: dict = Depen
     }
 
 
+# ==========================================================================
+# SUPPORT CHAT — Tickets system (logged-in users ↔ admin)
+# ==========================================================================
+# Collections:
+#   db.support_tickets   { id, user_id, user_email, user_name, subject, status,
+#                          created_at, last_message_at, last_sender_role,
+#                          unread_for_user (int), unread_for_admin (int) }
+#   db.support_messages  { id, ticket_id, sender_id, sender_role ("user"|"admin"),
+#                          sender_name, text, attachments [{url, kind}], created_at }
+#
+# Status values: "open", "in_progress", "closed"
+
+ALLOWED_TICKET_STATUSES = {"open", "in_progress", "closed"}
+SUPPORT_ADMIN_EMAIL = os.environ.get("ADMIN_NOTIFY_EMAIL", "") or os.environ.get("SMTP_FROM_EMAIL", "")
+
+
+class TicketCreate(BaseModel):
+    subject: str
+    initial_message: Optional[str] = None
+    attachments: Optional[List[dict]] = None  # [{url, kind}]
+
+
+class TicketMessageCreate(BaseModel):
+    text: str = ""
+    attachments: Optional[List[dict]] = None
+
+
+class TicketStatusUpdate(BaseModel):
+    status: str  # "open" | "in_progress" | "closed"
+
+
+async def _notify_new_support_message(ticket: dict, message: dict, recipient_role: str):
+    """Send push + email when a new message is sent.
+    recipient_role: 'admin' (user sent message) or 'user' (admin replied)
+    """
+    try:
+        text_preview = (message.get("text") or "📎 Pièce jointe").strip()[:140]
+        if recipient_role == "admin":
+            title = f"💬 Nouveau message support : {ticket.get('subject', '')[:40]}"
+            body = f"{ticket.get('user_name') or ticket.get('user_email')} : {text_preview}"
+            # Send push to all admin users
+            admins = await db.users.find({"is_admin": True}, {"_id": 0, "id": 1, "email": 1}).to_list(20)
+            admin_ids = [a["id"] for a in admins]
+            tokens = []
+            if admin_ids:
+                tdocs = await db.push_tokens.find({"user_id": {"$in": admin_ids}}, {"_id": 0, "expo_push_token": 1}).to_list(200)
+                tokens = [t["expo_push_token"] for t in tdocs if t.get("expo_push_token")]
+            if tokens:
+                await _send_expo_push(tokens, title, body, data={"type": "support_message", "ticket_id": ticket["id"], "path": f"/admin/support/{ticket['id']}"})
+            # Email to admin
+            if SUPPORT_ADMIN_EMAIL:
+                html_body = render_email(
+                    title=title,
+                    body_html=(
+                        f"<p><strong>De :</strong> {ticket.get('user_name') or '-'} ({ticket.get('user_email')})</p>"
+                        f"<p><strong>Sujet :</strong> {ticket.get('subject', '')}</p>"
+                        f"<p><strong>Message :</strong></p>"
+                        f"<p style='background:#0A0A0A;padding:12px;border-radius:6px;color:#F5F1E8'>{text_preview}</p>"
+                    ),
+                    cta_label="Répondre dans l'admin",
+                    cta_url=f"{APP_PUBLIC_URL.rstrip('/')}/admin/support/{ticket['id']}",
+                )
+                await send_email(SUPPORT_ADMIN_EMAIL, title, html_body)
+        else:
+            # recipient_role == "user": notify the ticket owner
+            title = f"💬 Réponse de CINÉMARIÉS"
+            body = f"{ticket.get('subject', '')} : {text_preview}"
+            uid = ticket.get("user_id")
+            if uid:
+                tdocs = await db.push_tokens.find({"user_id": uid}, {"_id": 0, "expo_push_token": 1}).to_list(20)
+                tokens = [t["expo_push_token"] for t in tdocs if t.get("expo_push_token")]
+                if tokens:
+                    await _send_expo_push(tokens, title, body, data={"type": "support_message", "ticket_id": ticket["id"], "path": f"/support/{ticket['id']}"})
+            if ticket.get("user_email"):
+                html_body = render_email(
+                    title="Vous avez reçu une réponse",
+                    body_html=(
+                        f"<p>Bonjour {ticket.get('user_name') or ''},</p>"
+                        f"<p>Notre équipe a répondu à votre ticket <strong>« {ticket.get('subject', '')} »</strong> :</p>"
+                        f"<p style='background:#0A0A0A;padding:12px;border-radius:6px;color:#F5F1E8'>{text_preview}</p>"
+                    ),
+                    cta_label="Voir la conversation",
+                    cta_url=f"{APP_PUBLIC_URL.rstrip('/')}/support/{ticket['id']}",
+                )
+                await send_email(ticket["user_email"], title, html_body)
+    except Exception as e:
+        logging.warning(f"[support-notify] failed: {e}")
+
+
+# ---------- USER endpoints ----------
+@api_router.post("/support/tickets")
+async def support_create_ticket(body: TicketCreate, current=Depends(get_current_user)):
+    subj = (body.subject or "").strip()
+    if not subj:
+        raise HTTPException(status_code=400, detail="Le sujet est requis")
+    if len(subj) > 140:
+        subj = subj[:140]
+    ticket_id = str(uuid.uuid4())
+    now = utcnow()
+    initial = (body.initial_message or "").strip()
+    attachments = body.attachments or []
+    if len(attachments) > 5:
+        attachments = attachments[:5]
+    ticket_doc = {
+        "id": ticket_id,
+        "user_id": current["id"],
+        "user_email": current.get("email"),
+        "user_name": current.get("full_name") or current.get("email"),
+        "subject": subj,
+        "status": "open",
+        "created_at": now,
+        "last_message_at": now,
+        "last_sender_role": "user" if initial else None,
+        "unread_for_user": 0,
+        "unread_for_admin": 1 if initial else 0,
+    }
+    await db.support_tickets.insert_one(ticket_doc)
+    msg_doc = None
+    if initial or attachments:
+        msg_doc = {
+            "id": str(uuid.uuid4()),
+            "ticket_id": ticket_id,
+            "sender_id": current["id"],
+            "sender_role": "user",
+            "sender_name": current.get("full_name") or current.get("email"),
+            "text": initial,
+            "attachments": attachments,
+            "created_at": now,
+        }
+        await db.support_messages.insert_one(msg_doc)
+        # Notify admin
+        await _notify_new_support_message(ticket_doc, msg_doc, recipient_role="admin")
+    ticket_doc.pop("_id", None)
+    return {"ticket": ticket_doc}
+
+
+@api_router.get("/support/tickets")
+async def support_list_my_tickets(current=Depends(get_current_user)):
+    tickets = await db.support_tickets.find(
+        {"user_id": current["id"]},
+        {"_id": 0},
+    ).sort("last_message_at", -1).to_list(200)
+    return {"tickets": tickets}
+
+
+@api_router.get("/support/tickets/{ticket_id}")
+async def support_get_ticket(ticket_id: str, current=Depends(get_current_user)):
+    t = await db.support_tickets.find_one({"id": ticket_id}, {"_id": 0})
+    if not t:
+        raise HTTPException(status_code=404, detail="Ticket introuvable")
+    if t.get("user_id") != current["id"] and not current.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Accès refusé")
+    msgs = await db.support_messages.find({"ticket_id": ticket_id}, {"_id": 0}).sort("created_at", 1).to_list(2000)
+    return {"ticket": t, "messages": msgs}
+
+
+@api_router.post("/support/tickets/{ticket_id}/messages")
+async def support_send_message(ticket_id: str, body: TicketMessageCreate, current=Depends(get_current_user)):
+    t = await db.support_tickets.find_one({"id": ticket_id})
+    if not t:
+        raise HTTPException(status_code=404, detail="Ticket introuvable")
+    if t.get("user_id") != current["id"] and not current.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Accès refusé")
+    txt = (body.text or "").strip()
+    attachments = body.attachments or []
+    if not txt and not attachments:
+        raise HTTPException(status_code=400, detail="Message vide")
+    if len(txt) > 4000:
+        txt = txt[:4000]
+    if len(attachments) > 5:
+        attachments = attachments[:5]
+    is_admin_sender = bool(current.get("is_admin")) and t.get("user_id") != current["id"]
+    role = "admin" if is_admin_sender else "user"
+    now = utcnow()
+    msg_doc = {
+        "id": str(uuid.uuid4()),
+        "ticket_id": ticket_id,
+        "sender_id": current["id"],
+        "sender_role": role,
+        "sender_name": "Support CINÉMARIÉS" if role == "admin" else (current.get("full_name") or current.get("email")),
+        "text": txt,
+        "attachments": attachments,
+        "created_at": now,
+    }
+    await db.support_messages.insert_one(msg_doc)
+    # Update ticket counters
+    update = {
+        "last_message_at": now,
+        "last_sender_role": role,
+    }
+    if role == "admin":
+        update["unread_for_user"] = t.get("unread_for_user", 0) + 1
+        # Reset admin unread because admin just replied (any pending should be seen)
+    else:
+        update["unread_for_admin"] = t.get("unread_for_admin", 0) + 1
+    # Reopen if closed
+    if t.get("status") == "closed":
+        update["status"] = "open"
+    await db.support_tickets.update_one({"id": ticket_id}, {"$set": update})
+    t.update(update)
+    t.pop("_id", None)
+    msg_doc_ret = {**msg_doc}
+    msg_doc_ret.pop("_id", None)
+    # Notify the OTHER side
+    recipient = "user" if role == "admin" else "admin"
+    await _notify_new_support_message(t, msg_doc_ret, recipient_role=recipient)
+    return {"message": msg_doc_ret, "ticket": t}
+
+
+@api_router.post("/support/tickets/{ticket_id}/mark-read")
+async def support_mark_read(ticket_id: str, current=Depends(get_current_user)):
+    t = await db.support_tickets.find_one({"id": ticket_id}, {"_id": 0})
+    if not t:
+        raise HTTPException(status_code=404, detail="Ticket introuvable")
+    is_owner = t.get("user_id") == current["id"]
+    is_admin = bool(current.get("is_admin"))
+    if not is_owner and not is_admin:
+        raise HTTPException(status_code=403, detail="Accès refusé")
+    update = {}
+    if is_owner:
+        update["unread_for_user"] = 0
+    if is_admin and not is_owner:
+        update["unread_for_admin"] = 0
+    if update:
+        await db.support_tickets.update_one({"id": ticket_id}, {"$set": update})
+    return {"ok": True}
+
+
+@api_router.patch("/support/tickets/{ticket_id}")
+async def support_user_close_ticket(ticket_id: str, body: TicketStatusUpdate, current=Depends(get_current_user)):
+    """User can close their own ticket (or reopen)."""
+    t = await db.support_tickets.find_one({"id": ticket_id}, {"_id": 0})
+    if not t:
+        raise HTTPException(status_code=404, detail="Ticket introuvable")
+    if t.get("user_id") != current["id"] and not current.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Accès refusé")
+    status_val = (body.status or "").strip().lower()
+    if status_val not in ALLOWED_TICKET_STATUSES:
+        raise HTTPException(status_code=400, detail="Statut invalide")
+    await db.support_tickets.update_one({"id": ticket_id}, {"$set": {"status": status_val}})
+    t["status"] = status_val
+    return {"ticket": t}
+
+
+# ---------- Image upload for support (auth user) ----------
+@api_router.post("/support/upload")
+async def support_upload_image(
+    file: UploadFile = File(...),
+    current=Depends(get_current_user),
+):
+    """Upload an image attachment for a support message. Returns public URL.
+    Limited to images <= 8 MB. Returns 413 if too big.
+    """
+    ext = (file.filename or "").split(".")[-1].lower() if file.filename else "jpg"
+    if not ext or len(ext) > 5 or ext not in ("jpg", "jpeg", "png", "webp", "gif", "heic", "heif"):
+        ext = "jpg"
+    name = f"support_{uuid.uuid4().hex}.{ext}"
+    dest = UPLOAD_DIR / name
+    size = 0
+    MAX = 8 * 1024 * 1024  # 8 MB
+    with dest.open("wb") as f:
+        while True:
+            chunk = await file.read(256 * 1024)
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > MAX:
+                try:
+                    f.close()
+                    dest.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                raise HTTPException(status_code=413, detail="Image trop grande (max 8 MB)")
+            f.write(chunk)
+    public_url = f"{APP_PUBLIC_URL}/api/uploads/{name}"
+    await db.uploads.insert_one({
+        "name": name,
+        "kind": "support_image",
+        "size": size,
+        "content_type": file.content_type,
+        "url": public_url,
+        "owner_user_id": current["id"],
+        "created_at": utcnow(),
+    })
+    return {"url": public_url, "name": name, "size": size}
+
+
+# ---------- ADMIN endpoints ----------
+@api_router.get("/admin/support/tickets")
+async def admin_list_tickets(status: Optional[str] = None, _: dict = Depends(require_admin)):
+    q: dict = {}
+    if status and status in ALLOWED_TICKET_STATUSES:
+        q["status"] = status
+    tickets = await db.support_tickets.find(q, {"_id": 0}).sort("last_message_at", -1).to_list(500)
+    # Counters: total unread for admin
+    total_unread = sum((t.get("unread_for_admin", 0) or 0) for t in tickets)
+    open_count = sum(1 for t in tickets if t.get("status") == "open")
+    return {"tickets": tickets, "total_unread": total_unread, "open_count": open_count}
+
+
+@api_router.get("/admin/support/unread-count")
+async def admin_unread_count(_: dict = Depends(require_admin)):
+    """Quick poll endpoint for the admin badge."""
+    agg = await db.support_tickets.aggregate([
+        {"$group": {"_id": None, "total": {"$sum": "$unread_for_admin"}}}
+    ]).to_list(1)
+    total = (agg[0]["total"] if agg else 0) or 0
+    return {"unread": int(total)}
+
+
+@api_router.patch("/admin/support/tickets/{ticket_id}")
+async def admin_update_ticket(ticket_id: str, body: TicketStatusUpdate, _: dict = Depends(require_admin)):
+    status_val = (body.status or "").strip().lower()
+    if status_val not in ALLOWED_TICKET_STATUSES:
+        raise HTTPException(status_code=400, detail="Statut invalide")
+    res = await db.support_tickets.update_one({"id": ticket_id}, {"$set": {"status": status_val}})
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Ticket introuvable")
+    return {"ok": True, "status": status_val}
+
+
+@api_router.delete("/admin/support/tickets/{ticket_id}")
+async def admin_delete_ticket(ticket_id: str, _: dict = Depends(require_admin)):
+    res = await db.support_tickets.delete_one({"id": ticket_id})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Ticket introuvable")
+    await db.support_messages.delete_many({"ticket_id": ticket_id})
+    return {"ok": True}
+
+
+# ---------- USER unread count (for profile badge) ----------
+@api_router.get("/support/unread-count")
+async def user_unread_count(current=Depends(get_current_user)):
+    agg = await db.support_tickets.aggregate([
+        {"$match": {"user_id": current["id"]}},
+        {"$group": {"_id": None, "total": {"$sum": "$unread_for_user"}}}
+    ]).to_list(1)
+    total = (agg[0]["total"] if agg else 0) or 0
+    return {"unread": int(total)}
+
+
 # Include router
 app.include_router(api_router)
 

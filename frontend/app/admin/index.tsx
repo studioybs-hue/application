@@ -127,6 +127,13 @@ export default function AdminDashboard() {
               testID="admin-hosting-btn"
             />
             <ActionRow
+              icon="chatbubbles-outline"
+              label="Support / Messages"
+              hint="Tickets de support des utilisateurs"
+              onPress={() => router.push("/admin/support")}
+              testID="admin-support-btn"
+            />
+            <ActionRow
               icon="mail-unread-outline"
               label="Demandes de devis"
               hint="Contacts reçus via la page À propos"
