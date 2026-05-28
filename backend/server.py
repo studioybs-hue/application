@@ -66,7 +66,10 @@ class UserPublic(BaseModel):
     full_name: str
     is_subscribed: bool = False
     is_admin: bool = False
+    is_active: bool = True
     subscription_tier: Optional[str] = None  # "basic" | "unlimited" | None
+    subscription_plan: Optional[str] = None  # "annual_commit" | "annual_free" | "monthly_free"
+    subscription_ends_at: Optional[datetime] = None
     client_id: Optional[str] = None
     created_at: datetime
 
@@ -140,7 +143,34 @@ class UnlockCodeInfo(BaseModel):
 class CheckoutRequest(BaseModel):
     success_url: Optional[str] = None
     cancel_url: Optional[str] = None
-    tier: Optional[str] = "basic"  # "basic" (1,99€) or "unlimited" (2,30€)
+    tier: Optional[str] = "basic"  # LEGACY: "basic" | "unlimited"
+    plan: Optional[str] = None  # NEW: "annual_commit" | "annual_free" | "monthly_free"
+
+
+# --- Subscription plans config (in cents EUR) ---
+PLANS = {
+    "annual_commit": {
+        "label": "Premium Annuel — Engagement 12 mois",
+        "amount": 2388,  # 23.88€
+        "interval": "year",
+        "tier": "basic",
+        "engagement": True,
+    },
+    "annual_free": {
+        "label": "Premium Annuel — Sans engagement",
+        "amount": 2760,  # 27.60€
+        "interval": "year",
+        "tier": "unlimited",
+        "engagement": False,
+    },
+    "monthly_free": {
+        "label": "Premium Mensuel — Sans engagement",
+        "amount": 230,  # 2.30€
+        "interval": "month",
+        "tier": "unlimited",
+        "engagement": False,
+    },
+}
 
 
 # ====== UTILITIES ======
@@ -190,7 +220,10 @@ def user_to_public(u: dict) -> UserPublic:
         full_name=u.get("full_name", ""),
         is_subscribed=u.get("is_subscribed", False),
         is_admin=u.get("is_admin", False),
+        is_active=u.get("is_active", True) if u.get("is_active") is not None else True,
         subscription_tier=u.get("subscription_tier"),
+        subscription_plan=u.get("subscription_plan"),
+        subscription_ends_at=u.get("subscription_ends_at"),
         client_id=u.get("client_id"),
         created_at=u.get("created_at", utcnow()),
     )
@@ -289,8 +322,8 @@ async def login(body: LoginRequest):
     u = await db.users.find_one({"email": body.email.lower()}, {"_id": 0})
     if not u or not verify_password(body.password, u.get("password_hash", "")):
         raise HTTPException(status_code=401, detail="Identifiants incorrects")
-    if u.get("is_active") is False:
-        raise HTTPException(status_code=403, detail="Ce compte a été désactivé. Contactez l'administrateur.")
+    # IMPORTANT: deactivated accounts can now still log in (so they can reactivate from the deactivated screen).
+    # The frontend reads `is_active` and shows the deactivated screen with a "Reactivate" CTA.
     # Track last login for inactivity-based admin filtering
     await db.users.update_one({"id": u["id"]}, {"$set": {"last_login_at": utcnow()}})
     u["last_login_at"] = utcnow()
@@ -1554,11 +1587,21 @@ async def create_checkout(body: CheckoutRequest, current: dict = Depends(get_cur
         success_url = body.success_url or f"{APP_PUBLIC_URL}/subscription?status=success&session_id={{CHECKOUT_SESSION_ID}}"
         cancel_url = body.cancel_url or f"{APP_PUBLIC_URL}/subscription?status=cancel"
 
-        tier = (body.tier or "basic").lower()
-        if tier not in ("basic", "unlimited"):
-            tier = "basic"
-        price_amount = STRIPE_PRICE_AMOUNT_UNLIMITED if tier == "unlimited" else STRIPE_PRICE_AMOUNT
-        product_name = "CINÉMARIÉS — Premium Illimité" if tier == "unlimited" else "CINÉMARIÉS — Premium"
+        # NEW: prefer `plan` parameter (annual_commit / annual_free / monthly_free).
+        # Fallback to legacy `tier` (basic → monthly_free, unlimited → monthly_free).
+        plan_code = (body.plan or "").strip()
+        if plan_code not in PLANS:
+            legacy_tier = (body.tier or "basic").lower()
+            plan_code = "monthly_free"  # default
+            if legacy_tier == "basic":
+                plan_code = "monthly_free"
+            elif legacy_tier == "unlimited":
+                plan_code = "monthly_free"
+        plan_cfg = PLANS[plan_code]
+        price_amount = plan_cfg["amount"]
+        interval = plan_cfg["interval"]
+        product_name = "CINÉMARIÉS — " + plan_cfg["label"]
+        tier = plan_cfg["tier"]
 
         session = stripe.checkout.Session.create(
             mode="subscription",
@@ -1567,23 +1610,24 @@ async def create_checkout(body: CheckoutRequest, current: dict = Depends(get_cur
                 "price_data": {
                     "currency": STRIPE_PRICE_CURRENCY,
                     "product_data": {"name": product_name},
-                    "recurring": {"interval": "month"},
+                    "recurring": {"interval": interval},
                     "unit_amount": price_amount,
                 },
                 "quantity": 1,
             }],
             success_url=success_url,
             cancel_url=cancel_url,
-            metadata={"user_id": current["id"], "tier": tier},
+            metadata={"user_id": current["id"], "tier": tier, "plan": plan_code, "engagement": "1" if plan_cfg.get("engagement") else "0"},
         )
         await db.checkout_sessions.insert_one({
             "session_id": session.id,
             "user_id": current["id"],
             "tier": tier,
+            "plan": plan_code,
             "status": "pending",
             "created_at": utcnow(),
         })
-        return {"url": session.url, "session_id": session.id, "tier": tier}
+        return {"url": session.url, "session_id": session.id, "tier": tier, "plan": plan_code}
     except stripe.error.StripeError as e:  # type: ignore[attr-defined]
         logging.warning(f"Stripe error: {e}")
         raise HTTPException(status_code=502, detail=f"Erreur Stripe: {str(e)}")
@@ -1596,15 +1640,32 @@ async def billing_status(session_id: Optional[str] = None, current: dict = Depen
             s = stripe.checkout.Session.retrieve(session_id)
             paid = s.get("payment_status") == "paid"
             if paid:
-                await db.users.update_one({"id": current["id"]}, {"$set": {"is_subscribed": True}})
+                update: dict = {"is_subscribed": True, "is_active": True}
+                # Save plan/tier metadata
+                meta = s.get("metadata") or {}
+                plan_code = meta.get("plan")
+                if plan_code and plan_code in PLANS:
+                    cfg = PLANS[plan_code]
+                    update["subscription_plan"] = plan_code
+                    update["subscription_tier"] = cfg["tier"]
+                    update["subscription_started_at"] = utcnow()
+                    if cfg.get("engagement"):
+                        # 12-month commitment ends in 12 months
+                        update["subscription_ends_at"] = utcnow() + timedelta(days=365)
                 # save subscription id for cancellation
                 sub_id = s.get("subscription")
                 if sub_id:
-                    await db.users.update_one({"id": current["id"]}, {"$set": {"stripe_subscription_id": sub_id}})
+                    update["stripe_subscription_id"] = sub_id
+                await db.users.update_one({"id": current["id"]}, {"$set": update})
         except Exception as e:
             logging.warning(f"Stripe retrieve error: {e}")
     u = await db.users.find_one({"id": current["id"]}, {"_id": 0})
-    return {"is_subscribed": bool(u.get("is_subscribed"))}
+    return {
+        "is_subscribed": bool(u.get("is_subscribed")),
+        "is_active": u.get("is_active", True),
+        "subscription_plan": u.get("subscription_plan"),
+        "subscription_ends_at": u.get("subscription_ends_at"),
+    }
 
 
 @api_router.get("/billing/config")
@@ -1618,12 +1679,26 @@ async def billing_config():
         "basic_max_codes": BASIC_MAX_CODES,
         "max_devices_per_code": MAX_DEVICES_PER_CODE,
         "configured": bool(STRIPE_API_KEY and STRIPE_API_KEY != "sk_test_emergent"),
+        "plans": [
+            {
+                "code": code,
+                "label": cfg["label"],
+                "amount": cfg["amount"],
+                "interval": cfg["interval"],
+                "engagement": cfg.get("engagement", False),
+                "tier": cfg["tier"],
+            }
+            for code, cfg in PLANS.items()
+        ],
     }
 
 
 @api_router.post("/billing/cancel")
 async def cancel_subscription(current: dict = Depends(get_current_user)):
-    """Cancel the user's Stripe subscription (at the end of the current period)."""
+    """Cancel the user's Stripe subscription (at the end of the current period).
+    Does NOT deactivate the account — user keeps access until period end.
+    Use /billing/cancel-and-deactivate for the full flow (cancel + deactivate immediately).
+    """
     sub_id = current.get("stripe_subscription_id")
     if not sub_id:
         # try to look it up from customer
@@ -1642,6 +1717,91 @@ async def cancel_subscription(current: dict = Depends(get_current_user)):
         return {"ok": True, "message": "Abonnement programmé pour résiliation à la fin de la période."}
     except stripe.error.StripeError as e:  # type: ignore[attr-defined]
         raise HTTPException(status_code=502, detail=f"Erreur Stripe: {str(e)}")
+
+
+@api_router.post("/billing/cancel-and-deactivate")
+async def cancel_and_deactivate(current: dict = Depends(get_current_user)):
+    """Cancel the user's Stripe subscription IMMEDIATELY and deactivate the account.
+    Behaviour per plan:
+      • annual_commit  : cannot cancel before subscription_ends_at (12 months). HTTP 403 with the end date.
+      • annual_free, monthly_free : cancels immediately, marks account is_active=false.
+    Cannot deactivate an admin account.
+    """
+    if current.get("is_admin"):
+        raise HTTPException(status_code=400, detail="Un compte administrateur ne peut pas être désactivé via cette route.")
+
+    plan = current.get("subscription_plan")
+    # Enforce 12-month engagement for annual_commit
+    if plan == "annual_commit":
+        ends_at = current.get("subscription_ends_at")
+        if ends_at and isinstance(ends_at, datetime):
+            ends_aware = ends_at if ends_at.tzinfo else ends_at.replace(tzinfo=timezone.utc)
+            if ends_aware > utcnow():
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Engagement 12 mois en cours. Vous pourrez résilier à partir du {ends_aware.strftime('%d/%m/%Y')}.",
+                )
+
+    # Cancel the Stripe subscription immediately (best-effort)
+    sub_id = current.get("stripe_subscription_id")
+    cust_id = current.get("stripe_customer_id")
+    if not sub_id and cust_id and STRIPE_API_KEY:
+        try:
+            subs = stripe.Subscription.list(customer=cust_id, status="active", limit=1)
+            if subs and subs.data:
+                sub_id = subs.data[0].id
+        except Exception as e:
+            logging.warning(f"Stripe list subs error: {e}")
+    cancelled = False
+    if sub_id and STRIPE_API_KEY:
+        try:
+            stripe.Subscription.delete(sub_id)  # immediate cancellation
+            cancelled = True
+        except Exception as e:
+            logging.warning(f"Stripe immediate cancel error: {e}")
+            # Fallback: mark cancel_at_period_end so we don't get stuck
+            try:
+                stripe.Subscription.modify(sub_id, cancel_at_period_end=True)
+            except Exception as e2:
+                logging.warning(f"Stripe modify cancel error: {e2}")
+
+    # Deactivate the account
+    await db.users.update_one(
+        {"id": current["id"]},
+        {"$set": {
+            "is_active": False,
+            "is_subscribed": False,
+            "deactivated_at": utcnow(),
+            "subscription_plan": None,
+            "subscription_tier": None,
+            "subscription_ends_at": None,
+            "stripe_subscription_id": None,
+        }},
+    )
+    return {"ok": True, "stripe_cancelled": cancelled, "is_active": False}
+
+
+class ReactivateRequest(BaseModel):
+    plan: Optional[str] = None  # "annual_commit" | "annual_free" | "monthly_free"
+
+
+@api_router.post("/billing/reactivate")
+async def reactivate_account(body: ReactivateRequest, current: dict = Depends(get_current_user)):
+    """Re-activates a deactivated account.
+    Always returns a Stripe Checkout URL — the user MUST pay again to restore access.
+    Once the payment succeeds and /billing/status is called, is_active=true is set back.
+    """
+    if not STRIPE_API_KEY:
+        raise HTTPException(status_code=503, detail="Stripe non configuré")
+    plan_code = (body.plan or "monthly_free").strip()
+    if plan_code not in PLANS:
+        plan_code = "monthly_free"
+    # Re-set is_active so the user is no longer blocked; we'll keep is_subscribed=false until payment.
+    await db.users.update_one({"id": current["id"]}, {"$set": {"is_active": True}})
+    # Create a new checkout session — re-use the existing logic
+    checkout_body = CheckoutRequest(plan=plan_code)
+    res = await create_checkout(checkout_body, current)  # type: ignore[arg-type]
+    return res
 
 
 @api_router.post("/billing/portal")

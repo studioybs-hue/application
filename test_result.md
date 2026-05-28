@@ -1199,3 +1199,84 @@ agent_communication:
         • A fresh user (support_other_<rand>@example.com) was registered for the cross-access test and left in DB (harmless).
         • Pre-existing unlock_wedding bug (DuplicateKeyError) is worth a separate follow-up but is outside this review scope.
       Feature is production-ready. No frontend testing performed (out of scope per user policy).
+
+
+  - agent: "main"
+    message: |
+      Implemented Subscription System Refactor (3 plans + deactivation flow).
+
+      USER REQUIREMENTS:
+        • Plan 1 "annual_commit" — 23.88€/an, 12-month engagement (no cancel before end date)
+        • Plan 2 "annual_free"   — 27.60€/an, no commitment
+        • Plan 3 "monthly_free"  — 2.30€/mois, no commitment
+        • Accounts are DEACTIVATED (is_active=false), NOT deleted. Data preserved.
+        • Reactivation: login → blocking deactivated screen → Reactivate → Stripe checkout.
+
+      BACKEND (server.py):
+        • Added PLANS dict (annual_commit/annual_free/monthly_free) with {label, amount(cents), interval, tier, engagement}.
+        • UserPublic gained is_active, subscription_plan, subscription_ends_at. user_to_public exposes them.
+        • POST /api/auth/login NO LONGER blocks deactivated accounts (used to 403). They now get a valid token; frontend redirects via is_active flag.
+        • POST /api/billing/checkout — accepts `plan` body. Builds Stripe price_data dynamically with amount + recurring interval. Adds plan + engagement metadata.
+        • GET /api/billing/status — persists subscription_plan/tier/started_at, and for annual_commit sets subscription_ends_at = now + 365d.
+        • GET /api/billing/config — exposes `plans` array.
+        • NEW POST /api/billing/cancel-and-deactivate:
+            – Admin → 400 (admin cannot deactivate via this route).
+            – annual_commit + ends_at>now → 403 with the end date.
+            – Otherwise: stripe.Subscription.delete (fallback: cancel_at_period_end). Sets is_active=false, clears subscription fields.
+        • NEW POST /api/billing/reactivate: body {plan?}. Sets is_active=true, creates a fresh checkout session via create_checkout. Returns {url}.
+
+      FRONTEND:
+        • app/subscription.tsx — REWRITTEN. Loads /billing/config, renders 3 plan cards (★ MEILLEUR PRIX for engagement; FORMULE ACTUELLE for current). Computes "≈ X €/mois" equivalent. Current-plan banner with "Résilier & désactiver mon compte" CTA, with engagement warning in confirm dialog.
+        • app/account-deactivated.tsx — NEW. Lock icon hero + 3-plan radio picker + "Réactiver mon compte" → POST /billing/reactivate → Stripe Checkout. Logout link + support email.
+        • app/_layout.tsx — DeactivationGuard component: if user.is_active===false AND path NOT in [/account-deactivated, /auth/*, /legal/*] → router.replace("/account-deactivated").
+
+      NEEDS BACKEND TESTING:
+        Auth: admin@wedding.fr / Admin13!  and  test@wedding.fr / test1234
+
+        Test scenarios:
+          1. GET /api/billing/config → {plans:[3 items], configured:true}.
+          2. POST /api/billing/checkout with {plan:"annual_commit"} → 200 with url. Verify db.checkout_sessions has plan="annual_commit", tier="basic".
+          3. POST /api/billing/checkout with {plan:"annual_free"} → 200, plan="annual_free", tier="unlimited".
+          4. POST /api/billing/checkout with {plan:"monthly_free"} → 200, plan="monthly_free", tier="unlimited".
+          5. POST /api/billing/checkout with legacy {tier:"basic"} → defaults to plan="monthly_free" (no regression).
+          6. POST /api/auth/login on a deactivated user → 200 with token + is_active=false. GET /auth/me on that token also returns is_active=false (no 403 anymore).
+          7. POST /api/billing/cancel-and-deactivate without an active subscription → still 200, is_active flips to false. GET /auth/me reflects is_active=false.
+          8. POST /api/billing/cancel-and-deactivate as admin → 400.
+          9. Mongo-update user.subscription_plan="annual_commit", subscription_ends_at=utcnow+30d, then POST /billing/cancel-and-deactivate → 403 with French message + end date. Reset subscription_ends_at to utcnow-1d → returns 200.
+         10. POST /api/billing/reactivate with {plan:"monthly_free"} on a deactivated user → 200 with {url}. user.is_active becomes true. (If Stripe key invalid, 502/503 is also acceptable.)
+         11. SMOKE: existing /api/support/*, /api/admin/users, /api/auth/me, /api/weddings/unlock still pass.
+
+        IMPORTANT: at the end, RESTORE test@wedding.fr to is_active=true and clear subscription_plan/subscription_ends_at.
+
+  - agent: "testing"
+    message: |
+      ✅ Subscription System Refactor — ALL 75 backend assertions PASSED against https://mariagevideo.preview.emergentagent.com/api (see /app/backend_test.py).
+
+      A) GET /api/billing/config (public, no auth) — 200 with 3 plans (annual_commit 2388/year/engagement=true/basic, annual_free 2760/year/engagement=false/unlimited, monthly_free 230/month/engagement=false/unlimited). All required keys present.
+
+      B) POST /api/billing/checkout — all 5 cases return 200 with correct plan/tier mapping AND db.checkout_sessions stores the right plan:
+         • {plan:"annual_commit"} → plan="annual_commit", tier="basic"
+         • {plan:"annual_free"} → plan="annual_free", tier="unlimited"
+         • {plan:"monthly_free"} → plan="monthly_free", tier="unlimited"
+         • {tier:"basic"} → fallback plan="monthly_free" (no error)
+         • {} → default plan="monthly_free"
+         No auth → 401 ✅.
+
+      C) POST /api/auth/login on deactivated user — returns 200 (no longer 403), token issued, user.is_active=false in both the login response and the subsequent /auth/me ✅.
+
+      D) POST /api/billing/cancel-and-deactivate:
+         • As test user without active subscription → 200 {ok:true, is_active:false}; /auth/me confirms is_active=false ✅.
+         • As admin → 400 with French message ("Un compte administrateur ne peut pas être désactivé…") ✅.
+         • Engagement guard: annual_commit + subscription_ends_at=utcnow+30d → 403 with French message including end date ✅. With subscription_ends_at=utcnow-1d → 200 (cancellation allowed) ✅.
+
+      E) POST /api/billing/reactivate:
+         • With {plan:"monthly_free"} on deactivated user → 200 with Stripe Checkout url. user.is_active flips to true ✅.
+         • With empty body {} → also 200 (defaults to monthly_free). is_active stays true ✅.
+
+      F) SMOKE regression — /auth/me admin (200), /weddings/public (200), /admin/users (200, returns {users:[…]} dict-shape), POST /support/tickets "Test post-refactor" (200), GET /support/tickets (200). All green ✅.
+
+      RESTORE: test@wedding.fr re-set to is_active=true with subscription_plan / subscription_ends_at / deactivated_at unset at the end (verified via Mongo) — user can log in next session.
+
+      BACKEND LOGS: no 5xx errors from any /api/billing/* or /api/auth/* during the test run (verified backend.out.log). The two 500s visible in logs are pre-existing /api/weddings/unlock DuplicateKeyError on user_unlocks unique index (already documented in prior testing notes) — UNRELATED to this refactor.
+
+      Subscription refactor is PRODUCTION-READY. No issues found.

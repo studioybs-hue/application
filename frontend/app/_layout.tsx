@@ -1,14 +1,37 @@
-import { Stack, useRouter } from "expo-router";
+import { Stack, useRouter, usePathname } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { Platform } from "react-native";
 import { useEffect } from "react";
 import * as NavigationBar from "expo-navigation-bar";
-import { AuthProvider } from "@/src/auth/AuthContext";
+import { AuthProvider, useAuth } from "@/src/auth/AuthContext";
 import { ConfirmProvider } from "@/src/ui/ConfirmDialog";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { colors } from "@/src/theme";
 import { CookieNotice } from "@/src/ui/CookieNotice";
+
+/**
+ * Watches the auth state and redirects deactivated users to /account-deactivated.
+ * Allowed routes for deactivated users: /account-deactivated, /auth/*, /legal/*
+ */
+function DeactivationGuard() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const { user, loading } = useAuth();
+  useEffect(() => {
+    if (loading || !user) return;
+    const isInactive = (user as any).is_active === false;
+    const allowed =
+      !pathname ||
+      pathname.startsWith("/account-deactivated") ||
+      pathname.startsWith("/auth") ||
+      pathname.startsWith("/legal");
+    if (isInactive && !allowed) {
+      router.replace("/account-deactivated");
+    }
+  }, [user, loading, pathname, router]);
+  return null;
+}
 
 export default function RootLayout() {
   const router = useRouter();
@@ -62,6 +85,7 @@ export default function RootLayout() {
       <SafeAreaProvider>
         <AuthProvider>
           <ConfirmProvider>
+            <DeactivationGuard />
             <StatusBar style="light" hidden={false} translucent />
             <Stack
               screenOptions={{

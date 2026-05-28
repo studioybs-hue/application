@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -7,7 +7,6 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Platform,
-  Linking,
 } from "react-native";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -19,18 +18,72 @@ import { colors, spacing, radii } from "@/src/theme";
 import { useAuth } from "@/src/auth/AuthContext";
 import { showAlert, confirmAction } from "@/src/utils/dialog";
 
+type PlanCode = "annual_commit" | "annual_free" | "monthly_free";
+
+type PlanInfo = {
+  code: PlanCode;
+  label: string;
+  amount: number;            // cents
+  interval: "month" | "year";
+  engagement: boolean;
+  tier: string;
+};
+
+type BillingConfig = {
+  publishable_key?: string;
+  configured: boolean;
+  plans: PlanInfo[];
+};
+
+const PLAN_BULLETS: Record<PlanCode, string[]> = {
+  annual_commit: [
+    "Économisez avec un paiement annuel",
+    "Engagement de 12 mois",
+    "Accès Premium illimité",
+    "Jusqu'à 3 appareils par code mariage",
+    "Notifications push & support prioritaire",
+  ],
+  annual_free: [
+    "Paiement annuel d'un coup",
+    "Sans engagement — résiliable à tout moment",
+    "Accès Premium illimité",
+    "Jusqu'à 3 appareils par code mariage",
+    "Notifications push & support prioritaire",
+  ],
+  monthly_free: [
+    "Paiement mensuel — flexible",
+    "Sans engagement — résiliable à tout moment",
+    "Accès Premium illimité",
+    "Jusqu'à 3 appareils par code mariage",
+    "Notifications push & support prioritaire",
+  ],
+};
+
+const formatPrice = (cents: number) => `${(cents / 100).toFixed(2).replace(".", ",")} €`;
+
 export default function SubscriptionScreen() {
   const router = useRouter();
   const { user, refresh } = useAuth();
-  const params = useLocalSearchParams<{ status?: string; session_id?: string; tier?: string }>();
+  const params = useLocalSearchParams<{ status?: string; session_id?: string; plan?: string }>();
+  const [config, setConfig] = useState<BillingConfig | null>(null);
   const [loading, setLoading] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [canceling, setCanceling] = useState(false);
-  const [selectedTier, setSelectedTier] = useState<"basic" | "unlimited">(
-    (params.tier as any) === "unlimited" ? "unlimited" : "basic"
+  const [selectedPlan, setSelectedPlan] = useState<PlanCode>(
+    (params.plan as PlanCode) || "monthly_free"
   );
   const [acceptedTerms, setAcceptedTerms] = useState(false);
 
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await api<BillingConfig>("/billing/config");
+        setConfig(r);
+      } catch {}
+    })();
+  }, []);
+
+  // Process return from Stripe checkout
   useEffect(() => {
     if (params.status === "success") {
       (async () => {
@@ -39,41 +92,43 @@ export default function SubscriptionScreen() {
           await api(`/billing/status?session_id=${params.session_id || ""}`);
           await refresh();
           showAlert("✓ Bienvenue Premium", "Votre abonnement est activé !");
-        } catch (e) {
-          // ignore
-        } finally {
-          setVerifying(false);
-        }
+        } catch {}
+        finally { setVerifying(false); }
       })();
     } else if (params.status === "cancel") {
       showAlert("Paiement annulé", "Vous n'avez pas été débité. Vous pouvez réessayer à tout moment.");
     }
   }, [params.status, params.session_id, refresh]);
 
+  const plans: PlanInfo[] = useMemo(() => {
+    if (config?.plans?.length) return config.plans;
+    // Fallback defaults in case the backend hasn't been updated yet
+    return [
+      { code: "annual_commit", label: "Premium Annuel — Engagement 12 mois", amount: 2388, interval: "year", engagement: true, tier: "basic" },
+      { code: "annual_free", label: "Premium Annuel — Sans engagement", amount: 2760, interval: "year", engagement: false, tier: "unlimited" },
+      { code: "monthly_free", label: "Premium Mensuel — Sans engagement", amount: 230, interval: "month", engagement: false, tier: "unlimited" },
+    ];
+  }, [config]);
+
+  const currentPlan = (user as any)?.subscription_plan as PlanCode | undefined;
+  const isSubscribed = !!user?.is_subscribed;
+
   const subscribe = async () => {
-    if (!user) {
-      router.push("/auth/login");
-      return;
-    }
+    if (!user) { router.push("/auth/login"); return; }
     if (!acceptedTerms) {
-      showAlert(
-        "Acceptation requise",
-        "Vous devez accepter les CGV, CGU et la Politique de confidentialité pour procéder au paiement."
-      );
+      showAlert("Acceptation requise", "Vous devez accepter les CGV, CGU et la Politique de confidentialité.");
       return;
     }
     setLoading(true);
     try {
       const r = await api<{ url: string }>("/billing/checkout", {
         method: "POST",
-        body: { tier: selectedTier },
+        body: { plan: selectedPlan },
       });
       if (Platform.OS === "web") {
-        // Linking is more reliable on web
         window.location.href = r.url;
       } else {
         await WebBrowser.openBrowserAsync(r.url);
-        // After return, refresh status
         await refresh();
       }
     } catch (e: any) {
@@ -83,288 +138,233 @@ export default function SubscriptionScreen() {
     }
   };
 
-  const cancelSub = () => {
+  const cancelAndDeactivate = () => {
+    const engagementWarning = currentPlan === "annual_commit"
+      ? "\n\n⚠️ Vous êtes sur un plan avec engagement 12 mois. La résiliation ne sera possible qu'à la fin de l'engagement."
+      : "\n\nVotre compte sera désactivé. Vos données sont conservées : vous pouvez réactiver à tout moment en vous reconnectant.";
     confirmAction(
-      "Résilier l'abonnement",
-      "Votre abonnement sera résilié à la fin de la période en cours. Vous garderez l'accès Premium jusqu'à cette date.",
+      "Résilier et désactiver mon compte",
+      `Cette action annulera votre abonnement Stripe et désactivera votre compte.${engagementWarning}`,
       async () => {
         setCanceling(true);
         try {
-          await api("/billing/cancel", { method: "POST", body: {} });
+          await api("/billing/cancel-and-deactivate", { method: "POST", body: {} });
           await refresh();
-          showAlert("Abonnement résilié", "Votre abonnement sera résilié à la fin de la période en cours.");
+          showAlert("Compte désactivé", "Votre abonnement a été résilié et votre compte est désactivé. Vous pouvez le réactiver à tout moment.");
+          router.replace("/account-deactivated");
         } catch (e: any) {
-          showAlert("Erreur", e.message || "Impossible de résilier l'abonnement");
+          showAlert("Impossible de résilier", e.message || "Erreur Stripe");
         } finally {
           setCanceling(false);
         }
       },
-      { confirmText: "Résilier", cancelText: "Garder", destructive: true }
+      { destructive: true, confirmText: "Résilier" }
     );
   };
 
-  const features = [
-    { icon: "key", text: "Générez des codes d'invitation pour votre mariage" },
-    { icon: "shield-checkmark", text: "1 code = jusqu'à 3 appareils (idéal pour une famille)" },
-    { icon: "people", text: "Partagez votre film en famille en toute confidentialité" },
-    { icon: "tv", text: "Vos invités peuvent caster sur leur TV (Chromecast)" },
-    { icon: "lock-closed", text: "Vos vidéos restent privées — accès uniquement par code" },
-  ];
+  if (verifying) {
+    return (
+      <View style={styles.loadingScreen}>
+        <ActivityIndicator color={colors.gold} size="large" />
+        <Text style={styles.loadingText}>Activation de votre abonnement…</Text>
+      </View>
+    );
+  }
 
   return (
-    <View style={styles.root}>
-      <LinearGradient colors={[colors.burgundy, colors.bg]} style={StyleSheet.absoluteFillObject} />
-      <SafeAreaView style={{ flex: 1 }} edges={["top"]}>
-        <ScrollView contentContainerStyle={styles.scroll}>
-          <View style={styles.header}>
-            <TouchableOpacity onPress={() => router.back()} style={styles.back} testID="subscription-back">
-              <Ionicons name="close" size={28} color={colors.ivory} />
+    <SafeAreaView style={styles.root} edges={["top"]}>
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => router.back()}>
+          <Ionicons name="chevron-back" size={26} color={colors.ivory} />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>Premium</Text>
+        <View style={{ width: 26 }} />
+      </View>
+
+      <ScrollView contentContainerStyle={styles.scroll}>
+        {/* HERO */}
+        <LinearGradient colors={["rgba(212,175,55,0.15)", "rgba(212,175,55,0)"]} style={styles.hero}>
+          <Ionicons name="diamond" size={36} color={colors.gold} />
+          <Text style={styles.heroTitle}>Accès Premium</Text>
+          <Text style={styles.heroSub}>Choisissez la formule qui vous convient. Annulable à tout moment*.</Text>
+          <Text style={styles.heroSubSmall}>*Sauf engagement 12 mois (formule la plus économique)</Text>
+        </LinearGradient>
+
+        {/* CURRENT SUBSCRIPTION BOX */}
+        {isSubscribed && currentPlan ? (
+          <View style={styles.currentBox}>
+            <View style={styles.currentTopRow}>
+              <Ionicons name="checkmark-circle" size={18} color={colors.gold} />
+              <Text style={styles.currentLabel}>Abonnement actif</Text>
+            </View>
+            <Text style={styles.currentPlanName}>{plans.find(p => p.code === currentPlan)?.label || currentPlan}</Text>
+            <TouchableOpacity style={styles.cancelBtn} onPress={cancelAndDeactivate} disabled={canceling}>
+              {canceling ? (
+                <ActivityIndicator color="#EF5350" size="small" />
+              ) : (
+                <Text style={styles.cancelTxt}>Résilier & désactiver mon compte</Text>
+              )}
             </TouchableOpacity>
           </View>
+        ) : null}
 
-          <View style={styles.hero}>
-            <View style={styles.iconBubble}>
-              <Ionicons name="star" size={32} color={colors.gold} />
-            </View>
-            <Text style={styles.title}>CINÉMARIÉS Premium</Text>
-            <Text style={styles.subtitle}>
-              Partagez VOTRE mariage avec vos proches, en toute sécurité.{"\n"}
-              <Text style={{ color: colors.gold, fontSize: 12 }}>(Réservé aux mariés — donne accès uniquement à votre propre film)</Text>
-            </Text>
-          </View>
+        {/* PLANS */}
+        <Text style={styles.sectionTitle}>{isSubscribed ? "Changer de formule" : "Choisissez votre formule"}</Text>
 
-          <View style={styles.tiersWrap}>
+        {plans.map((p) => {
+          const active = selectedPlan === p.code;
+          const isCurrent = isSubscribed && currentPlan === p.code;
+          const monthlyEq = p.interval === "year" ? (p.amount / 12 / 100).toFixed(2).replace(".", ",") : null;
+          return (
             <TouchableOpacity
-              style={[styles.tierCard, selectedTier === "basic" && styles.tierCardActive]}
-              onPress={() => setSelectedTier("basic")}
-              testID="tier-basic"
+              key={p.code}
+              style={[styles.planCard, active && styles.planCardActive, isCurrent && styles.planCardCurrent]}
+              onPress={() => setSelectedPlan(p.code)}
+              testID={`plan-${p.code}`}
               activeOpacity={0.85}
             >
-              <View style={styles.tierHeader}>
-                <Ionicons name="star" size={20} color={selectedTier === "basic" ? colors.gold : colors.textSecondary} />
-                <Text style={[styles.tierName, selectedTier === "basic" && { color: colors.gold }]}>Premium</Text>
-                {selectedTier === "basic" && <Ionicons name="checkmark-circle" size={20} color={colors.gold} style={{ marginLeft: "auto" }} />}
+              {p.engagement && (
+                <View style={styles.badgeBest}>
+                  <Text style={styles.badgeBestTxt}>★ MEILLEUR PRIX</Text>
+                </View>
+              )}
+              {isCurrent && (
+                <View style={styles.badgeCurrent}>
+                  <Text style={styles.badgeCurrentTxt}>FORMULE ACTUELLE</Text>
+                </View>
+              )}
+              <View style={styles.planHeader}>
+                <Ionicons
+                  name={p.engagement ? "trophy" : p.interval === "year" ? "calendar" : "flash"}
+                  size={22}
+                  color={active ? colors.gold : colors.textSecondary}
+                />
+                <Text style={[styles.planName, active && { color: colors.gold }]} numberOfLines={2}>{p.label}</Text>
+                {active && <Ionicons name="checkmark-circle" size={22} color={colors.gold} style={{ marginLeft: "auto" }} />}
               </View>
-              <Text style={styles.tierPrice}>1,99€<Text style={styles.tierUnit}> /mois</Text></Text>
-              <Text style={styles.tierBullet}>• Jusqu'à 3 codes d'invitation</Text>
-              <Text style={styles.tierBullet}>• 1 code = jusqu'à 3 appareils</Text>
-              <Text style={styles.tierBullet}>• Sans engagement</Text>
+
+              <View style={styles.priceRow}>
+                <Text style={styles.priceMain}>{formatPrice(p.amount)}</Text>
+                <Text style={styles.priceUnit}>/ {p.interval === "year" ? "an" : "mois"}</Text>
+              </View>
+              {monthlyEq && (
+                <Text style={styles.priceEq}>≈ {monthlyEq} € / mois</Text>
+              )}
+
+              {PLAN_BULLETS[p.code].map((b, i) => (
+                <View key={i} style={styles.bulletRow}>
+                  <Ionicons name="checkmark" size={14} color={active ? colors.gold : colors.textSecondary} />
+                  <Text style={[styles.bullet, active && { color: colors.ivory }]}>{b}</Text>
+                </View>
+              ))}
+            </TouchableOpacity>
+          );
+        })}
+
+        {!isSubscribed && (
+          <>
+            {/* TERMS */}
+            <TouchableOpacity style={styles.termsRow} onPress={() => setAcceptedTerms(!acceptedTerms)} testID="accept-terms-btn">
+              <Ionicons name={acceptedTerms ? "checkbox" : "square-outline"} size={22} color={acceptedTerms ? colors.gold : colors.textSecondary} />
+              <Text style={styles.termsTxt}>
+                J'accepte les{" "}
+                <Text style={styles.termsLink} onPress={() => router.push("/legal/cgv")}>CGV</Text>,{" "}
+                <Text style={styles.termsLink} onPress={() => router.push("/legal/cgu")}>CGU</Text>{" "}et la{" "}
+                <Text style={styles.termsLink} onPress={() => router.push("/legal/privacy")}>Politique de confidentialité</Text>.
+              </Text>
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={[styles.tierCard, selectedTier === "unlimited" && styles.tierCardActive]}
-              onPress={() => setSelectedTier("unlimited")}
-              testID="tier-unlimited"
-              activeOpacity={0.85}
+              style={[styles.subscribeBtn, (loading || !acceptedTerms) && { opacity: 0.45 }]}
+              onPress={subscribe}
+              disabled={loading || !acceptedTerms}
+              testID="subscribe-btn"
             >
-              <View style={styles.tierHeader}>
-                <Ionicons name="infinite" size={20} color={selectedTier === "unlimited" ? colors.gold : colors.textSecondary} />
-                <Text style={[styles.tierName, selectedTier === "unlimited" && { color: colors.gold }]}>Premium Illimité</Text>
-                {selectedTier === "unlimited" && <Ionicons name="checkmark-circle" size={20} color={colors.gold} style={{ marginLeft: "auto" }} />}
-              </View>
-              <View style={styles.bestBadge}><Text style={styles.bestBadgeTxt}>RECOMMANDÉ</Text></View>
-              <Text style={styles.tierPrice}>2,30€<Text style={styles.tierUnit}> /mois</Text></Text>
-              <Text style={styles.tierBullet}>• Codes ILLIMITÉS</Text>
-              <Text style={styles.tierBullet}>• 1 code = jusqu'à 3 appareils</Text>
-              <Text style={styles.tierBullet}>• Invitez tous vos proches</Text>
+              {loading ? (
+                <ActivityIndicator color="#0A0A0A" />
+              ) : (
+                <>
+                  <Ionicons name="lock-closed" size={16} color="#0A0A0A" />
+                  <Text style={styles.subscribeTxt}>S'abonner — {formatPrice(plans.find(p => p.code === selectedPlan)?.amount || 0)}</Text>
+                </>
+              )}
             </TouchableOpacity>
-          </View>
 
-          <View style={styles.featureList}>
-            {features.map((f) => (
-              <View key={f.text} style={styles.featureRow}>
-                <View style={styles.featureIcon}>
-                  <Ionicons name={f.icon as any} size={18} color={colors.gold} />
-                </View>
-                <Text style={styles.featureTxt}>{f.text}</Text>
-              </View>
-            ))}
-          </View>
-
-          {user?.is_subscribed ? (
-            <View testID="subscription-active" style={{ gap: spacing.md }}>
-              <View style={styles.activeCard}>
-                <Ionicons name="checkmark-circle" size={24} color={colors.success} />
-                <Text style={styles.activeTxt}>Vous êtes Premium</Text>
-              </View>
-              <TouchableOpacity
-                style={styles.cancelBtn}
-                onPress={cancelSub}
-                disabled={canceling}
-                testID="cancel-sub-btn"
-              >
-                {canceling ? (
-                  <ActivityIndicator color={colors.textSecondary} />
-                ) : (
-                  <Text style={styles.cancelTxt}>Résilier mon abonnement</Text>
-                )}
-              </TouchableOpacity>
+            <View style={styles.securityRow}>
+              <Ionicons name="shield-checkmark" size={14} color={colors.textSecondary} />
+              <Text style={styles.securityTxt}>Paiement sécurisé par Stripe · CB / Apple Pay / Google Pay</Text>
             </View>
-          ) : (
-            <>
-              {/* Consentement CGV obligatoire */}
-              <TouchableOpacity
-                style={styles.consentRow}
-                onPress={() => setAcceptedTerms(!acceptedTerms)}
-                activeOpacity={0.7}
-                testID="sub-consent-checkbox"
-              >
-                <View style={[styles.checkbox, acceptedTerms && styles.checkboxChecked]}>
-                  {acceptedTerms ? <Ionicons name="checkmark" size={14} color="#0A0A0A" /> : null}
-                </View>
-                <Text style={styles.consentTxt}>
-                  J'accepte les{" "}
-                  <Text style={styles.consentLink} onPress={() => router.push("/legal/cgv")}>CGV</Text>
-                  ,{" "}
-                  <Text style={styles.consentLink} onPress={() => router.push("/legal/cgu")}>CGU</Text>
-                  {" "}et la{" "}
-                  <Text style={styles.consentLink} onPress={() => router.push("/legal/privacy")}>Politique de confidentialité</Text>
-                  . Je demande l'accès immédiat au service et renonce expressément à mon droit de rétractation.
-                </Text>
-              </TouchableOpacity>
+          </>
+        )}
 
-              <TouchableOpacity
-                style={[styles.cta, !acceptedTerms && { opacity: 0.5 }]}
-                onPress={subscribe}
-                disabled={loading || verifying || !acceptedTerms}
-                testID="subscribe-btn"
-              >
-                {loading || verifying ? (
-                  <ActivityIndicator color="#0A0A0A" />
-                ) : (
-                  <>
-                    <Text style={styles.ctaTxt}>
-                      {selectedTier === "unlimited" ? "S'abonner — 2,30€/mois" : "S'abonner — 1,99€/mois"}
-                    </Text>
-                    <Ionicons name="arrow-forward" size={18} color="#0A0A0A" />
-                  </>
-                )}
-              </TouchableOpacity>
-            </>
-          )}
-
-          <View style={styles.legal}>
-            <Text style={styles.legalTxt}>
-              Paiement sécurisé par Stripe. Renouvellement automatique mensuel, résiliable à tout moment depuis votre profil.
-            </Text>
-            <View style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: "center", gap: 12, marginTop: 4 }}>
-              <TouchableOpacity onPress={() => router.push("/legal/cgv")}>
-                <Text style={styles.legalLink}>CGV</Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={() => router.push("/legal/cgu")}>
-                <Text style={styles.legalLink}>CGU</Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={() => router.push("/legal/privacy")}>
-                <Text style={styles.legalLink}>Confidentialité</Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={() => Linking.openURL("https://stripe.com/fr/legal")}>
-                <Text style={styles.legalLink}>Stripe</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </ScrollView>
-      </SafeAreaView>
-    </View>
+        <Text style={styles.footer}>
+          Vous pouvez résilier à tout moment depuis cette page (sauf engagement 12 mois). Votre compte sera désactivé mais vos données conservées : vous pouvez le réactiver à tout moment en payant à nouveau.
+        </Text>
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
-  scroll: { padding: spacing.md, paddingBottom: spacing.xl },
-  header: { flexDirection: "row", justifyContent: "flex-end" },
-  back: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
-  hero: { alignItems: "center", marginTop: spacing.md, marginBottom: spacing.lg },
-  iconBubble: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: "rgba(212,175,55,0.1)",
-    borderWidth: 1.5,
-    borderColor: colors.gold,
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: spacing.md,
-  },
-  title: { color: colors.ivory, fontSize: 28, fontWeight: "700", textAlign: "center" },
-  subtitle: { color: colors.textSecondary, fontSize: 14, textAlign: "center", marginTop: 8, paddingHorizontal: spacing.lg },
-  priceCard: {
-    backgroundColor: colors.surface,
+  loadingScreen: { flex: 1, backgroundColor: colors.bg, alignItems: "center", justifyContent: "center", gap: 16 },
+  loadingText: { color: colors.ivory, fontSize: 14 },
+  header: { flexDirection: "row", alignItems: "center", paddingHorizontal: spacing.md, paddingVertical: 10 },
+  headerTitle: { flex: 1, color: colors.ivory, fontSize: 18, fontWeight: "700", textAlign: "center" },
+  scroll: { padding: spacing.md, paddingBottom: 60 },
+  hero: { alignItems: "center", padding: 24, borderRadius: radii.md, marginBottom: 18 },
+  heroTitle: { color: colors.ivory, fontSize: 22, fontWeight: "800", marginTop: 8 },
+  heroSub: { color: colors.textSecondary, fontSize: 13, marginTop: 4, textAlign: "center" },
+  heroSubSmall: { color: colors.textDisabled, fontSize: 11, marginTop: 2, fontStyle: "italic", textAlign: "center" },
+
+  currentBox: {
+    padding: 14,
+    borderRadius: radii.md,
+    backgroundColor: "rgba(212,175,55,0.08)",
     borderWidth: 1,
-    borderColor: colors.gold,
-    borderRadius: radii.lg,
-    padding: spacing.lg,
-    alignItems: "center",
-    marginVertical: spacing.lg,
+    borderColor: "rgba(212,175,55,0.4)",
+    marginBottom: 14,
   },
-  priceBig: { color: colors.gold, fontSize: 48, fontWeight: "800", letterSpacing: -1 },
-  priceSmall: { color: colors.ivory, fontSize: 18, fontWeight: "400" },
-  priceNote: { color: colors.textSecondary, fontSize: 12, marginTop: 6 },
-  consentRow: { flexDirection: "row", alignItems: "flex-start", marginVertical: spacing.md, gap: 10, paddingHorizontal: 4 },
-  checkbox: { width: 20, height: 20, borderRadius: 5, borderWidth: 1.5, borderColor: colors.border, alignItems: "center", justifyContent: "center", backgroundColor: colors.surface, marginTop: 2 },
-  checkboxChecked: { backgroundColor: colors.gold, borderColor: colors.gold },
-  consentTxt: { color: colors.textSecondary, fontSize: 12, flex: 1, lineHeight: 17 },
-  consentLink: { color: colors.gold, textDecorationLine: "underline", fontWeight: "600" },
-  tiersWrap: { gap: 12, marginVertical: spacing.lg },
-  tierCard: {
+  currentTopRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+  currentLabel: { color: colors.gold, fontSize: 12, fontWeight: "700", letterSpacing: 0.5 },
+  currentPlanName: { color: colors.ivory, fontSize: 15, fontWeight: "600", marginTop: 4 },
+  cancelBtn: { marginTop: 12, alignSelf: "flex-start", paddingVertical: 8, paddingHorizontal: 0 },
+  cancelTxt: { color: "#EF5350", fontSize: 12, fontWeight: "600", textDecorationLine: "underline" },
+
+  sectionTitle: { color: colors.textSecondary, fontSize: 12, letterSpacing: 0.5, textTransform: "uppercase", marginBottom: 10, marginTop: 6 },
+
+  planCard: {
     backgroundColor: colors.surface,
+    padding: 16,
+    borderRadius: radii.md,
+    marginBottom: 12,
     borderWidth: 1.5,
     borderColor: colors.border,
-    borderRadius: radii.lg,
-    padding: spacing.md,
     position: "relative",
   },
-  tierCardActive: { borderColor: colors.gold, backgroundColor: "rgba(212,175,55,0.06)" },
-  tierHeader: { flexDirection: "row", alignItems: "center", gap: 8 },
-  tierName: { color: colors.ivory, fontSize: 16, fontWeight: "700" },
-  tierPrice: { color: colors.gold, fontSize: 30, fontWeight: "800", marginTop: 10, letterSpacing: -1 },
-  tierUnit: { color: colors.textSecondary, fontSize: 14, fontWeight: "400" },
-  tierBullet: { color: colors.textSecondary, fontSize: 12, marginTop: 4 },
-  bestBadge: { position: "absolute", top: -8, right: 12, backgroundColor: colors.gold, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 4 },
-  bestBadgeTxt: { color: "#0A0A0A", fontSize: 9, fontWeight: "800", letterSpacing: 1 },
-  featureList: { marginBottom: spacing.lg },
-  featureRow: { flexDirection: "row", alignItems: "center", paddingVertical: 10 },
-  featureIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "rgba(212,175,55,0.1)",
-    alignItems: "center",
-    justifyContent: "center",
-    marginRight: spacing.md,
-  },
-  featureTxt: { color: colors.ivory, fontSize: 14, flex: 1 },
-  cta: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 10,
-    backgroundColor: colors.gold,
-    paddingVertical: 16,
-    borderRadius: radii.sm,
-  },
-  ctaTxt: { color: "#0A0A0A", fontWeight: "700", fontSize: 16, letterSpacing: 0.3 },
-  activeCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 10,
-    paddingVertical: 16,
-    backgroundColor: "rgba(46,125,50,0.15)",
-    borderWidth: 1,
-    borderColor: colors.success,
-    borderRadius: radii.sm,
-  },
-  activeTxt: { color: colors.ivory, fontWeight: "700", fontSize: 15 },
-  cancelBtn: {
-    alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: 14,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.15)",
-    borderRadius: radii.sm,
-  },
-  cancelTxt: { color: colors.textSecondary, fontSize: 13, textDecorationLine: "underline" },
-  legal: { alignItems: "center", marginTop: spacing.lg, paddingHorizontal: spacing.md },
-  legalTxt: { color: colors.textSecondary, fontSize: 11, textAlign: "center", lineHeight: 16 },
-  legalLink: { color: colors.gold, fontSize: 12, marginTop: 6 },
+  planCardActive: { borderColor: colors.gold, backgroundColor: "rgba(212,175,55,0.05)" },
+  planCardCurrent: { borderColor: "rgba(212,175,55,0.6)" },
+  badgeBest: { position: "absolute", top: -8, right: 14, backgroundColor: colors.gold, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999 },
+  badgeBestTxt: { color: "#0A0A0A", fontSize: 9, fontWeight: "800", letterSpacing: 0.5 },
+  badgeCurrent: { position: "absolute", top: -8, left: 14, backgroundColor: "#4CAF50", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999 },
+  badgeCurrentTxt: { color: "#FFFFFF", fontSize: 9, fontWeight: "800", letterSpacing: 0.5 },
+  planHeader: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 8 },
+  planName: { flex: 1, color: colors.ivory, fontSize: 14, fontWeight: "700" },
+  priceRow: { flexDirection: "row", alignItems: "flex-end", marginBottom: 2 },
+  priceMain: { color: colors.gold, fontSize: 28, fontWeight: "800" },
+  priceUnit: { color: colors.textSecondary, fontSize: 13, marginLeft: 4, marginBottom: 6 },
+  priceEq: { color: colors.textDisabled, fontSize: 11, marginBottom: 8 },
+  bulletRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 4 },
+  bullet: { color: colors.textSecondary, fontSize: 12, flex: 1 },
+
+  termsRow: { flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 8, marginBottom: 14, padding: 4 },
+  termsTxt: { flex: 1, color: colors.textSecondary, fontSize: 12, lineHeight: 18 },
+  termsLink: { color: colors.gold, textDecorationLine: "underline" },
+
+  subscribeBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, backgroundColor: colors.gold, paddingVertical: 16, borderRadius: radii.sm, marginTop: 4 },
+  subscribeTxt: { color: "#0A0A0A", fontWeight: "800", fontSize: 14, letterSpacing: 0.4 },
+  securityRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 10 },
+  securityTxt: { color: colors.textSecondary, fontSize: 10 },
+
+  footer: { color: colors.textDisabled, fontSize: 11, lineHeight: 16, textAlign: "center", marginTop: 24, fontStyle: "italic" },
 });
