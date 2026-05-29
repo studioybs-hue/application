@@ -119,6 +119,12 @@ async def _user_can_view_photos(db, user: Optional[dict], wedding_id: str) -> tu
     - Admin : toujours OK
     - Utilisateur abonné Premium : OK si le mariage existe
     - Sinon : "premium_required"
+
+    Considère un utilisateur comme Premium si :
+      - is_subscribed=True (nouveau système 3 plans)
+      - OU subscription_tier in {basic, unlimited} (ancien tier system)
+      - OU stripe_subscription_id défini (souscription Stripe active)
+    Couvre les anciens abonnés 1.99€ qui n'ont pas forcément is_subscribed=True en base.
     """
     if not user:
         return False, "not_authenticated"
@@ -128,7 +134,12 @@ async def _user_can_view_photos(db, user: Optional[dict], wedding_id: str) -> tu
     has_wedding = await db.videos.find_one({"client_id": wedding_id})
     if not has_wedding:
         return False, "wedding_not_found"
-    if not user.get("is_subscribed"):
+    is_premium = (
+        bool(user.get("is_subscribed"))
+        or (user.get("subscription_tier") in ("basic", "unlimited", "premium"))
+        or bool(user.get("stripe_subscription_id"))
+    )
+    if not is_premium:
         return False, "premium_required"
     return True, "ok"
 
