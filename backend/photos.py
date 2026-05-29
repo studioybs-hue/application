@@ -116,15 +116,12 @@ class PhotosInfo(BaseModel):
 async def _user_can_view_photos(db, user: Optional[dict], wedding_id: str) -> tuple[bool, str]:
     """
     Retourne (allowed, reason).
-    - Admin : toujours OK
-    - Utilisateur abonné Premium : OK si le mariage existe
-    - Sinon : "premium_required"
 
-    Considère un utilisateur comme Premium si :
-      - is_subscribed=True (nouveau système 3 plans)
-      - OU subscription_tier in {basic, unlimited} (ancien tier system)
-      - OU stripe_subscription_id défini (souscription Stripe active)
-    Couvre les anciens abonnés 1.99€ qui n'ont pas forcément is_subscribed=True en base.
+    Règle CINÉMARIÉS : la galerie photo est PRIVÉE.
+    Seuls peuvent y accéder :
+      - Le couple marié (propriétaire du mariage : user.client_id == wedding_id)
+      - L'admin / studio
+    Les invités avec code, les abonnés externes et tout autre utilisateur n'y ont PAS accès.
     """
     if not user:
         return False, "not_authenticated"
@@ -134,14 +131,12 @@ async def _user_can_view_photos(db, user: Optional[dict], wedding_id: str) -> tu
     has_wedding = await db.videos.find_one({"client_id": wedding_id})
     if not has_wedding:
         return False, "wedding_not_found"
-    is_premium = (
-        bool(user.get("is_subscribed"))
-        or (user.get("subscription_tier") in ("basic", "unlimited", "premium"))
-        or bool(user.get("stripe_subscription_id"))
-    )
-    if not is_premium:
-        return False, "premium_required"
-    return True, "ok"
+    # Vérifier que l'utilisateur EST le couple marié de ce mariage
+    user_client_id = user.get("client_id")
+    if user_client_id and user_client_id == wedding_id:
+        return True, "ok"
+    # Tout autre cas → refusé (même Premium Stripe externe, même code unlocké)
+    return False, "couple_only"
 
 
 async def _wedding_exists(db, wedding_id: str) -> bool:

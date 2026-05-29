@@ -194,27 +194,40 @@ export default function PhotosGalleryScreen() {
 
   // ===== Gate Premium ou No Access =====
   if (info && !info.has_access) {
+    const reason = info.access_reason;
+    const isCoupleOnly = reason === "couple_only";
+    const isUnauth = reason === "not_authenticated";
     return (
       <SafeAreaView style={s.container} edges={["top"]}>
         <Header title="Galerie photo" onBack={() => router.back()} />
         <View style={s.gateContainer}>
-          <Ionicons name="lock-closed" size={64} color={colors.gold} />
-          <Text style={s.gateTitle}>Galerie Premium</Text>
-          <Text style={s.gateText}>
-            {info.access_reason === "premium_required"
-              ? "Accédez à toutes les photos HD de votre mariage, créez votre diaporama musical et téléchargez vos souvenirs."
-              : "Connectez-vous pour accéder à la galerie photo."}
+          <Ionicons
+            name={isCoupleOnly ? "heart" : "lock-closed"}
+            size={64}
+            color={colors.gold}
+          />
+          <Text style={s.gateTitle}>
+            {isCoupleOnly ? "Galerie privée" : isUnauth ? "Connexion requise" : "Accès réservé"}
           </Text>
-          {info.photos_count > 0 && (
+          <Text style={s.gateText}>
+            {isCoupleOnly
+              ? "Cette galerie photo est réservée aux mariés. Vos invités peuvent voir vos vidéos via le code, mais pas vos photos privées."
+              : isUnauth
+              ? "Connectez-vous pour accéder à votre galerie photo."
+              : "Vous n'avez pas accès à cette galerie."}
+          </Text>
+          {info.photos_count > 0 && !isCoupleOnly && (
             <Text style={s.gateMeta}>📸 {info.photos_count} photos disponibles</Text>
           )}
-          <TouchableOpacity
-            style={s.gateCta}
-            onPress={() => router.push("/subscription")}
-          >
-            <Ionicons name="diamond" size={18} color="#000" />
-            <Text style={s.gateCtaText}>Passer Premium</Text>
-          </TouchableOpacity>
+          {isUnauth && (
+            <TouchableOpacity
+              style={s.gateCta}
+              onPress={() => router.push("/auth/login")}
+            >
+              <Ionicons name="log-in" size={18} color="#000" />
+              <Text style={s.gateCtaText}>Se connecter</Text>
+            </TouchableOpacity>
+          )}
         </View>
       </SafeAreaView>
     );

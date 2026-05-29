@@ -327,25 +327,24 @@ export default function WeddingScreen() {
               <Text style={styles.unlockedBannerTxt}>Espace privé débloqué — bonnes émotions !</Text>
             </View>
 
-            <TouchableOpacity
-              style={styles.photoGalleryBtn}
-              onPress={() => router.push({ pathname: "/photos/[clientId]", params: { clientId: String(clientId) } })}
-              testID="wedding-photos-btn"
-            >
-              <View style={styles.photoGalleryIcon}>
-                <Ionicons name="images" size={26} color={colors.gold} />
-              </View>
-              <View style={{ flex: 1, marginLeft: 12 }}>
-                <Text style={styles.photoGalleryTitle}>Galerie photo</Text>
-                <Text style={styles.photoGallerySub}>
-                  Découvrez toutes vos photos · Diaporama musical · Téléchargement
-                </Text>
-              </View>
-              <View style={styles.premiumBadge}>
-                <Ionicons name="diamond" size={12} color="#000" />
-                <Text style={styles.premiumBadgeTxt}>Premium</Text>
-              </View>
-            </TouchableOpacity>
+            {wedding.is_my_wedding && (
+              <TouchableOpacity
+                style={styles.photoGalleryBtn}
+                onPress={() => router.push({ pathname: "/photos/[clientId]", params: { clientId: String(clientId) } })}
+                testID="wedding-photos-btn"
+              >
+                <View style={styles.photoGalleryIcon}>
+                  <Ionicons name="images" size={26} color={colors.gold} />
+                </View>
+                <View style={{ flex: 1, marginLeft: 12 }}>
+                  <Text style={styles.photoGalleryTitle}>Galerie photo</Text>
+                  <Text style={styles.photoGallerySub}>
+                    Vos photos privées · Diaporama musical · Téléchargement
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={20} color={colors.gold} />
+              </TouchableOpacity>
+            )}
 
             {wedding.is_my_wedding && (
               <TouchableOpacity style={styles.inviteBtn} onPress={openInvite} testID="invite-friends-btn">
