@@ -38,6 +38,7 @@ type Form = {
   duration_minutes: string;
   is_featured: boolean;
   is_top_france: boolean;
+  is_showcase: boolean;
   client_name: string;
   client_id: string;
 };
@@ -53,6 +54,7 @@ const EMPTY: Form = {
   duration_minutes: "0",
   is_featured: false,
   is_top_france: false,
+  is_showcase: false,
   client_name: "",
   client_id: "",
 };
@@ -106,6 +108,7 @@ export default function VideoEdit() {
             duration_minutes: String(v.duration_minutes || 0),
             is_featured: !!v.is_featured,
             is_top_france: !!v.is_top_france,
+            is_showcase: !!v.is_showcase,
             client_name: v.client_name || "",
             client_id: v.client_id || "",
           });
@@ -524,6 +527,15 @@ export default function VideoEdit() {
           <View style={styles.switchRow}>
             <Text style={styles.label}>N°1 en France</Text>
             <Switch value={form.is_top_france} onValueChange={(v) => set("is_top_france", v)} trackColor={{ true: colors.wine }} testID="switch-top" />
+          </View>
+          <View style={[styles.switchRow, { borderTopWidth: 1, borderTopColor: "rgba(212,175,55,0.15)", paddingTop: 14, marginTop: 6 }]}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.label}>⭐ Vidéo démo publique</Text>
+              <Text style={{ color: colors.textSecondary, fontSize: 11, marginTop: 2 }}>
+                Visible dans &quot;Découvrir&quot; · regardable avec compte gratuit · sans code
+              </Text>
+            </View>
+            <Switch value={form.is_showcase} onValueChange={(v) => set("is_showcase", v)} trackColor={{ true: colors.gold }} testID="switch-showcase" />
           </View>
 
           <TouchableOpacity style={[styles.saveBtn, uploading && { opacity: 0.5 }]} onPress={save} disabled={saving || uploading !== null} testID="save-video-btn">

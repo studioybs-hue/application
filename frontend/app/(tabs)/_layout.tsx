@@ -6,6 +6,9 @@ import { Platform } from "react-native";
 const HomeIcon = ({ color, size }: { color: string; size: number }) => (
   <Ionicons name="film-outline" size={size} color={color} />
 );
+const DiscoverIcon = ({ color, size }: { color: string; size: number }) => (
+  <Ionicons name="sparkles-outline" size={size} color={color} />
+);
 const LibIcon = ({ color, size }: { color: string; size: number }) => (
   <Ionicons name="bookmark-outline" size={size} color={color} />
 );
@@ -32,6 +35,7 @@ export default function TabsLayout() {
       }}
     >
       <Tabs.Screen name="home" options={{ title: "Accueil", tabBarIcon: HomeIcon }} />
+      <Tabs.Screen name="discover" options={{ title: "Découvrir", tabBarIcon: DiscoverIcon }} />
       <Tabs.Screen name="library" options={{ title: "Ma Bibliothèque", tabBarIcon: LibIcon }} />
       <Tabs.Screen name="profile" options={{ title: "Profil", tabBarIcon: ProfileIcon }} />
     </Tabs>

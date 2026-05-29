@@ -450,14 +450,40 @@ agent_communication:
         comment: "All 27 assertions PASSED against https://mariagevideo.preview.emergentagent.com/api (see /app/backend_test_admin_weddings.py). GET /api/admin/weddings: (a) unauth → 401 'Non authentifié'; (b) non-admin (test@wedding.fr) → 403 'Accès réservé aux administrateurs'; (c) admin → 200 with {weddings:[...]} containing 2 entries; every wedding has client_id (str), client_name (str), video_count (int > 0), poster_url, created_at (ISO string). Sorting verified: newest created_at first. The sarahaline-elarif wedding correctly shows video_count=2 (Sarahaline & Elarif). POST /api/admin/weddings/merge: (a) non-admin → 403; (b) missing target_client_id → 400 'target_client_id requis'; (c) missing source_client_ids → 400 'source_client_ids requis'; (d) empty source list → 400 'source_client_ids requis'. Happy path: created a test video with title 'TestMergeWedding DFAC7D' (auto client_id testmergewedding-dfac7d), confirmed it appeared in /admin/weddings, then POSTed merge with source=['testmergewedding-dfac7d'], target='sarahaline-elarif', target_client_name='Sarahaline & Elarif' → 200 {ok:true, moved:1, target_client_id:'sarahaline-elarif'}. Post-merge GET /admin/weddings confirmed: test wedding GONE, sarahaline-elarif video_count went 2→3. GET /api/weddings/sarahaline-elarif?code=<existing> returned all 3 videos including the merged TestMergeWedding video with unlocked=true. REGRESSION POST /api/weddings/unlock with a fresh code for sarahaline-elarif + device_id='TEST_DEVICE_001' → 200 video_count=3, videos[] length=3, all with non-null full_url. Cleanup deleted the test video and post-cleanup state confirmed back to baseline (sarahaline-elarif=2, hanifa-et-dali=1). No 5xx errors observed; backend logs clean. Endpoints are production-ready."
 
 test_plan:
-  current_focus: []
+  current_focus:
+    - "Public Showcase Videos (Discover tab)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
 
 agent_communication:
   - agent: "main"
-    message: "Added GET /api/admin/weddings and POST /api/admin/weddings/merge to fix the duplicate-wedding bug discovered when user uploaded 2 videos for the same couple (Sarahaline/Sarhaline typo created 2 weddings instead of 1). Existing code/unlock logic already correctly returns ALL videos of a client_id when unlock is called, so the fix is on the admin grouping side. Please test the two new endpoints. Admin: admin@wedding.fr / Admin13!. The codes endpoint still works as expected per previous tests."
+    message: |
+      🎬 NEW FEATURE — Public Showcase Videos (Phase 2 — Vidéothèque publique).
+
+      Added to backend (/app/backend/server.py):
+        1. Video model: new field `is_showcase: bool = False`
+        2. VideoCreate / VideoUpdate: accept `is_showcase`
+        3. video_to_public(): exposes `is_showcase` in API response
+        4. NEW endpoint: GET /api/videos/showcase — optional auth (anonymous = posters/trailers only, authenticated = full_url for casting). Returns {is_authenticated, featured[], rows:[{category, videos[]}], total}. Categories ordered: "À l'affiche", "Cérémonies", "Soirées", "Best Of", then any other alphabetically.
+        5. GET /api/videos/{video_id}: NEW rule — if v.is_showcase=True AND user is authenticated → unlocked=True (no code required). Existing wedding-code logic untouched.
+
+      Frontend changes:
+        • Added new tab `/discover` (Découvrir) with Netflix-style hero + horizontal rows.
+        • Admin video-edit: new switch "⭐ Vidéo démo publique" wired to is_showcase.
+        • Admin /admin/videos list: green "⭐ DÉMO" badge when is_showcase=true.
+
+      Please test the SHOWCASE endpoints only (don't re-test photo gallery):
+        a) GET /api/videos/showcase (anonymous) → 200, is_authenticated:false, total:0 initially, all videos with full_url=null
+        b) GET /api/videos/showcase (auth as test@wedding.fr or admin) → is_authenticated:true, full_url populated when at least one video is_showcase
+        c) Use admin token to create a video with is_showcase=true via POST /api/admin/videos → expect 200 with returned video.is_showcase=true
+        d) PATCH /api/admin/videos/{id} with body {is_showcase: false} → 200, then GET /videos/showcase total decreases by 1
+        e) GET /api/videos/{id} with a logged-in non-admin user for the showcase video → must return include_full=true (full_url present) WITHOUT any unlock code
+        f) GET /api/videos/{id} as anonymous (no auth, no code) for the showcase video → full_url MUST be null (showcase requires login to play, but listing/poster is public)
+        g) Regression: existing /weddings/public, /weddings/{id}, /weddings/unlock, /library, /admin/weddings should all still pass
+
+      Admin: admin@wedding.fr / Admin13!
+      Test user: test@wedding.fr / TestPass123!  (or any existing free account from test_credentials.md)
   - agent: "testing"
     message: |
       ✅ Both new admin endpoints fully verified — 27/27 assertions passed against https://mariagevideo.preview.emergentagent.com/api.
@@ -1537,3 +1563,62 @@ agent_communication:
       The single "failure" in the run is NOT a backend bug: test_credentials.md states test@wedding.fr is Premium, but DB shows is_subscribed=False, so the 402 returned for that user on /weddings/{id}/photos is correctly enforcing the premium gate. Either re-seed the test user as is_subscribed=true or update test_credentials.md. Unrelated to the photo gallery module.
 
       No critical issues found. photos.py + register_photo_routes are production-ready. Marking task working=true, needs_retesting=false.
+
+
+# ─────────────────────────────────────────────────────────────────
+# 2026-XX  Public Showcase Videos (NEW) — backend testing
+# ─────────────────────────────────────────────────────────────────
+
+backend:
+  - task: "Public Showcase Videos — GET /api/videos/showcase + admin showcase toggle + auto-unlock"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "testing"
+          comment: |
+            Backend tested end-to-end against https://mariagevideo.preview.emergentagent.com/api.
+            Test script: /app/backend_test.py — 39/39 assertions PASSED.
+
+            Scenarios verified:
+              a) Anonymous GET /api/videos/showcase → 200, is_authenticated:false, rows[]/featured[]/total present.
+                 Baseline total at run time = 0. (Vacuous check that every showcase video has full_url=null + trailer_url + poster_url populated — would catch leakage if any existed.)
+              b) Admin GET /api/videos/showcase → 200, is_authenticated:true. (No pre-existing showcase, so full_url branch tested in (d)/(f).)
+              c) POST /api/admin/videos with is_showcase:true → 200, response.video.is_showcase === true, video.id present.
+              d) Anonymous GET /api/videos/showcase after create → total increased by 1, new video appears in row category "À l'affiche", and preferred category ordering (À l'affiche, Cérémonies, Soirées, Best Of) is respected.
+              e) PATCH /api/admin/videos/{id} {"is_showcase":false} → 200, response.video.is_showcase === false. Anon total goes back to baseline.
+              f) PATCH back to is_showcase:true → 200. Then logged-in NON-admin free user (test@wedding.fr) GET /api/videos/{id} WITHOUT code → 200 and full_url == "https://example.com/full.mp4" (NOT null). Proves the new showcase auto-unlock rule in /videos/{video_id} (server.py L1543-1545) works for any authenticated user.
+              g) Anonymous GET /api/videos/{id} for the same showcase video → 200 with full_url=null, poster_url+trailer_url populated, is_showcase=true. Listing public, playback gated by auth — correct.
+              h) Regression: GET /weddings/public (200), GET /weddings/{client_id} (200, videos[] present), POST /weddings/unlock with seed code S9A5URZC (returns 200 or 403 depending on device-slot state — endpoint alive and validating code+device binding), GET /library auth (200, videos[]), GET /admin/weddings admin (200, weddings[]). Wedding-code unlock flow intact.
+              i) Cleanup: DELETE /api/admin/videos/{id} → 200; post-cleanup /videos/showcase total back to baseline 0. No residue.
+
+            Notes:
+              - Used credentials from /app/memory/test_credentials.md: admin@wedding.fr / Admin13! (admin) and test@wedding.fr / test1234 (free user).
+              - is_showcase field correctly persisted in Mongo, surfaced through video_to_public, and used both in /videos/showcase (filter) and /videos/{id} (auto-unlock).
+              - No critical issues, no minor issues. Feature is production-ready.
+
+metadata:
+  test_sequence: 3
+  last_tested_by: "testing"
+
+agent_communication:
+  - agent: "testing"
+    message: |
+      ✅ Public Showcase Videos backend — 39/39 assertions PASSED.
+
+      Verified all 9 scenarios (a–i) from the review request against https://mariagevideo.preview.emergentagent.com/api via /app/backend_test.py:
+        • GET /api/videos/showcase anonymous → 200, is_authenticated:false, full_url:null on every video.
+        • GET /api/videos/showcase admin → 200, is_authenticated:true.
+        • POST /api/admin/videos with is_showcase:true → persists field, returns it.
+        • New video appears in /videos/showcase rows under "À l'affiche", total increments by 1; preferred category order respected.
+        • PATCH is_showcase:false → removed from /videos/showcase; PATCH is_showcase:true → reappears.
+        • Non-admin free user (test@wedding.fr) GET /videos/{showcase_id} with NO code → full_url populated → showcase auto-unlock works.
+        • Anonymous GET /videos/{showcase_id} → full_url is null, but poster_url+trailer_url returned (listing public, playback gated).
+        • Regression sweep: /weddings/public, /weddings/{id}, /weddings/unlock, /library, /admin/weddings all 200. Wedding-code unlock flow intact.
+        • Cleanup DELETE done, no residue.
+
+      Used credentials: admin@wedding.fr / Admin13! and test@wedding.fr / test1234 (matches /app/memory/test_credentials.md). No bugs, no minor issues. Feature is production-ready. Main agent can summarise and finish.

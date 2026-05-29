@@ -25,6 +25,7 @@ type V = {
   duration_minutes: number;
   is_top_france?: boolean;
   is_featured?: boolean;
+  is_showcase?: boolean;
 };
 
 export default function AdminVideosList() {
@@ -141,6 +142,7 @@ export default function AdminVideosList() {
                   <View style={styles.badges}>
                     {v.is_top_france && <View style={[styles.badge, { backgroundColor: colors.wine }]}><Text style={styles.badgeTxt}>N°1</Text></View>}
                     {v.is_featured && <View style={[styles.badge, { backgroundColor: colors.gold }]}><Text style={[styles.badgeTxt, { color: "#0A0A0A" }]}>Featured</Text></View>}
+                    {v.is_showcase && <View style={[styles.badge, { backgroundColor: "#1f7a3a" }]}><Text style={styles.badgeTxt}>⭐ DÉMO</Text></View>}
                   </View>
                 </View>
                 <View style={styles.rowActions}>

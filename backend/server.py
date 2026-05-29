@@ -109,6 +109,7 @@ class Video(BaseModel):
     duration_minutes: int
     is_featured: bool = False
     is_top_france: bool = False
+    is_showcase: bool = False  # public demo video - watchable with free account, no code needed
     is_private: bool = True
     client_id: Optional[str] = None  # groups videos belonging to the same wedding
     client_name: Optional[str] = None
@@ -253,6 +254,7 @@ def video_to_public(v: dict, include_full: bool = False) -> dict:
         "duration_minutes": v["duration_minutes"],
         "is_featured": v.get("is_featured", False),
         "is_top_france": v.get("is_top_france", False),
+        "is_showcase": v.get("is_showcase", False),
         "is_private": v.get("is_private", True),
         "client_id": cid,
         "client_name": v.get("client_name") or v.get("title", ""),
@@ -734,6 +736,38 @@ async def list_public_videos():
     # sort featured top-france first
     result["featured"].sort(key=lambda x: (not x["is_top_france"], x["title"]))
     return result
+
+
+@api_router.get("/videos/showcase")
+async def list_showcase_videos(current: Optional[dict] = Depends(get_optional_user)):
+    """Public showcase / demos — visible to all, playable by any logged-in user.
+
+    Returns Netflix-style rows grouped by category + a featured shelf.
+    full_url is included only when the user is authenticated (to play / cast).
+    """
+    include_full = bool(current)
+    videos = await db.videos.find({"is_showcase": True}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    featured: list[dict] = []
+    rows: dict[str, list[dict]] = {}
+    for v in videos:
+        pub = video_to_public(v, include_full=include_full)
+        if v.get("is_featured"):
+            featured.append(pub)
+        rows.setdefault(v.get("category") or "À l'affiche", []).append(pub)
+    # Stable category order
+    preferred_order = ["À l'affiche", "Cérémonies", "Soirées", "Best Of"]
+    ordered_rows = []
+    for cat in preferred_order:
+        if cat in rows:
+            ordered_rows.append({"category": cat, "videos": rows.pop(cat)})
+    for cat, items in rows.items():
+        ordered_rows.append({"category": cat, "videos": items})
+    return {
+        "is_authenticated": bool(current),
+        "featured": featured,
+        "rows": ordered_rows,
+        "total": len(videos),
+    }
 
 
 # --- WEDDINGS (grouped by client_id) ---
@@ -1506,8 +1540,11 @@ async def get_video(video_id: str, code: Optional[str] = None, current: Optional
         raise HTTPException(status_code=404, detail="Vidéo introuvable")
     # check if user has unlocked
     unlocked = False
+    # 0) Public showcase video → any authenticated user can watch (no code needed)
+    if current and v.get("is_showcase"):
+        unlocked = True
     # 1) Logged-in user with a recorded unlock OR an active subscription OR admin
-    if current:
+    if not unlocked and current:
         u_doc = await db.user_unlocks.find_one({"user_id": current["id"], "video_id": video_id})
         unlocked = bool(u_doc) or bool(current.get("is_subscribed")) or bool(current.get("is_admin"))
         # Also accept wedding-level unlock (one unlock for all videos of the same wedding)
@@ -1971,6 +2008,7 @@ class VideoCreate(BaseModel):
     duration_minutes: int = 0
     is_featured: bool = False
     is_top_france: bool = False
+    is_showcase: bool = False
     client_id: Optional[str] = None
     client_name: Optional[str] = None
 
@@ -1986,6 +2024,7 @@ class VideoUpdate(BaseModel):
     duration_minutes: Optional[int] = None
     is_featured: Optional[bool] = None
     is_top_france: Optional[bool] = None
+    is_showcase: Optional[bool] = None
     client_id: Optional[str] = None
     client_name: Optional[str] = None
 
