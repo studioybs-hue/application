@@ -119,6 +119,13 @@ export function useCast() {
         else if (lower.endsWith(".mpd")) contentType = "application/dash+xml";
         else if (lower.endsWith(".webm")) contentType = "video/webm";
         else if (lower.endsWith(".mov")) contentType = "video/quicktime";
+        else if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) contentType = "image/jpeg";
+        else if (lower.endsWith(".png")) contentType = "image/png";
+        else if (lower.endsWith(".webp")) contentType = "image/webp";
+        else if (lower.endsWith(".gif")) contentType = "image/gif";
+        else if (lower.endsWith(".mp3")) contentType = "audio/mpeg";
+        else if (lower.endsWith(".m4a") || lower.endsWith(".aac")) contentType = "audio/aac";
+        else if (lower.endsWith(".wav")) contentType = "audio/wav";
 
         const context = window.cast.framework.CastContext.getInstance();
         let session = context.getCurrentSession();

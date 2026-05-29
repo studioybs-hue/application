@@ -65,11 +65,16 @@ export function useCast() {
       pendingMediaRef.current = null;
       (async () => {
         try {
-          const contentType = m.url.toLowerCase().endsWith(".webm")
-            ? "video/webm"
-            : m.url.toLowerCase().endsWith(".m3u8")
-              ? "application/x-mpegURL"
-              : "video/mp4";
+          const lowerUrl = m.url.toLowerCase().split("?")[0];
+          let contentType: string;
+          if (lowerUrl.endsWith(".webm")) contentType = "video/webm";
+          else if (lowerUrl.endsWith(".m3u8")) contentType = "application/x-mpegURL";
+          else if (lowerUrl.endsWith(".jpg") || lowerUrl.endsWith(".jpeg")) contentType = "image/jpeg";
+          else if (lowerUrl.endsWith(".png")) contentType = "image/png";
+          else if (lowerUrl.endsWith(".webp")) contentType = "image/webp";
+          else if (lowerUrl.endsWith(".mp3")) contentType = "audio/mpeg";
+          else if (lowerUrl.endsWith(".m4a") || lowerUrl.endsWith(".aac")) contentType = "audio/aac";
+          else contentType = "video/mp4";
           await remoteMediaClient.loadMedia({
             mediaInfo: {
               contentUrl: m.url,
