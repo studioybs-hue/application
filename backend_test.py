@@ -1,367 +1,447 @@
 """
-Backend test suite for CINÉMARIÉS subscription system refactor.
-Tests against the public Emergent URL.
+Backend test for the NEW Photo Gallery module (photos.py).
+Target: https://mariagevideo.preview.emergentagent.com/api
 """
+
+import io
 import os
+import shutil
 import sys
-import time
-import json
-from datetime import datetime, timezone, timedelta
+import uuid
+import zipfile
+from pathlib import Path
+from typing import List, Optional
 
 import requests
-from pymongo import MongoClient
 
-# --- Config ---
-BACKEND_URL = "https://mariagevideo.preview.emergentagent.com"
-API = f"{BACKEND_URL}/api"
-
+BASE = "https://mariagevideo.preview.emergentagent.com/api"
 ADMIN_EMAIL = "admin@wedding.fr"
-ADMIN_PASSWORD = "Admin13!"
-TEST_EMAIL = "test@wedding.fr"
-TEST_PASSWORD = "test1234"
+ADMIN_PASS = "Admin13!"
 
-MONGO_URL = "mongodb://localhost:27017"
-DB_NAME = "wedding_stream"
-
-mongo = MongoClient(MONGO_URL)
-db = mongo[DB_NAME]
-
-# --- Helpers ---
-PASS = 0
-FAIL = 0
-FAILURES = []
+PASS, FAIL = 0, 0
+FAILURES: List[str] = []
 
 
-def check(label: str, cond: bool, detail: str = ""):
+def check(name: str, ok: bool, info: str = ""):
     global PASS, FAIL
-    if cond:
+    if ok:
         PASS += 1
-        print(f"  ✅ {label}")
+        print(f"  PASS {name}")
     else:
         FAIL += 1
-        FAILURES.append(f"{label} — {detail}")
-        print(f"  ❌ {label} — {detail}")
+        FAILURES.append(f"{name} -- {info}")
+        print(f"  FAIL {name} -- {info}")
 
 
-def section(title: str):
-    print(f"\n=== {title} ===")
-
-
-def login(email: str, password: str) -> str:
-    r = requests.post(f"{API}/auth/login", json={"email": email, "password": password}, timeout=30)
-    assert r.status_code == 200, f"login failed for {email}: {r.status_code} {r.text}"
-    return r.json()["access_token"]
-
-
-def hdr(tok: str) -> dict:
-    return {"Authorization": f"Bearer {tok}"}
-
-
-def set_user_field(email: str, updates: dict, unsets: list = None):
-    upd = {}
-    if updates:
-        upd["$set"] = updates
-    if unsets:
-        upd["$unset"] = {k: "" for k in unsets}
-    if upd:
-        db.users.update_one({"email": email}, upd)
-
-
-# ---------------------------------------------------------------
-# A) GET /api/billing/config (public, no auth)
-# ---------------------------------------------------------------
-def test_billing_config():
-    section("A) GET /api/billing/config (public)")
-    r = requests.get(f"{API}/billing/config", timeout=30)
-    check("Status 200", r.status_code == 200, f"got {r.status_code}")
+def login(email: str, password: str) -> Optional[str]:
+    r = requests.post(f"{BASE}/auth/login", json={"email": email, "password": password}, timeout=30)
     if r.status_code != 200:
-        return
-    data = r.json()
-    plans = data.get("plans")
-    check("Has `plans` array", isinstance(plans, list), f"plans={plans}")
-    check("Exactly 3 plans", isinstance(plans, list) and len(plans) == 3, f"len={len(plans) if plans else None}")
-    if not isinstance(plans, list):
-        return
-    required_keys = {"code", "label", "amount", "interval", "engagement", "tier"}
-    for p in plans:
-        missing = required_keys - set(p.keys())
-        check(f"Plan {p.get('code')} has required keys", not missing, f"missing={missing}")
-    by_code = {p["code"]: p for p in plans}
-
-    if "annual_commit" in by_code:
-        p = by_code["annual_commit"]
-        check("annual_commit amount=2388", p["amount"] == 2388, f"got {p['amount']}")
-        check("annual_commit interval=year", p["interval"] == "year", f"got {p['interval']}")
-        check("annual_commit engagement=true", p["engagement"] is True, f"got {p['engagement']}")
-        check("annual_commit tier=basic", p["tier"] == "basic", f"got {p['tier']}")
-    else:
-        check("annual_commit present", False, "missing")
-
-    if "annual_free" in by_code:
-        p = by_code["annual_free"]
-        check("annual_free amount=2760", p["amount"] == 2760, f"got {p['amount']}")
-        check("annual_free interval=year", p["interval"] == "year", f"got {p['interval']}")
-        check("annual_free engagement=false", p["engagement"] is False, f"got {p['engagement']}")
-        check("annual_free tier=unlimited", p["tier"] == "unlimited", f"got {p['tier']}")
-    else:
-        check("annual_free present", False, "missing")
-
-    if "monthly_free" in by_code:
-        p = by_code["monthly_free"]
-        check("monthly_free amount=230", p["amount"] == 230, f"got {p['amount']}")
-        check("monthly_free interval=month", p["interval"] == "month", f"got {p['interval']}")
-        check("monthly_free engagement=false", p["engagement"] is False, f"got {p['engagement']}")
-        check("monthly_free tier=unlimited", p["tier"] == "unlimited", f"got {p['tier']}")
-    else:
-        check("monthly_free present", False, "missing")
+        print(f"  ! login {email} -> {r.status_code} {r.text[:200]}")
+        return None
+    return r.json().get("access_token")
 
 
-# ---------------------------------------------------------------
-# B) POST /api/billing/checkout
-# ---------------------------------------------------------------
-def test_billing_checkout(user_tok: str):
-    section("B) POST /api/billing/checkout")
-
-    # 401 no auth
-    r = requests.post(f"{API}/billing/checkout", json={"plan": "monthly_free"}, timeout=30)
-    check("Without auth → 401", r.status_code == 401, f"got {r.status_code}")
-
-    cases = [
-        ({"plan": "annual_commit"}, "annual_commit", "basic"),
-        ({"plan": "annual_free"}, "annual_free", "unlimited"),
-        ({"plan": "monthly_free"}, "monthly_free", "unlimited"),
-        ({"tier": "basic"}, "monthly_free", None),  # legacy fallback
-        ({}, "monthly_free", None),  # default
-    ]
-    for body, expected_plan, expected_tier in cases:
-        r = requests.post(f"{API}/billing/checkout", json=body, headers=hdr(user_tok), timeout=60)
-        check(f"checkout {body} → 200", r.status_code == 200, f"got {r.status_code} {r.text[:200]}")
-        if r.status_code != 200:
-            continue
-        data = r.json()
-        check(f"  has url ({body})", isinstance(data.get("url"), str) and data["url"].startswith("https://checkout.stripe.com/"), f"url={data.get('url')}")
-        check(f"  has session_id ({body})", isinstance(data.get("session_id"), str) and data["session_id"].startswith("cs_"), f"session_id={data.get('session_id')}")
-        check(f"  plan={expected_plan} ({body})", data.get("plan") == expected_plan, f"got plan={data.get('plan')}")
-        if expected_tier:
-            check(f"  tier={expected_tier} ({body})", data.get("tier") == expected_tier, f"got tier={data.get('tier')}")
-        # Verify db.checkout_sessions entry has correct plan
-        sid = data.get("session_id")
-        if sid:
-            doc = db.checkout_sessions.find_one({"session_id": sid})
-            check(
-                f"  db.checkout_sessions has plan={expected_plan} ({body})",
-                doc is not None and doc.get("plan") == expected_plan,
-                f"doc={doc}",
-            )
+def register(email: str, password: str, name: str = "Test User") -> Optional[str]:
+    r = requests.post(
+        f"{BASE}/auth/register",
+        json={"email": email, "password": password, "full_name": name},
+        timeout=30,
+    )
+    if r.status_code != 200:
+        print(f"  ! register {email} -> {r.status_code} {r.text[:200]}")
+        return None
+    return r.json().get("access_token")
 
 
-# ---------------------------------------------------------------
-# C) Login on a DEACTIVATED user
-# ---------------------------------------------------------------
-def test_login_deactivated():
-    section("C) POST /api/auth/login on deactivated user")
-    try:
-        # Step 1: deactivate
-        res = db.users.update_one({"email": TEST_EMAIL}, {"$set": {"is_active": False}})
-        check("Deactivated test user in mongo", res.matched_count == 1, f"matched={res.matched_count}")
-
-        # Step 2: login still works
-        r = requests.post(f"{API}/auth/login", json={"email": TEST_EMAIL, "password": TEST_PASSWORD}, timeout=30)
-        check("Deactivated login → 200 (not 403)", r.status_code == 200, f"got {r.status_code} {r.text[:200]}")
-        if r.status_code != 200:
-            return
-        body = r.json()
-        token = body.get("access_token")
-        check("Has access_token", isinstance(token, str) and len(token) > 0)
-        user = body.get("user", {})
-        check("user.is_active === false in login response", user.get("is_active") is False, f"got is_active={user.get('is_active')}")
-
-        # Step 4: /auth/me
-        r = requests.get(f"{API}/auth/me", headers=hdr(token), timeout=30)
-        check("/auth/me with that token → 200", r.status_code == 200, f"got {r.status_code}")
-        if r.status_code == 200:
-            me = r.json()
-            check("/auth/me is_active=false", me.get("is_active") is False, f"got {me.get('is_active')}")
-    finally:
-        # RESTORE
-        db.users.update_one({"email": TEST_EMAIL}, {"$set": {"is_active": True}})
+def hdr(token: Optional[str]):
+    return {"Authorization": f"Bearer {token}"} if token else {}
 
 
-# ---------------------------------------------------------------
-# D) POST /api/billing/cancel-and-deactivate
-# ---------------------------------------------------------------
-def test_cancel_and_deactivate(admin_tok: str):
-    section("D) POST /api/billing/cancel-and-deactivate")
-    try:
-        # D1. As test user, no active subscription → 200
-        # First re-login (user state may have changed)
-        # Make sure test user has no subscription_plan & is_active=true & not admin
-        set_user_field(TEST_EMAIL, {"is_active": True}, unsets=["subscription_plan", "subscription_ends_at", "stripe_subscription_id"])
-        user_tok = login(TEST_EMAIL, TEST_PASSWORD)
+def main() -> int:
+    print("\n=== STEP 0: Setup tokens ===")
+    admin_tok = login(ADMIN_EMAIL, ADMIN_PASS)
+    check("Admin login", admin_tok is not None)
+    if not admin_tok:
+        print("FATAL: cannot login as admin")
+        return 1
 
-        r = requests.post(f"{API}/billing/cancel-and-deactivate", headers=hdr(user_tok), timeout=30)
-        check("D1. user no active sub → 200", r.status_code == 200, f"got {r.status_code} {r.text[:300]}")
-        if r.status_code == 200:
-            data = r.json()
-            check("D1. ok=true", data.get("ok") is True, f"got {data}")
-            check("D1. is_active=false", data.get("is_active") is False, f"got {data}")
+    test_tok = login("test@wedding.fr", "test1234")
+    check("test@wedding.fr login (subscribed user)", test_tok is not None)
 
-        # D2. /auth/me after → is_active false
-        r = requests.get(f"{API}/auth/me", headers=hdr(user_tok), timeout=30)
-        check("D2. /auth/me 200", r.status_code == 200)
-        if r.status_code == 200:
-            check("D2. /auth/me is_active=false", r.json().get("is_active") is False, f"got {r.json()}")
+    free_email = f"photo_test_{uuid.uuid4().hex[:8]}@example.com"
+    free_tok = register(free_email, "Test1234!", "PhotoFree")
+    check("Free user register", free_tok is not None)
 
-        # D3. As admin → 400 with French message
-        r = requests.post(f"{API}/billing/cancel-and-deactivate", headers=hdr(admin_tok), timeout=30)
-        check("D3. admin → 400", r.status_code == 400, f"got {r.status_code} {r.text[:200]}")
-        if r.status_code == 400:
-            detail = r.json().get("detail", "")
-            check("D3. french admin message", "administrateur" in detail.lower() or "admin" in detail.lower(), f"detail={detail}")
+    print("\n=== STEP 1: Get a wedding_id ===")
+    r = requests.get(f"{BASE}/admin/weddings", headers=hdr(admin_tok), timeout=30)
+    check("GET /admin/weddings", r.status_code == 200, f"got {r.status_code}")
+    weddings = r.json().get("weddings", []) if r.status_code == 200 else []
+    check("At least 1 wedding exists", len(weddings) > 0)
+    if not weddings:
+        return 1
+    wedding_id = weddings[0]["client_id"]
+    print(f"  wedding_id = {wedding_id}")
 
-        # D4. Engagement guard
-        # Set test user as annual_commit with future ends_at, reactivate
-        future_dt = datetime.now(timezone.utc) + timedelta(days=30)
-        set_user_field(TEST_EMAIL, {
-            "is_active": True,
-            "subscription_plan": "annual_commit",
-            "subscription_ends_at": future_dt,
-        })
-        user_tok = login(TEST_EMAIL, TEST_PASSWORD)
-        r = requests.post(f"{API}/billing/cancel-and-deactivate", headers=hdr(user_tok), timeout=30)
-        check("D4a. annual_commit future end → 403", r.status_code == 403, f"got {r.status_code} {r.text[:300]}")
-        if r.status_code == 403:
-            detail = r.json().get("detail", "")
-            check("D4a. french message with end date",
-                  any(x in detail for x in ["Engagement", "engagement", future_dt.strftime("%d/%m/%Y")]),
-                  f"detail={detail}")
-
-        # Set ends_at to past → should allow cancel
-        past_dt = datetime.now(timezone.utc) - timedelta(days=1)
-        set_user_field(TEST_EMAIL, {
-            "is_active": True,
-            "subscription_plan": "annual_commit",
-            "subscription_ends_at": past_dt,
-        })
-        user_tok = login(TEST_EMAIL, TEST_PASSWORD)
-        r = requests.post(f"{API}/billing/cancel-and-deactivate", headers=hdr(user_tok), timeout=30)
-        check("D4b. annual_commit past end → 200", r.status_code == 200, f"got {r.status_code} {r.text[:300]}")
-
-    finally:
-        # RESTORE test user
-        set_user_field(TEST_EMAIL, {"is_active": True}, unsets=["subscription_plan", "subscription_ends_at", "deactivated_at"])
-
-
-# ---------------------------------------------------------------
-# E) POST /api/billing/reactivate
-# ---------------------------------------------------------------
-def test_reactivate():
-    section("E) POST /api/billing/reactivate")
-    try:
-        # E1: deactivate test user
-        db.users.update_one({"email": TEST_EMAIL}, {"$set": {"is_active": False}})
-        # Re-login (login still works on deactivated users now)
-        user_tok = login(TEST_EMAIL, TEST_PASSWORD)
-        # Confirm deactivated
-        me = requests.get(f"{API}/auth/me", headers=hdr(user_tok), timeout=30).json()
-        check("E1. user is deactivated pre-reactivate", me.get("is_active") is False, f"got {me.get('is_active')}")
-
-        # E2: POST with plan monthly_free
-        r = requests.post(f"{API}/billing/reactivate", json={"plan": "monthly_free"}, headers=hdr(user_tok), timeout=60)
-        check("E2. reactivate plan=monthly_free → 200/502/503",
-              r.status_code in (200, 502, 503),
-              f"got {r.status_code} {r.text[:300]}")
-        if r.status_code == 200:
-            data = r.json()
-            check("E2. has url", isinstance(data.get("url"), str) and data["url"].startswith("https://"),
-                  f"url={data.get('url')}")
-
-        # E3: user is_active must be true regardless
-        me = requests.get(f"{API}/auth/me", headers=hdr(user_tok), timeout=30).json()
-        check("E3. user.is_active === true post-reactivate", me.get("is_active") is True, f"got {me.get('is_active')}")
-
-        # E4: empty plan → fallback to monthly_free
-        db.users.update_one({"email": TEST_EMAIL}, {"$set": {"is_active": False}})
-        user_tok2 = login(TEST_EMAIL, TEST_PASSWORD)
-        r = requests.post(f"{API}/billing/reactivate", json={}, headers=hdr(user_tok2), timeout=60)
-        check("E4. empty body → 200/502/503", r.status_code in (200, 502, 503), f"got {r.status_code} {r.text[:300]}")
-        me = requests.get(f"{API}/auth/me", headers=hdr(user_tok2), timeout=30).json()
-        check("E4. is_active=true after empty-body reactivate", me.get("is_active") is True, f"got {me.get('is_active')}")
-    finally:
-        db.users.update_one({"email": TEST_EMAIL}, {"$set": {"is_active": True}})
-
-
-# ---------------------------------------------------------------
-# F) SMOKE: existing endpoints still work
-# ---------------------------------------------------------------
-def test_smoke(admin_tok: str, user_tok: str):
-    section("F) Smoke regression")
-    r = requests.get(f"{API}/auth/me", headers=hdr(admin_tok), timeout=30)
-    check("/auth/me admin → 200", r.status_code == 200, f"got {r.status_code}")
-
-    r = requests.get(f"{API}/weddings/public", timeout=30)
-    check("/weddings/public → 200", r.status_code == 200, f"got {r.status_code}")
-
-    r = requests.get(f"{API}/admin/users", headers=hdr(admin_tok), timeout=30)
-    check("/admin/users (admin) → 200", r.status_code == 200, f"got {r.status_code}")
+    # STEP 2: photos/info - optional auth
+    print("\n=== STEP 2: GET /weddings/{id}/photos/info ===")
+    r = requests.get(f"{BASE}/weddings/{wedding_id}/photos/info", timeout=30)
+    check("info anon -> 200", r.status_code == 200, f"{r.status_code} {r.text[:150]}")
     if r.status_code == 200:
-        body = r.json()
-        # Could be list or {users: [...]}
-        if isinstance(body, list):
-            check("/admin/users returns array", True)
-        elif isinstance(body, dict) and isinstance(body.get("users"), list):
-            check("/admin/users returns dict with users array", True)
-        else:
-            check("/admin/users returns array-shape", False, f"got {type(body)} keys={list(body.keys()) if isinstance(body, dict) else None}")
+        data = r.json()
+        check("info anon has_access=false", data.get("has_access") is False, str(data))
+        check("info anon access_reason set", bool(data.get("access_reason")), str(data))
+        for key in ("wedding_id", "photos_count", "storage_bytes"):
+            check(f"info anon has {key}", key in data)
 
-    r = requests.post(f"{API}/support/tickets",
-                      json={"subject": "Test post-refactor"},
-                      headers=hdr(user_tok), timeout=30)
-    check("/support/tickets POST → 200", r.status_code == 200, f"got {r.status_code} {r.text[:200]}")
+    r = requests.get(f"{BASE}/weddings/__NOPE__nope__/photos/info", timeout=30)
+    check("info nonexistent wedding -> 404", r.status_code == 404, f"{r.status_code}")
 
-    r = requests.get(f"{API}/support/tickets", headers=hdr(user_tok), timeout=30)
-    check("/support/tickets GET → 200", r.status_code == 200, f"got {r.status_code}")
+    r = requests.get(f"{BASE}/weddings/{wedding_id}/photos/info", headers=hdr(admin_tok), timeout=30)
+    check("info admin -> 200", r.status_code == 200, f"{r.status_code}")
+    if r.status_code == 200:
+        data = r.json()
+        check("info admin has_access=true", data.get("has_access") is True, str(data))
 
+    # STEP 3: Prepare originals/ folder
+    print("\n=== STEP 3: Prepare originals/ folder ===")
+    base_dir = Path("/app/backend/uploads/photos") / wedding_id
+    originals_dir = base_dir / "originals"
+    thumbs_dir = base_dir / "thumbs"
+    if base_dir.exists():
+        shutil.rmtree(base_dir)
+    originals_dir.mkdir(parents=True, exist_ok=True)
 
-def main():
-    print(f"Testing against: {API}")
+    src_root = Path("/app/backend/uploads")
+    jpgs = sorted([p for p in src_root.iterdir() if p.is_file() and p.suffix.lower() in (".jpg", ".jpeg")])[:3]
+    print(f"  copying {len(jpgs)} jpgs into {originals_dir}")
+    for j in jpgs:
+        shutil.copy2(j, originals_dir / j.name)
+    check("Test photos copied to originals/", len(list(originals_dir.iterdir())) >= 2)
 
-    # Sanity: ensure test user is reachable + restore
-    db.users.update_one({"email": TEST_EMAIL}, {"$set": {"is_active": True}},
-                        upsert=False)
-    db.users.update_one({"email": TEST_EMAIL},
-                        {"$unset": {"subscription_plan": "", "subscription_ends_at": "", "deactivated_at": ""}})
+    # STEP 4: SCAN
+    print("\n=== STEP 4: POST /admin/weddings/{id}/photos/scan ===")
+    r = requests.post(f"{BASE}/admin/weddings/{wedding_id}/photos/scan", timeout=30)
+    check("scan unauth -> 401", r.status_code == 401, f"{r.status_code}")
+    if test_tok:
+        r = requests.post(f"{BASE}/admin/weddings/{wedding_id}/photos/scan", headers=hdr(test_tok), timeout=30)
+        check("scan non-admin -> 403", r.status_code == 403, f"{r.status_code}")
 
-    admin_tok = login(ADMIN_EMAIL, ADMIN_PASSWORD)
-    user_tok = login(TEST_EMAIL, TEST_PASSWORD)
+    r = requests.post(f"{BASE}/admin/weddings/{wedding_id}/photos/scan", headers=hdr(admin_tok), timeout=60)
+    check("scan admin -> 200", r.status_code == 200, f"{r.status_code} {r.text[:200]}")
+    if r.status_code == 200:
+        sd = r.json()
+        check("scan ok=True", sd.get("ok") is True)
+        check(f"scan added == {len(jpgs)}", sd.get("added") == len(jpgs), str(sd))
+        check(f"scan thumbnails_generated == {len(jpgs)}", sd.get("thumbnails_generated") == len(jpgs), str(sd))
+        check("scan errors empty", sd.get("errors") == [], str(sd))
+        check(f"scan disk_count == {len(jpgs)}", sd.get("disk_count") == len(jpgs), str(sd))
 
-    try:
-        test_billing_config()
-        test_billing_checkout(user_tok)
-        test_login_deactivated()
-        test_cancel_and_deactivate(admin_tok)
-        test_reactivate()
-        # After above, test user state may have been touched — refresh token
-        # Ensure is_active=true
-        db.users.update_one({"email": TEST_EMAIL}, {"$set": {"is_active": True}})
-        db.users.update_one({"email": TEST_EMAIL},
-                            {"$unset": {"subscription_plan": "", "subscription_ends_at": "", "deactivated_at": ""}})
-        user_tok = login(TEST_EMAIL, TEST_PASSWORD)
-        test_smoke(admin_tok, user_tok)
-    finally:
-        # FINAL CRITICAL RESTORE
-        db.users.update_one({"email": TEST_EMAIL}, {"$set": {"is_active": True}})
-        db.users.update_one({"email": TEST_EMAIL},
-                            {"$unset": {"subscription_plan": "", "subscription_ends_at": "", "deactivated_at": ""}})
+    thumbs_present = thumbs_dir.exists() and any(thumbs_dir.iterdir())
+    check("Thumbnails directory populated", thumbs_present)
+    if thumbs_present:
+        for fn in [j.name for j in jpgs]:
+            check(f"thumb file exists: {fn}", (thumbs_dir / fn).exists())
 
-    print(f"\n=========================")
-    print(f"RESULTS: {PASS} passed / {FAIL} failed")
+    # idempotent scan
+    r = requests.post(f"{BASE}/admin/weddings/{wedding_id}/photos/scan", headers=hdr(admin_tok), timeout=60)
+    check("scan again admin -> 200", r.status_code == 200)
+    if r.status_code == 200:
+        sd = r.json()
+        check("scan2 added=0", sd.get("added") == 0, str(sd))
+        check(f"scan2 skipped == {len(jpgs)}", sd.get("skipped") == len(jpgs), str(sd))
+        check("scan2 no thumbnails generated", sd.get("thumbnails_generated") == 0, str(sd))
+
+    # STEP 5: stats
+    print("\n=== STEP 5: GET /admin/weddings/{id}/photos/stats ===")
+    r = requests.get(f"{BASE}/admin/weddings/{wedding_id}/photos/stats", headers=hdr(admin_tok), timeout=30)
+    check("stats admin -> 200", r.status_code == 200, f"{r.status_code}")
+    if r.status_code == 200:
+        sd = r.json()
+        for k in ("wedding_id", "photos_count", "storage_bytes", "disk_files_count",
+                  "needs_scan", "music_filename", "music_size", "max_photos", "originals_path"):
+            check(f"stats has {k}", k in sd, str(sd))
+        check(f"stats photos_count == {len(jpgs)}", sd.get("photos_count") == len(jpgs), str(sd))
+        check(f"stats disk_files_count == {len(jpgs)}", sd.get("disk_files_count") == len(jpgs), str(sd))
+        check("stats needs_scan false", sd.get("needs_scan") is False, str(sd))
+        check("stats max_photos == 100", sd.get("max_photos") == 100, str(sd))
+
+    r = requests.get(f"{BASE}/admin/weddings/{wedding_id}/photos/stats", headers=hdr(free_tok), timeout=30)
+    check("stats non-admin -> 403", r.status_code == 403, f"{r.status_code}")
+
+    # STEP 6: list photos + premium gate
+    print("\n=== STEP 6: GET /weddings/{id}/photos ===")
+    r = requests.get(f"{BASE}/weddings/{wedding_id}/photos", timeout=30)
+    check("list anon -> 402", r.status_code == 402, f"{r.status_code}")
+
+    r = requests.get(f"{BASE}/weddings/{wedding_id}/photos", headers=hdr(free_tok), timeout=30)
+    check("list free user -> 402", r.status_code == 402, f"{r.status_code}")
+    if r.status_code == 402:
+        check("list free user detail == premium_required",
+              r.json().get("detail") == "premium_required",
+              str(r.json()))
+
+    r = requests.get(f"{BASE}/weddings/{wedding_id}/photos?page=1&per_page=50",
+                     headers=hdr(admin_tok), timeout=30)
+    check("list admin -> 200", r.status_code == 200, f"{r.status_code} {r.text[:200]}")
+    photo_ids: List[str] = []
+    if r.status_code == 200:
+        photos = r.json()
+        check("list admin returns array", isinstance(photos, list))
+        check(f"list admin len == {len(jpgs)}", len(photos) == len(jpgs), f"got {len(photos)}")
+        if photos:
+            p = photos[0]
+            for k in ("id", "wedding_id", "filename", "thumb_url", "full_url", "order", "is_favorite", "created_at"):
+                check(f"PhotoOut has {k}", k in p, str(list(p.keys())))
+            check("thumb_url starts /api/uploads",
+                  p["thumb_url"].startswith("/api/uploads/photos/"), p["thumb_url"])
+            check("full_url starts /api/uploads",
+                  p["full_url"].startswith("/api/uploads/photos/"), p["full_url"])
+            photo_ids = [pp["id"] for pp in photos]
+
+    if test_tok:
+        r = requests.get(f"{BASE}/weddings/{wedding_id}/photos",
+                         headers=hdr(test_tok), timeout=30)
+        check("list subscribed user -> 200", r.status_code == 200, f"{r.status_code} {r.text[:200]}")
+
+    # STEP 7: Favorite toggle
+    print("\n=== STEP 7: Favorite toggle ===")
+    if not photo_ids:
+        check("Skip favorite", False, "no photos")
+    else:
+        target_id = photo_ids[0]
+        r = requests.post(f"{BASE}/weddings/{wedding_id}/photos/{target_id}/favorite", timeout=30)
+        check("favorite unauth -> 401", r.status_code == 401, f"{r.status_code}")
+
+        r = requests.post(f"{BASE}/weddings/{wedding_id}/photos/{target_id}/favorite",
+                          headers=hdr(admin_tok), timeout=30)
+        check("favorite admin first -> 200", r.status_code == 200, f"{r.status_code}")
+        if r.status_code == 200:
+            check("favorite first is_favorite=true",
+                  r.json().get("is_favorite") is True, str(r.json()))
+
+        r2 = requests.get(f"{BASE}/weddings/{wedding_id}/photos",
+                          headers=hdr(admin_tok), timeout=30)
+        if r2.status_code == 200:
+            ph = next((p for p in r2.json() if p["id"] == target_id), None)
+            check("listing reflects is_favorite=true",
+                  ph is not None and ph.get("is_favorite") is True, str(ph))
+
+        r = requests.post(f"{BASE}/weddings/{wedding_id}/photos/{target_id}/favorite",
+                          headers=hdr(admin_tok), timeout=30)
+        check("favorite admin second -> 200", r.status_code == 200)
+        if r.status_code == 200:
+            check("favorite second is_favorite=false",
+                  r.json().get("is_favorite") is False, str(r.json()))
+
+    # STEP 8: Download
+    print("\n=== STEP 8: Download ===")
+    r = requests.get(f"{BASE}/weddings/{wedding_id}/photos/download?ids=all",
+                     headers=hdr(free_tok), timeout=30)
+    check("download free user -> 402", r.status_code == 402, f"{r.status_code}")
+
+    if photo_ids:
+        r = requests.get(f"{BASE}/weddings/{wedding_id}/photos/download?ids={photo_ids[0]}",
+                         headers=hdr(admin_tok), timeout=60)
+        check("download single -> 200", r.status_code == 200, f"{r.status_code}")
+        if r.status_code == 200:
+            ctype = r.headers.get("content-type", "")
+            check("download single content-type image/*", "image" in ctype, ctype)
+            check("download single body non-empty", len(r.content) > 100)
+
+    r = requests.get(f"{BASE}/weddings/{wedding_id}/photos/download?ids=all",
+                     headers=hdr(admin_tok), timeout=120)
+    check("download all -> 200", r.status_code == 200, f"{r.status_code}")
+    if r.status_code == 200:
+        ctype = r.headers.get("content-type", "")
+        check("download all content-type application/zip", "application/zip" in ctype, ctype)
+        cd = r.headers.get("content-disposition", "")
+        check("download all content-disposition has attachment+filename",
+              "attachment" in cd.lower() and "filename" in cd.lower(), cd)
+        try:
+            zf = zipfile.ZipFile(io.BytesIO(r.content))
+            namelist = zf.namelist()
+            check(f"download zip has {len(jpgs)} files", len(namelist) == len(jpgs), str(namelist))
+        except Exception as exc:
+            check("download zip valid", False, str(exc))
+
+    if len(photo_ids) >= 2:
+        ids_csv = ",".join(photo_ids[:2])
+        r = requests.get(f"{BASE}/weddings/{wedding_id}/photos/download?ids={ids_csv}",
+                         headers=hdr(admin_tok), timeout=60)
+        check("download multi-csv -> 200", r.status_code == 200, f"{r.status_code}")
+        if r.status_code == 200:
+            check("download multi content-type zip",
+                  "application/zip" in r.headers.get("content-type", ""),
+                  r.headers.get("content-type"))
+
+    # STEP 9: Upload + delete single
+    print("\n=== STEP 9: Upload + delete single ===")
+    uploaded_id = None
+    if jpgs:
+        with open(jpgs[0], "rb") as f:
+            files = {"file": (f"upload_{uuid.uuid4().hex[:6]}.jpg", f, "image/jpeg")}
+            r = requests.post(
+                f"{BASE}/admin/weddings/{wedding_id}/photos/upload",
+                headers=hdr(admin_tok),
+                files=files,
+                timeout=60,
+            )
+        check("upload admin -> 200", r.status_code == 200, f"{r.status_code} {r.text[:200]}")
+        if r.status_code == 200:
+            data = r.json()
+            for k in ("id", "filename", "thumb_url", "full_url"):
+                check(f"upload response has {k}", k in data, str(data))
+            uploaded_id = data.get("id")
+
+        with open(jpgs[0], "rb") as f:
+            files = {"file": ("bad.jpg", f, "image/jpeg")}
+            r = requests.post(
+                f"{BASE}/admin/weddings/{wedding_id}/photos/upload",
+                headers=hdr(free_tok),
+                files=files,
+                timeout=30,
+            )
+        check("upload non-admin -> 403", r.status_code == 403, f"{r.status_code}")
+
+        if uploaded_id:
+            r = requests.delete(
+                f"{BASE}/admin/weddings/{wedding_id}/photos/{uploaded_id}",
+                headers=hdr(admin_tok), timeout=30,
+            )
+            check("delete single -> 200", r.status_code == 200, f"{r.status_code}")
+            r = requests.delete(
+                f"{BASE}/admin/weddings/{wedding_id}/photos/__nope__",
+                headers=hdr(admin_tok), timeout=30,
+            )
+            check("delete non-existent -> 404", r.status_code == 404, f"{r.status_code}")
+
+    # STEP 10: Music
+    print("\n=== STEP 10: Music upload/delete ===")
+    dummy_mp3 = b"ID3\x04\x00\x00\x00\x00\x00\x21TSSE\x00\x00\x00\x0f\x00\x00\x03Lavf58.29.100\x00" + (b"\x00" * 256)
+    files = {"file": ("test_music.mp3", io.BytesIO(dummy_mp3), "audio/mpeg")}
+    r = requests.post(
+        f"{BASE}/admin/weddings/{wedding_id}/music",
+        headers=hdr(admin_tok), files=files, timeout=30,
+    )
+    check("music upload -> 200", r.status_code == 200, f"{r.status_code} {r.text[:200]}")
+    if r.status_code == 200:
+        data = r.json()
+        check("music upload ok=true", data.get("ok") is True, str(data))
+        check("music_url set", "music_url" in data, str(data))
+        check("music_url starts /api/uploads/photos/",
+              data.get("music_url", "").startswith("/api/uploads/photos/"))
+
+    r = requests.get(f"{BASE}/admin/weddings/{wedding_id}/photos/stats",
+                     headers=hdr(admin_tok), timeout=30)
+    if r.status_code == 200:
+        sd = r.json()
+        check("stats.music_filename == music.mp3", sd.get("music_filename") == "music.mp3", str(sd))
+        check("stats.music_size > 0", (sd.get("music_size") or 0) > 0, str(sd))
+
+    r = requests.get(f"{BASE}/weddings/{wedding_id}/photos/info",
+                     headers=hdr(admin_tok), timeout=30)
+    if r.status_code == 200:
+        data = r.json()
+        check("info.music_url set", data.get("music_url") is not None, str(data))
+
+    # bad ext
+    files = {"file": ("test.txt", io.BytesIO(b"hello"), "text/plain")}
+    r = requests.post(
+        f"{BASE}/admin/weddings/{wedding_id}/music",
+        headers=hdr(admin_tok), files=files, timeout=30,
+    )
+    check("music upload bad ext -> 400", r.status_code == 400, f"{r.status_code}")
+
+    files = {"file": ("test.mp3", io.BytesIO(dummy_mp3), "audio/mpeg")}
+    r = requests.post(
+        f"{BASE}/admin/weddings/{wedding_id}/music",
+        headers=hdr(free_tok), files=files, timeout=30,
+    )
+    check("music upload non-admin -> 403", r.status_code == 403, f"{r.status_code}")
+
+    r = requests.delete(
+        f"{BASE}/admin/weddings/{wedding_id}/music",
+        headers=hdr(admin_tok), timeout=30,
+    )
+    check("music delete -> 200", r.status_code == 200, f"{r.status_code}")
+
+    r = requests.get(f"{BASE}/admin/weddings/{wedding_id}/photos/stats",
+                     headers=hdr(admin_tok), timeout=30)
+    if r.status_code == 200:
+        sd = r.json()
+        check("stats.music_filename None after delete", sd.get("music_filename") is None, str(sd))
+
+    # STEP 11: 404 paths
+    print("\n=== STEP 11: 404 paths ===")
+    r = requests.post(
+        f"{BASE}/admin/weddings/__no__no__no__/photos/scan",
+        headers=hdr(admin_tok), timeout=30,
+    )
+    check("scan nonexistent wedding -> 404", r.status_code == 404, f"{r.status_code}")
+
+    r = requests.post(
+        f"{BASE}/admin/weddings/__no__/music",
+        headers=hdr(admin_tok),
+        files={"file": ("x.mp3", io.BytesIO(dummy_mp3), "audio/mpeg")},
+        timeout=30,
+    )
+    check("music nonexistent wedding -> 404", r.status_code == 404, f"{r.status_code}")
+
+    # STEP 12: Bulk delete
+    print("\n=== STEP 12: Bulk delete ===")
+    r = requests.delete(
+        f"{BASE}/admin/weddings/{wedding_id}/photos",
+        headers=hdr(admin_tok), timeout=30,
+    )
+    check("bulk delete admin -> 200", r.status_code == 200, f"{r.status_code}")
+    if r.status_code == 200:
+        check("bulk delete ok=true", r.json().get("ok") is True, str(r.json()))
+
+    r = requests.delete(
+        f"{BASE}/admin/weddings/{wedding_id}/photos",
+        headers=hdr(free_tok), timeout=30,
+    )
+    check("bulk delete non-admin -> 403", r.status_code == 403, f"{r.status_code}")
+
+    r = requests.get(f"{BASE}/admin/weddings/{wedding_id}/photos/stats",
+                     headers=hdr(admin_tok), timeout=30)
+    if r.status_code == 200:
+        sd = r.json()
+        check("stats.photos_count == 0 after bulk", sd.get("photos_count") == 0, str(sd))
+
+    # STEP 13: Smoke regression
+    print("\n=== STEP 13: Smoke regression ===")
+    r = requests.get(f"{BASE}/auth/me", headers=hdr(admin_tok), timeout=30)
+    check("regression /auth/me admin -> 200", r.status_code == 200, f"{r.status_code}")
+    r = requests.get(f"{BASE}/weddings/public", timeout=30)
+    check("regression /weddings/public -> 200", r.status_code == 200, f"{r.status_code}")
+    r = requests.get(f"{BASE}/admin/users", headers=hdr(admin_tok), timeout=30)
+    check("regression /admin/users -> 200", r.status_code == 200, f"{r.status_code}")
+
+    payload = {"subject": "Photo gallery smoke test", "initial_message": "smoke test"}
+    r = requests.post(f"{BASE}/support/tickets", headers=hdr(admin_tok), json=payload, timeout=30)
+    check("regression POST /support/tickets -> 200", r.status_code == 200, f"{r.status_code}")
+    created_ticket = r.json().get("id") if r.status_code == 200 else None
+
+    # CLEANUP
+    print("\n=== CLEANUP ===")
+    r = requests.delete(f"{BASE}/admin/weddings/{wedding_id}/photos", headers=hdr(admin_tok), timeout=30)
+    print(f"  cleanup bulk delete photos -> {r.status_code}")
+    r = requests.delete(f"{BASE}/admin/weddings/{wedding_id}/music", headers=hdr(admin_tok), timeout=30)
+    print(f"  cleanup music delete -> {r.status_code}")
+    if base_dir.exists():
+        shutil.rmtree(base_dir)
+        print(f"  removed {base_dir}")
+    if created_ticket:
+        r = requests.delete(f"{BASE}/admin/support/tickets/{created_ticket}", headers=hdr(admin_tok), timeout=30)
+        print(f"  cleanup support ticket -> {r.status_code}")
+
+    print(f"\n=== TOTAL: {PASS} passed, {FAIL} failed ===")
     if FAILURES:
-        print("FAILURES:")
+        print("\nFailures:")
         for f in FAILURES:
             print(f"  - {f}")
-    print(f"=========================")
-    return 0 if FAIL == 0 else 1
+    return 0 if FAIL == 0 else 2
 
 
 if __name__ == "__main__":
