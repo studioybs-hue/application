@@ -152,6 +152,13 @@ export default function ProfileScreen() {
 
         <Section title="Mon compte">
           <Item
+            icon="heart-outline"
+            label={(user as any).claimed_client_name ? `💍 Mon mariage : ${(user as any).claimed_client_name}` : "💍 Mon mariage — Revendiquer"}
+            onPress={() => router.push("/claim-wedding")}
+            testID="profile-claim-btn"
+            accent={!(user as any).claimed_client_id}
+          />
+          <Item
             icon="key-outline"
             label="Saisir un code de déblocage"
             onPress={() => router.push("/unlock")}

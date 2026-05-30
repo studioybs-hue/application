@@ -112,9 +112,20 @@ export default function SubscriptionScreen() {
 
   const currentPlan = (user as any)?.subscription_plan as PlanCode | undefined;
   const isSubscribed = !!user?.is_subscribed;
+  const claimedClientId = (user as any)?.claimed_client_id as string | undefined;
+  const claimedClientName = (user as any)?.claimed_client_name as string | undefined;
+  const hasClaim = !!claimedClientId;
 
   const subscribe = async () => {
     if (!user) { router.push("/auth/login"); return; }
+    if (!hasClaim) {
+      showAlert(
+        "Revendiquez d'abord votre mariage",
+        "Avant de souscrire un abonnement, vous devez indiquer de quel mariage vous êtes le marié ou la mariée. Allez dans 'Mon mariage' depuis votre profil.",
+        () => router.push("/claim-wedding")
+      );
+      return;
+    }
     if (!acceptedTerms) {
       showAlert("Acceptation requise", "Vous devez accepter les CGV, CGU et la Politique de confidentialité.");
       return;

@@ -78,6 +78,8 @@ class UserPublic(BaseModel):
     subscription_plan: Optional[str] = None  # "annual_commit" | "annual_free" | "monthly_free"
     subscription_ends_at: Optional[datetime] = None
     client_id: Optional[str] = None
+    claimed_client_id: Optional[str] = None
+    claimed_client_name: Optional[str] = None
     created_at: datetime
 
 
@@ -237,6 +239,8 @@ def user_to_public(u: dict) -> UserPublic:
         subscription_plan=u.get("subscription_plan"),
         subscription_ends_at=u.get("subscription_ends_at"),
         client_id=u.get("client_id"),
+        claimed_client_id=u.get("claimed_client_id"),
+        claimed_client_name=u.get("claimed_client_name"),
         created_at=u.get("created_at", utcnow()),
     )
 
@@ -903,11 +907,117 @@ async def list_public_weddings():
     videos = await db.videos.find({}, {"_id": 0}).to_list(500)
     metas = await _fetch_wedding_metas()
     grouped = _group_by_wedding(videos, metas)
-    weddings = list(grouped.values())
+    # enrich with claim status
+    claims = {c["client_id"]: c for c in await db.wedding_claims.find({}, {"_id": 0}).to_list(1000)}
+    weddings = []
+    for w in grouped.values():
+        w["is_claimed"] = w["client_id"] in claims
+        weddings.append(w)
     weddings.sort(key=lambda w: (not w["is_top_france"], not w["is_featured"], w["client_name"]))
     return {
         "featured": [w for w in weddings if w["is_featured"]],
         "weddings": weddings,
+    }
+
+
+# ============================================================
+# 💍 WEDDING CLAIM SYSTEM
+# Allows the bride/groom to link their account to their wedding,
+# preventing other users from claiming the same one. Premium subscription
+# is then unlocked ONLY for their claimed wedding.
+# ============================================================
+@api_router.get("/weddings/claimable")
+async def list_claimable_weddings(q: Optional[str] = None, current: dict = Depends(get_current_user)):
+    """List of weddings that have NOT been claimed yet. Used during signup/profile autocomplete.
+
+    Each authenticated user can see the list but can only claim ONE wedding.
+    Optional `q` parameter filters by client_name (case-insensitive contains match).
+    """
+    # User can only claim if they haven't already claimed another wedding
+    existing = await db.wedding_claims.find_one({"user_id": current["id"]}, {"_id": 0})
+    already_claimed = existing.get("client_id") if existing else None
+
+    videos = await db.videos.find({}, {"_id": 0}).to_list(500)
+    metas = await _fetch_wedding_metas()
+    grouped = _group_by_wedding(videos, metas)
+    # Get all current claims
+    claimed_ids = {c["client_id"] for c in await db.wedding_claims.find({}, {"_id": 0, "client_id": 1}).to_list(1000)}
+    items = []
+    q_norm = (q or "").strip().lower()
+    for w in grouped.values():
+        if w["client_id"] in claimed_ids:
+            continue  # Already claimed by someone
+        name = (w.get("client_name") or "").lower()
+        if q_norm and q_norm not in name:
+            continue
+        items.append({
+            "client_id": w["client_id"],
+            "client_name": w["client_name"],
+            "poster_url": w["poster_url"],
+            "video_count": w["video_count"],
+        })
+    items.sort(key=lambda x: x["client_name"] or "")
+    return {
+        "items": items[:50],
+        "already_claimed": already_claimed,
+    }
+
+
+@api_router.post("/weddings/{client_id}/claim")
+async def claim_wedding(client_id: str, current: dict = Depends(get_current_user)):
+    """Claim a wedding for the current user. INSTANT, NON-REVERSIBLE (only admin can unlink).
+
+    Once claimed, the wedding becomes UNAVAILABLE to other users. The claimant gains
+    auto-unlock access to all videos / photos of this wedding (subscription required to play).
+    """
+    # 1) Verify the wedding exists (any video with this client_id)
+    sample = await db.videos.find_one({"$or": [{"client_id": client_id}, {"title": client_id}]}, {"_id": 0, "client_id": 1, "client_name": 1, "title": 1})
+    if not sample:
+        raise HTTPException(status_code=404, detail="Mariage introuvable")
+    cid = sample.get("client_id") or slugify(sample.get("title", ""))
+    if cid != client_id:
+        raise HTTPException(status_code=404, detail="Mariage introuvable")
+    # 2) Check the wedding hasn't been claimed already
+    existing = await db.wedding_claims.find_one({"client_id": cid}, {"_id": 0})
+    if existing:
+        if existing.get("user_id") == current["id"]:
+            return {"ok": True, "already_yours": True, "client_id": cid, "client_name": sample.get("client_name")}
+        raise HTTPException(status_code=409, detail="Ce mariage a déjà été revendiqué par un autre utilisateur. Contactez le studio si c'est une erreur.")
+    # 3) Check the user hasn't already claimed another wedding
+    mine = await db.wedding_claims.find_one({"user_id": current["id"]}, {"_id": 0})
+    if mine:
+        raise HTTPException(status_code=409, detail=f"Vous avez déjà revendiqué un mariage ({mine.get('client_name')}). Contactez le studio pour modifier.")
+    # 4) Insert the claim
+    claim = {
+        "id": str(uuid.uuid4()),
+        "client_id": cid,
+        "client_name": sample.get("client_name") or sample.get("title"),
+        "user_id": current["id"],
+        "user_email": current.get("email"),
+        "user_name": current.get("name"),
+        "claimed_at": utcnow(),
+    }
+    await db.wedding_claims.insert_one(claim)
+    # Also record on the user document for fast lookup
+    await db.users.update_one(
+        {"id": current["id"]},
+        {"$set": {"claimed_client_id": cid, "claimed_client_name": claim["client_name"]}},
+    )
+    logging.info(f"[CLAIM] {current.get('email')} claimed wedding {cid} ({claim['client_name']})")
+    return {"ok": True, "client_id": cid, "client_name": claim["client_name"]}
+
+
+@api_router.get("/me/claim")
+async def my_claim(current: dict = Depends(get_current_user)):
+    """Return the wedding I've claimed (or None)."""
+    c = await db.wedding_claims.find_one({"user_id": current["id"]}, {"_id": 0})
+    if not c:
+        return {"has_claim": False}
+    return {
+        "has_claim": True,
+        "client_id": c["client_id"],
+        "client_name": c["client_name"],
+        "claimed_at": c.get("claimed_at"),
     }
 
 
@@ -1698,7 +1808,12 @@ async def get_video(video_id: str, code: Optional[str] = None, current: Optional
     # 0) Public showcase video → any authenticated user can watch (no code needed)
     if current and v.get("is_showcase"):
         unlocked = True
-    # 1) Logged-in user with a recorded unlock OR an active subscription OR admin
+    # 0bis) User has claimed this wedding AND is subscribed → full access (the bride/groom)
+    if not unlocked and current and current.get("is_subscribed"):
+        v_cid = v.get("client_id") or slugify(v.get("title", ""))
+        if current.get("claimed_client_id") == v_cid:
+            unlocked = True
+    # 1) Logged-in user with a recorded unlock OR an admin
     if not unlocked and current:
         u_doc = await db.user_unlocks.find_one({"user_id": current["id"], "video_id": video_id})
         unlocked = bool(u_doc) or bool(current.get("is_subscribed")) or bool(current.get("is_admin"))
@@ -1778,6 +1893,15 @@ async def create_checkout(body: CheckoutRequest, current: dict = Depends(get_cur
             status_code=503,
             detail="Stripe non configuré. Veuillez fournir une vraie clé Stripe sk_test_... dans STRIPE_API_KEY.",
         )
+    # 🔒 GATE: only users who have CLAIMED a wedding can subscribe
+    # (Premium gives access to YOUR claimed wedding, so claim is mandatory first)
+    if not current.get("is_admin"):
+        my_claim_doc = await db.wedding_claims.find_one({"user_id": current["id"]}, {"_id": 0, "client_id": 1, "client_name": 1})
+        if not my_claim_doc:
+            raise HTTPException(
+                status_code=403,
+                detail="Vous devez d'abord revendiquer votre mariage avant de souscrire un abonnement. Allez dans Profil → Mon mariage.",
+            )
     try:
         # ensure customer
         customer_id = current.get("stripe_customer_id")
@@ -2261,6 +2385,25 @@ async def admin_stats(_: dict = Depends(require_admin)):
 async def admin_list_videos(_: dict = Depends(require_admin)):
     videos = await db.videos.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
     return {"videos": [video_to_public(v, include_full=True) for v in videos]}
+
+
+@api_router.post("/admin/weddings/{client_id}/unclaim")
+async def admin_unclaim_wedding(client_id: str, _: dict = Depends(require_admin)):
+    """Admin override: remove the claim on a wedding. Makes it available again."""
+    res = await db.wedding_claims.delete_one({"client_id": client_id})
+    if res.deleted_count:
+        await db.users.update_many(
+            {"claimed_client_id": client_id},
+            {"$unset": {"claimed_client_id": "", "claimed_client_name": ""}},
+        )
+    return {"ok": True, "removed": res.deleted_count}
+
+
+@api_router.get("/admin/wedding-claims")
+async def admin_list_claims(_: dict = Depends(require_admin)):
+    """List all current wedding claims (for admin dashboard)."""
+    claims = await db.wedding_claims.find({}, {"_id": 0}).sort("claimed_at", -1).to_list(500)
+    return {"items": claims}
 
 
 @api_router.get("/admin/weddings/{client_id}/cover")
