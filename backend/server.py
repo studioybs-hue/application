@@ -1990,11 +1990,16 @@ async def billing_status(session_id: Optional[str] = None, current: dict = Depen
                 sub_id = s.get("subscription")
                 if sub_id:
                     update["stripe_subscription_id"] = sub_id
-                # Save customer id so future syncs can find the user
+                # save customer id so future syncs can find the user
                 cust_id = s.get("customer")
                 if cust_id:
                     update["stripe_customer_id"] = cust_id
                 await db.users.update_one({"id": current["id"]}, {"$set": update})
+                # 🔔 Notify admin (fallback path if webhook was missed)
+                try:
+                    await _notify_admin_new_subscription(current["id"], plan_code=plan_code, source="billing_status")
+                except Exception as e:
+                    logging.warning(f"Admin notif failed (billing_status): {e}")
         except Exception as e:
             logging.warning(f"Stripe retrieve error: {e}")
     # 🔧 Fallback heal: also re-sync from Stripe API in case the webhook was missed
@@ -2190,6 +2195,82 @@ async def billing_portal(current: dict = Depends(get_current_user)):
         raise HTTPException(status_code=502, detail=f"Erreur Stripe: {str(e)}")
 
 
+async def _notify_admin_new_subscription(user_id: str, plan_code: Optional[str] = None, source: str = "webhook"):
+    """Send email + push notification to admin(s) about a new paid subscription.
+
+    Idempotent: marks user as 'notified_admin_subscription' so duplicate webhooks
+    don't spam the admin. Trigger sources: 'webhook' (Stripe) or 'billing_status' (heal path).
+    """
+    u = await db.users.find_one({"id": user_id}, {"_id": 0})
+    if not u:
+        return
+    if u.get("notified_admin_subscription"):
+        return  # already notified
+    # Build a nice summary
+    plan_label = "Premium"
+    if plan_code:
+        cfg = PLANS.get(plan_code)
+        if cfg:
+            plan_label = f"{cfg.get('name', plan_code)} ({cfg.get('price_eur', '?')}€)"
+    claim_info = ""
+    if u.get("claimed_client_name"):
+        claim_info = f"<br/>💍 Mariage revendiqué: <b>{u['claimed_client_name']}</b>"
+    email = u.get("email") or "inconnu"
+    name = u.get("full_name") or u.get("name") or ""
+    # 1) Admin email
+    admin_email = os.environ.get("ADMIN_NOTIFY_EMAIL", "") or ""
+    if admin_email and smtp_configured():
+        try:
+            subject = f"💎 [CINÉMARIÉS] Nouvel abonnement — {email}"
+            html = f"""
+            <div style='font-family:system-ui,sans-serif;background:#0A0A0A;color:#F5F1E8;padding:24px;border-radius:8px;max-width:560px;margin:0 auto'>
+              <h2 style='color:#D4AF37;margin:0 0 16px'>💎 Nouvel abonnement Premium</h2>
+              <p style='color:#F5F1E8;line-height:1.6'>
+                Un client vient de souscrire un abonnement.<br/><br/>
+                <b>👤 Client:</b> {name}<br/>
+                <b>📧 Email:</b> {email}<br/>
+                <b>💳 Formule:</b> {plan_label}{claim_info}<br/>
+                <b>🕐 Heure:</b> {utcnow().strftime('%d/%m/%Y %H:%M UTC')}<br/>
+                <b>🔍 Source:</b> {source}
+              </p>
+              <p style='color:#A89484;font-size:12px;margin-top:24px'>
+                CINÉMARIÉS · Notification automatique
+              </p>
+            </div>
+            """
+            await send_email(admin_email, subject, html)
+            logging.info(f"[notify] Admin email sent for new subscription {email}")
+        except Exception as e:
+            logging.warning(f"Admin email failed: {e}")
+    # 2) Push notification to ALL admin users
+    try:
+        admins = await db.users.find({"is_admin": True}, {"_id": 0, "id": 1}).to_list(50)
+        admin_ids = [a["id"] for a in admins]
+        if admin_ids:
+            tokens_docs = await db.push_tokens.find(
+                {"user_id": {"$in": admin_ids}},
+                {"_id": 0, "expo_push_token": 1},
+            ).to_list(200)
+            tokens = [t["expo_push_token"] for t in tokens_docs if t.get("expo_push_token")]
+            if tokens:
+                await _send_expo_push(
+                    tokens,
+                    title="💎 Nouvel abonnement Premium",
+                    body=f"{name or email} vient de souscrire ({plan_label})",
+                    data={"type": "new_subscription", "user_email": email, "plan": plan_code},
+                )
+                logging.info(f"[notify] Pushed to {len(tokens)} admin device(s) for {email}")
+    except Exception as e:
+        logging.warning(f"Admin push failed: {e}")
+    # 3) Mark as notified
+    try:
+        await db.users.update_one({"id": user_id}, {"$set": {"notified_admin_subscription": utcnow()}})
+    except Exception:
+        pass
+
+
+
+
 @api_router.post("/billing/webhook")
 async def stripe_webhook(request: Request, stripe_signature: Optional[str] = Header(None, alias="Stripe-Signature")):
     """Stripe webhook endpoint. Configure in Stripe Dashboard:
@@ -2254,6 +2335,11 @@ async def stripe_webhook(request: Request, stripe_signature: Optional[str] = Hea
                         "stripe_subscription_id": sub_id,
                     }},
                 )
+                # 🔔 Notify admin (email + push)
+                try:
+                    await _notify_admin_new_subscription(user_id, plan_code=meta.get("plan"), source="webhook")
+                except Exception as e:
+                    logging.warning(f"Admin notif failed: {e}")
         elif event_type in ("customer.subscription.updated", "customer.subscription.created"):
             customer_id = obj.get("customer")
             status_v = obj.get("status")
