@@ -120,6 +120,7 @@ class UnlockRequest(BaseModel):
     code: str
     device_id: Optional[str] = None
     device_label: Optional[str] = None
+    client_id: Optional[str] = None  # used with MASTER_TEST_CODE to specify which wedding to unlock
 
 
 class ClientCodeCreate(BaseModel):
@@ -860,8 +861,67 @@ async def get_wedding(client_id: str, code: Optional[str] = None, current: Optio
 async def unlock_wedding(body: UnlockRequest, request: Request, current: Optional[dict] = Depends(get_optional_user)):
     """Enter a code to unlock an entire wedding. Works anonymously (no login required).
     Each code can be activated on UP TO MAX_DEVICES_PER_CODE devices (default 3).
-    The same device can re-unlock with the code as many times as needed."""
+    The same device can re-unlock with the code as many times as needed.
+
+    🔑 MASTER TEST CODE (admin-only):
+      If the entered code equals env MASTER_TEST_CODE (default 'STUDIO2026'):
+        • Bypasses device limit
+        • Unlocks the wedding specified by body.client_id
+        • If body.client_id is missing, returns the list of available weddings (HTTP 422)
+        • Only usable by an authenticated ADMIN account
+    """
     code = body.code.strip().upper()
+
+    # === MASTER TEST CODE PATH ===
+    master_code = (os.getenv("MASTER_TEST_CODE", "STUDIO2026") or "").strip().upper()
+    if master_code and code == master_code:
+        if not current or not current.get("is_admin"):
+            raise HTTPException(status_code=403, detail="Code maître réservé à l'administration")
+        target_client_id = (body.client_id or "").strip()
+        if not target_client_id:
+            # Help admin: return list of available client_ids
+            all_v = await db.videos.find({}, {"_id": 0, "client_id": 1, "title": 1, "client_name": 1}).to_list(500)
+            seen: dict[str, str] = {}
+            for v in all_v:
+                cid = v.get("client_id") or slugify(v.get("title", ""))
+                if cid and cid not in seen:
+                    seen[cid] = v.get("client_name") or v.get("title") or cid
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "message": "Code maître reconnu — précisez le mariage à débloquer dans 'client_id'.",
+                    "available_weddings": [{"client_id": k, "name": v} for k, v in seen.items()],
+                },
+            )
+        # Find all videos for that wedding
+        all_videos = await db.videos.find({}, {"_id": 0}).to_list(500)
+        wedding_videos = [v for v in all_videos if (v.get("client_id") or slugify(v.get("title", ""))) == target_client_id]
+        if not wedding_videos:
+            raise HTTPException(status_code=404, detail=f"Mariage introuvable: {target_client_id}")
+        # Record unlock for the admin user
+        await db.user_unlocks.update_one(
+            {"user_id": current["id"], "client_id": target_client_id},
+            {"$set": {
+                "user_id": current["id"],
+                "client_id": target_client_id,
+                "code": "__MASTER__",
+                "unlocked_at": utcnow(),
+            }},
+            upsert=True,
+        )
+        for v in wedding_videos:
+            await db.user_unlocks.update_one(
+                {"user_id": current["id"], "video_id": v["id"]},
+                {"$set": {"user_id": current["id"], "video_id": v["id"], "code": "__MASTER__", "unlocked_at": utcnow()}},
+                upsert=True,
+            )
+        return {
+            "ok": True,
+            "master": True,
+            "client_id": target_client_id,
+            "videos": [video_to_public(v, include_full=True) for v in wedding_videos],
+        }
+
     rec = await db.unlock_codes.find_one({"code": code, "is_active": True}, {"_id": 0})
     if not rec:
         raise HTTPException(status_code=404, detail="Code invalide")

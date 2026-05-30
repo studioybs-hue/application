@@ -122,11 +122,11 @@ export default function WeddingScreen() {
     try {
       const device_id = await getDeviceId();
       const device_label = getDeviceLabel();
-      const r = await api<{ ok: boolean; client_id: string; client_name: string; video_count: number; auto_assigned?: boolean }>(
+      const r = await api<{ ok: boolean; client_id: string; client_name?: string; video_count?: number; auto_assigned?: boolean; master?: boolean }>(
         "/weddings/unlock",
-        { method: "POST", body: { code: clean, device_id, device_label } }
+        { method: "POST", body: { code: clean, device_id, device_label, client_id: clientId } }
       );
-      if (r.client_id !== clientId) {
+      if (!r.master && r.client_id !== clientId) {
         setError(`Ce code est pour « ${r.client_name} », pas pour ce mariage.`);
         setSubmitting(false);
         return;
