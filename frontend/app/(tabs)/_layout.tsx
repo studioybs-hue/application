@@ -9,6 +9,9 @@ const HomeIcon = ({ color, size }: { color: string; size: number }) => (
 const DiscoverIcon = ({ color, size }: { color: string; size: number }) => (
   <Ionicons name="sparkles-outline" size={size} color={color} />
 );
+const DevisIcon = ({ color, size }: { color: string; size: number }) => (
+  <Ionicons name="document-text-outline" size={size} color={color} />
+);
 const LibIcon = ({ color, size }: { color: string; size: number }) => (
   <Ionicons name="bookmark-outline" size={size} color={color} />
 );
@@ -31,12 +34,13 @@ export default function TabsLayout() {
           paddingTop: 8,
           paddingBottom: Platform.OS === "ios" ? 28 : 12,
         },
-        tabBarLabelStyle: { fontSize: 11, letterSpacing: 0.5 },
+        tabBarLabelStyle: { fontSize: 10, letterSpacing: 0.3 },
       }}
     >
       <Tabs.Screen name="home" options={{ title: "Accueil", tabBarIcon: HomeIcon }} />
       <Tabs.Screen name="discover" options={{ title: "Découvrir", tabBarIcon: DiscoverIcon }} />
-      <Tabs.Screen name="library" options={{ title: "Ma Bibliothèque", tabBarIcon: LibIcon }} />
+      <Tabs.Screen name="devis" options={{ title: "Devis", tabBarIcon: DevisIcon }} />
+      <Tabs.Screen name="library" options={{ title: "Bibliothèque", tabBarIcon: LibIcon }} />
       <Tabs.Screen name="profile" options={{ title: "Profil", tabBarIcon: ProfileIcon }} />
     </Tabs>
   );
