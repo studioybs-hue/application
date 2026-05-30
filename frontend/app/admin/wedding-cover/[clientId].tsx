@@ -82,7 +82,7 @@ export default function AdminWeddingCover() {
             return { uri: asset.uri, type: asset.mimeType || "image/jpeg", name: asset.fileName || `${target}.jpg` };
           })();
 
-      const token = await storage.getItem("auth_token");
+      const token = await storage.secureGet<string>("ws_token", "");
       const fd = new FormData();
       fd.append("kind", "image");
       // @ts-ignore — RN/web FormData
