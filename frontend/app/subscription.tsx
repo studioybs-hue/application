@@ -294,6 +294,34 @@ export default function SubscriptionScreen() {
               <Ionicons name="shield-checkmark" size={14} color={colors.textSecondary} />
               <Text style={styles.securityTxt}>Paiement sécurisé par Stripe · CB / Apple Pay / Google Pay</Text>
             </View>
+
+            {/* RESTORE PURCHASE — heals missed webhooks */}
+            <TouchableOpacity
+              style={styles.restoreBtn}
+              onPress={async () => {
+                try {
+                  setVerifying(true);
+                  const r = await api<{ ok: boolean; is_subscribed: boolean }>("/billing/refresh", { method: "POST" });
+                  await refresh();
+                  if (r.is_subscribed) {
+                    showAlert("✓ Abonnement restauré", "Votre accès Premium est de nouveau actif !");
+                  } else {
+                    showAlert("Aucun abonnement actif trouvé", "Si vous venez de payer, attendez 30 secondes et réessayez. Sinon contactez le support.");
+                  }
+                } catch (e: any) {
+                  showAlert("Erreur", e?.message || "Impossible de rafraîchir");
+                } finally {
+                  setVerifying(false);
+                }
+              }}
+              disabled={verifying}
+              testID="restore-purchase-btn"
+            >
+              <Ionicons name="refresh" size={14} color={colors.gold} />
+              <Text style={styles.restoreTxt}>
+                {verifying ? "Vérification..." : "J'ai déjà payé — restaurer mon abonnement"}
+              </Text>
+            </TouchableOpacity>
           </>
         )}
 
@@ -365,6 +393,8 @@ const styles = StyleSheet.create({
   subscribeTxt: { color: "#0A0A0A", fontWeight: "800", fontSize: 14, letterSpacing: 0.4 },
   securityRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 10 },
   securityTxt: { color: colors.textSecondary, fontSize: 10 },
+  restoreBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", paddingVertical: 12, marginTop: 14, gap: 6, borderTopWidth: 1, borderTopColor: "rgba(212,175,55,0.15)" },
+  restoreTxt: { color: colors.gold, fontSize: 12, fontWeight: "600" },
 
   footer: { color: colors.textDisabled, fontSize: 11, lineHeight: 16, textAlign: "center", marginTop: 24, fontStyle: "italic" },
 });

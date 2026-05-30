@@ -340,8 +340,76 @@ async def login(body: LoginRequest):
     # Track last login for inactivity-based admin filtering
     await db.users.update_one({"id": u["id"]}, {"$set": {"last_login_at": utcnow()}})
     u["last_login_at"] = utcnow()
+    # 🔧 Auto-sync subscription state from Stripe (heals webhook misses)
+    try:
+        u = await _sync_subscription_from_stripe(u) or u
+    except Exception as e:
+        logging.warning(f"Stripe auto-sync on login failed for {u.get('email')}: {e}")
     token = create_jwt(u["id"])
     return TokenResponse(access_token=token, user=user_to_public(u))
+
+
+async def _sync_subscription_from_stripe(u: dict) -> Optional[dict]:
+    """Re-read subscription state from Stripe and update DB if needed.
+
+    SAFETY: This function will ONLY UPGRADE the user to is_subscribed=True if Stripe
+    reports an active or trialing subscription. It will NOT downgrade an already-premium
+    user (the webhook handles cancellations / payment failures).
+    Returns the updated user dict, or None if no change.
+    """
+    if not STRIPE_API_KEY:
+        return None
+    customer_id = u.get("stripe_customer_id")
+    email = (u.get("email") or "").lower()
+    # If no customer_id yet, try to look the user up in Stripe by email
+    if not customer_id and email:
+        try:
+            search = stripe.Customer.list(email=email, limit=1)
+            if search and search.get("data"):
+                customer_id = search["data"][0]["id"]
+                await db.users.update_one({"id": u["id"]}, {"$set": {"stripe_customer_id": customer_id}})
+        except Exception:
+            pass
+    if not customer_id:
+        return None
+    try:
+        subs = stripe.Subscription.list(customer=customer_id, status="all", limit=5)
+    except Exception as e:
+        logging.warning(f"Stripe Subscription.list failed for {customer_id}: {e}")
+        return None
+    active_sub = None
+    for s in (subs.get("data") or []):
+        if s.get("status") in ("active", "trialing"):
+            active_sub = s
+            break
+    if not active_sub:
+        return None
+    # Active subscription found → upgrade user if not already premium
+    update: dict = {
+        "is_subscribed": True,
+        "subscription_status": active_sub.get("status"),
+        "stripe_subscription_id": active_sub.get("id"),
+        "cancel_at_period_end": bool(active_sub.get("cancel_at_period_end")),
+    }
+    # Map Stripe price → plan code / tier (best-effort)
+    try:
+        items = active_sub.get("items", {}).get("data", []) or []
+        if items:
+            price_id = items[0].get("price", {}).get("id")
+            for code, cfg in PLANS.items():
+                if cfg.get("price_id") == price_id:
+                    update["subscription_plan"] = code
+                    update["subscription_tier"] = cfg.get("tier")
+                    break
+    except Exception:
+        pass
+    # Only set started_at if not already set
+    if not u.get("subscription_started_at"):
+        update["subscription_started_at"] = utcnow()
+    await db.users.update_one({"id": u["id"]}, {"$set": update})
+    u.update(update)
+    logging.info(f"[StripeSync] Healed subscription for {email} (sub={active_sub.get('id')}, status={active_sub.get('status')})")
+    return u
 
 
 @api_router.get("/auth/me", response_model=UserPublic)
@@ -772,7 +840,15 @@ async def list_showcase_videos(current: Optional[dict] = Depends(get_optional_us
 
 
 # --- WEDDINGS (grouped by client_id) ---
-def _group_by_wedding(videos: list[dict]) -> dict:
+def _group_by_wedding(videos: list[dict], metas: Optional[dict[str, dict]] = None) -> dict:
+    """Group videos by wedding (client_id).
+
+    `metas` is an optional dict {client_id: wedding_meta_doc} used to OVERRIDE
+    the wedding-level poster/hero with admin-defined values (set via
+    POST /admin/weddings/{client_id}/cover). Falls back to the first/featured
+    video's poster when no meta is defined.
+    """
+    metas = metas or {}
     by_client: dict[str, dict] = {}
     for v in videos:
         cid = v.get("client_id") or slugify(v.get("title", ""))
@@ -800,14 +876,31 @@ def _group_by_wedding(videos: list[dict]) -> dict:
             w["description"] = v.get("description", w["description"])
         if v.get("is_top_france"):
             w["is_top_france"] = True
+    # Apply wedding-level admin overrides (highest priority)
+    for cid, w in by_client.items():
+        meta = metas.get(cid)
+        if meta:
+            if meta.get("poster_url"):
+                w["poster_url"] = meta["poster_url"]
+            if meta.get("hero_url"):
+                w["hero_url"] = meta["hero_url"]
+            if meta.get("description"):
+                w["description"] = meta["description"]
     return by_client
+
+
+async def _fetch_wedding_metas() -> dict[str, dict]:
+    """Fetch all wedding metadata as dict keyed by client_id."""
+    docs = await db.wedding_meta.find({}, {"_id": 0}).to_list(1000)
+    return {d["client_id"]: d for d in docs if d.get("client_id")}
 
 
 @api_router.get("/weddings/public")
 async def list_public_weddings():
     """List of weddings (grouped from videos). Public — no full URLs."""
     videos = await db.videos.find({}, {"_id": 0}).to_list(500)
-    grouped = _group_by_wedding(videos)
+    metas = await _fetch_wedding_metas()
+    grouped = _group_by_wedding(videos, metas)
     weddings = list(grouped.values())
     weddings.sort(key=lambda w: (not w["is_top_france"], not w["is_featured"], w["client_name"]))
     return {
@@ -845,7 +938,7 @@ async def get_wedding(client_id: str, code: Optional[str] = None, current: Optio
                 if not (rec.get("expires_at") and rec["expires_at"] < utcnow()):
                     if not (rec.get("max_uses") and rec.get("current_uses", 0) >= rec["max_uses"]):
                         unlocked = True
-    grouped = _group_by_wedding(filtered)
+    grouped = _group_by_wedding(filtered, await _fetch_wedding_metas())
     wedding = next(iter(grouped.values()))
     wedding["unlocked"] = unlocked
     # Owner flag — premium clients see "Invite friends" button on their own wedding
@@ -1771,15 +1864,47 @@ async def billing_status(session_id: Optional[str] = None, current: dict = Depen
                 sub_id = s.get("subscription")
                 if sub_id:
                     update["stripe_subscription_id"] = sub_id
+                # Save customer id so future syncs can find the user
+                cust_id = s.get("customer")
+                if cust_id:
+                    update["stripe_customer_id"] = cust_id
                 await db.users.update_one({"id": current["id"]}, {"$set": update})
         except Exception as e:
             logging.warning(f"Stripe retrieve error: {e}")
+    # 🔧 Fallback heal: also re-sync from Stripe API in case the webhook was missed
+    if STRIPE_API_KEY:
+        try:
+            fresh = await db.users.find_one({"id": current["id"]}, {"_id": 0})
+            if fresh:
+                await _sync_subscription_from_stripe(fresh)
+        except Exception as e:
+            logging.warning(f"Stripe heal-sync failed: {e}")
     u = await db.users.find_one({"id": current["id"]}, {"_id": 0})
     return {
         "is_subscribed": bool(u.get("is_subscribed")),
         "is_active": u.get("is_active", True),
         "subscription_plan": u.get("subscription_plan"),
         "subscription_ends_at": u.get("subscription_ends_at"),
+    }
+
+
+@api_router.post("/billing/refresh")
+async def billing_refresh(current: dict = Depends(get_current_user)):
+    """Manually trigger a Stripe sync — heals missed webhooks for the current user."""
+    if not STRIPE_API_KEY:
+        return {"ok": False, "reason": "Stripe non configuré"}
+    updated = await _sync_subscription_from_stripe(current)
+    if updated:
+        return {
+            "ok": True,
+            "is_subscribed": bool(updated.get("is_subscribed")),
+            "subscription_plan": updated.get("subscription_plan"),
+        }
+    u = await db.users.find_one({"id": current["id"]}, {"_id": 0}) or current
+    return {
+        "ok": True,
+        "is_subscribed": bool(u.get("is_subscribed")),
+        "subscription_plan": u.get("subscription_plan"),
     }
 
 
@@ -2134,6 +2259,57 @@ async def admin_stats(_: dict = Depends(require_admin)):
 async def admin_list_videos(_: dict = Depends(require_admin)):
     videos = await db.videos.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
     return {"videos": [video_to_public(v, include_full=True) for v in videos]}
+
+
+@api_router.get("/admin/weddings/{client_id}/cover")
+async def admin_get_wedding_cover(client_id: str, _: dict = Depends(require_admin)):
+    """Return the wedding-level cover (poster + hero) overrides set by the admin.
+
+    These OVERRIDE the auto-computed cover that takes the first/featured video poster.
+    Use empty strings to clear and fall back to the auto behaviour.
+    """
+    doc = await db.wedding_meta.find_one({"client_id": client_id}, {"_id": 0}) or {}
+    return {
+        "client_id": client_id,
+        "poster_url": doc.get("poster_url") or "",
+        "hero_url": doc.get("hero_url") or "",
+        "description": doc.get("description") or "",
+    }
+
+
+@api_router.put("/admin/weddings/{client_id}/cover")
+async def admin_set_wedding_cover(client_id: str, body: dict, _: dict = Depends(require_admin)):
+    """Set/update wedding-level cover (poster + hero) overrides.
+
+    Body: { poster_url?: str, hero_url?: str, description?: str }
+    Empty strings clear the override (auto-cover from video poster will be used).
+    """
+    poster_url = (body.get("poster_url") or "").strip()
+    hero_url = (body.get("hero_url") or "").strip()
+    description = body.get("description")
+    update = {"client_id": client_id, "updated_at": utcnow()}
+    if poster_url:
+        update["poster_url"] = poster_url
+    else:
+        await db.wedding_meta.update_one({"client_id": client_id}, {"$unset": {"poster_url": ""}}, upsert=True)
+    if hero_url:
+        update["hero_url"] = hero_url
+    else:
+        await db.wedding_meta.update_one({"client_id": client_id}, {"$unset": {"hero_url": ""}}, upsert=True)
+    if description is not None:
+        if description.strip():
+            update["description"] = description.strip()
+        else:
+            await db.wedding_meta.update_one({"client_id": client_id}, {"$unset": {"description": ""}}, upsert=True)
+    await db.wedding_meta.update_one({"client_id": client_id}, {"$set": update}, upsert=True)
+    doc = await db.wedding_meta.find_one({"client_id": client_id}, {"_id": 0}) or {}
+    return {
+        "ok": True,
+        "client_id": client_id,
+        "poster_url": doc.get("poster_url") or "",
+        "hero_url": doc.get("hero_url") or "",
+        "description": doc.get("description") or "",
+    }
 
 
 @api_router.get("/admin/weddings")

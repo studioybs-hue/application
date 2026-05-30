@@ -120,6 +120,13 @@ export default function AdminDashboard() {
               testID="admin-photos-btn"
             />
             <ActionRow
+              icon="image-outline"
+              label="Couvertures des mariages"
+              hint="Photo dédiée à chaque mariage (séparée des vidéos)"
+              onPress={() => router.push("/admin/wedding-covers")}
+              testID="admin-covers-btn"
+            />
+            <ActionRow
               icon="people-outline"
               label="Utilisateurs"
               hint="Liste & abonnements"
