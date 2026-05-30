@@ -1887,21 +1887,24 @@ async def my_library(current: dict = Depends(get_current_user)):
 
 # --- STRIPE SUBSCRIPTION ---
 @api_router.post("/billing/checkout")
-async def create_checkout(body: CheckoutRequest, current: dict = Depends(get_current_user)):
+async def create_checkout(body: CheckoutRequest, current: dict = Depends(get_current_user), skip_claim_check: bool = False):
     if not STRIPE_API_KEY or STRIPE_API_KEY == "sk_test_emergent":
         raise HTTPException(
             status_code=503,
             detail="Stripe non configuré. Veuillez fournir une vraie clé Stripe sk_test_... dans STRIPE_API_KEY.",
         )
     # 🔒 GATE: only users who have CLAIMED a wedding can subscribe
-    # (Premium gives access to YOUR claimed wedding, so claim is mandatory first)
-    if not current.get("is_admin"):
-        my_claim_doc = await db.wedding_claims.find_one({"user_id": current["id"]}, {"_id": 0, "client_id": 1, "client_name": 1})
-        if not my_claim_doc:
-            raise HTTPException(
-                status_code=403,
-                detail="Vous devez d'abord revendiquer votre mariage avant de souscrire un abonnement. Allez dans Profil → Mon mariage.",
-            )
+    # SKIP this check for reactivation (user was previously subscribed → already legit)
+    if not skip_claim_check and not current.get("is_admin"):
+        # Skip the gate if user has previous Stripe history (was already a customer)
+        had_previous_subscription = bool(current.get("stripe_customer_id"))
+        if not had_previous_subscription:
+            my_claim_doc = await db.wedding_claims.find_one({"user_id": current["id"]}, {"_id": 0, "client_id": 1, "client_name": 1})
+            if not my_claim_doc:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Vous devez d'abord revendiquer votre mariage avant de souscrire un abonnement. Allez dans Profil → Mon mariage.",
+                )
     try:
         # ensure customer
         customer_id = current.get("stripe_customer_id")
@@ -2169,9 +2172,10 @@ async def reactivate_account(body: ReactivateRequest, current: dict = Depends(ge
         plan_code = "monthly_free"
     # Re-set is_active so the user is no longer blocked; we'll keep is_subscribed=false until payment.
     await db.users.update_one({"id": current["id"]}, {"$set": {"is_active": True}})
-    # Create a new checkout session — re-use the existing logic
+    # Create a new checkout session — re-use the existing logic. Skip the claim gate
+    # because the user has previously been subscribed (proven legitimacy).
     checkout_body = CheckoutRequest(plan=plan_code)
-    res = await create_checkout(checkout_body, current)  # type: ignore[arg-type]
+    res = await create_checkout(checkout_body, current, skip_claim_check=True)  # type: ignore[arg-type]
     return res
 
 
