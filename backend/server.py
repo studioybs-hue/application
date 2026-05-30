@@ -365,8 +365,9 @@ async def _sync_subscription_from_stripe(u: dict) -> Optional[dict]:
     if not customer_id and email:
         try:
             search = stripe.Customer.list(email=email, limit=1)
-            if search and search.get("data"):
-                customer_id = search["data"][0]["id"]
+            data = getattr(search, "data", None) or []
+            if data:
+                customer_id = data[0].id
                 await db.users.update_one({"id": u["id"]}, {"$set": {"stripe_customer_id": customer_id}})
         except Exception:
             pass
@@ -378,8 +379,8 @@ async def _sync_subscription_from_stripe(u: dict) -> Optional[dict]:
         logging.warning(f"Stripe Subscription.list failed for {customer_id}: {e}")
         return None
     active_sub = None
-    for s in (subs.get("data") or []):
-        if s.get("status") in ("active", "trialing"):
+    for s in (getattr(subs, "data", None) or []):
+        if s.status in ("active", "trialing"):
             active_sub = s
             break
     if not active_sub:
@@ -387,28 +388,29 @@ async def _sync_subscription_from_stripe(u: dict) -> Optional[dict]:
     # Active subscription found → upgrade user if not already premium
     update: dict = {
         "is_subscribed": True,
-        "subscription_status": active_sub.get("status"),
-        "stripe_subscription_id": active_sub.get("id"),
-        "cancel_at_period_end": bool(active_sub.get("cancel_at_period_end")),
+        "subscription_status": active_sub.status,
+        "stripe_subscription_id": active_sub.id,
+        "cancel_at_period_end": bool(getattr(active_sub, "cancel_at_period_end", False)),
     }
     # Map Stripe price → plan code / tier (best-effort)
     try:
-        items = active_sub.get("items", {}).get("data", []) or []
-        if items:
-            price_id = items[0].get("price", {}).get("id")
+        items = getattr(active_sub, "items", None)
+        items_data = getattr(items, "data", None) if items else None
+        if items_data:
+            price_id = items_data[0].price.id
             for code, cfg in PLANS.items():
                 if cfg.get("price_id") == price_id:
                     update["subscription_plan"] = code
                     update["subscription_tier"] = cfg.get("tier")
                     break
-    except Exception:
-        pass
+    except Exception as e:
+        logging.warning(f"Plan mapping failed: {e}")
     # Only set started_at if not already set
     if not u.get("subscription_started_at"):
         update["subscription_started_at"] = utcnow()
     await db.users.update_one({"id": u["id"]}, {"$set": update})
     u.update(update)
-    logging.info(f"[StripeSync] Healed subscription for {email} (sub={active_sub.get('id')}, status={active_sub.get('status')})")
+    logging.info(f"[StripeSync] Healed subscription for {email} (sub={active_sub.id}, status={active_sub.status})")
     return u
 
 
