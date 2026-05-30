@@ -2473,6 +2473,68 @@ async def admin_list_videos(_: dict = Depends(require_admin)):
     return {"videos": [video_to_public(v, include_full=True) for v in videos]}
 
 
+@api_router.post("/admin/test-email")
+async def admin_test_email(current: dict = Depends(require_admin)):
+    """Send a test notification to verify SMTP + push setup is working.
+
+    Sends an email to ADMIN_NOTIFY_EMAIL and a push notification to all admin devices.
+    Returns details about what was attempted.
+    """
+    admin_email = os.environ.get("ADMIN_NOTIFY_EMAIL", "") or ""
+    result: dict = {"email": {"configured": smtp_configured(), "sent": False}, "push": {"sent": 0}, "errors": []}
+    # 1) Email
+    if admin_email and smtp_configured():
+        try:
+            subject = "🧪 [TEST] CINÉMARIÉS — Email de test SMTP"
+            html = f"""
+            <div style='font-family:system-ui,sans-serif;background:#0A0A0A;color:#F5F1E8;padding:24px;border-radius:8px;max-width:560px;margin:0 auto'>
+              <h2 style='color:#D4AF37;margin:0 0 16px'>🧪 Test SMTP — OK</h2>
+              <p style='color:#F5F1E8;line-height:1.6'>
+                Si tu reçois ce message, la configuration email fonctionne correctement.<br/><br/>
+                <b>✉️ Expéditeur:</b> {os.environ.get('SMTP_FROM_EMAIL', '?')}<br/>
+                <b>📬 Destinataire:</b> {admin_email}<br/>
+                <b>🕐 Heure:</b> {utcnow().strftime('%d/%m/%Y %H:%M UTC')}<br/>
+                <b>🎯 Test lancé par:</b> {current.get('email')}
+              </p>
+              <p style='color:#A89484;font-size:12px;margin-top:24px'>
+                CINÉMARIÉS · Test SMTP automatique
+              </p>
+            </div>
+            """
+            await send_email(admin_email, subject, html)
+            result["email"]["sent"] = True
+            result["email"]["to"] = admin_email
+        except Exception as e:
+            result["errors"].append(f"Email: {str(e)}")
+    elif not admin_email:
+        result["errors"].append("ADMIN_NOTIFY_EMAIL non configuré dans .env")
+    elif not smtp_configured():
+        result["errors"].append("SMTP non configuré (vérifier SMTP_HOST/USER/PASSWORD dans .env)")
+    # 2) Push notifications to admin devices
+    try:
+        admins = await db.users.find({"is_admin": True}, {"_id": 0, "id": 1}).to_list(50)
+        admin_ids = [a["id"] for a in admins]
+        if admin_ids:
+            tokens_docs = await db.push_tokens.find(
+                {"user_id": {"$in": admin_ids}},
+                {"_id": 0, "expo_push_token": 1},
+            ).to_list(200)
+            tokens = [t["expo_push_token"] for t in tokens_docs if t.get("expo_push_token")]
+            if tokens:
+                await _send_expo_push(
+                    tokens,
+                    title="🧪 Test CINÉMARIÉS",
+                    body="Notification push admin OK ✅",
+                    data={"type": "test"},
+                )
+                result["push"]["sent"] = len(tokens)
+            else:
+                result["push"]["note"] = "Aucun appareil admin n'a un token push enregistré"
+    except Exception as e:
+        result["errors"].append(f"Push: {str(e)}")
+    return result
+
+
 @api_router.post("/admin/weddings/{client_id}/unclaim")
 async def admin_unclaim_wedding(client_id: str, _: dict = Depends(require_admin)):
     """Admin override: remove the claim on a wedding. Makes it available again."""
