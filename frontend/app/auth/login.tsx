@@ -93,6 +93,14 @@ export default function LoginScreen() {
             {loading ? <ActivityIndicator color="#0A0A0A" /> : <Text style={styles.primaryTxt}>Se connecter</Text>}
           </TouchableOpacity>
 
+          <TouchableOpacity
+            style={styles.forgotBtn}
+            onPress={() => router.push("/auth/forgot-password")}
+            testID="login-forgot-password"
+          >
+            <Text style={styles.forgotTxt}>Mot de passe oublié ?</Text>
+          </TouchableOpacity>
+
           <View style={styles.divider}>
             <View style={styles.line} />
             <Text style={styles.dividerTxt}>ou</Text>
@@ -142,6 +150,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   primaryTxt: { color: "#0A0A0A", fontWeight: "700", fontSize: 15, letterSpacing: 0.5 },
+  forgotBtn: { paddingVertical: 12, alignItems: "center", marginTop: 4 },
+  forgotTxt: { color: colors.gold, fontSize: 13, fontWeight: "600" },
   divider: { flexDirection: "row", alignItems: "center", marginVertical: spacing.lg, gap: 12 },
   line: { flex: 1, height: 1, backgroundColor: "rgba(255,255,255,0.1)" },
   dividerTxt: { color: colors.textSecondary, fontSize: 12 },
