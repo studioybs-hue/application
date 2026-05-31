@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
+import asyncio
 import logging
 import secrets
 import string
@@ -332,6 +333,111 @@ async def register(body: RegisterRequest):
     token = create_jwt(user_id)
     doc.pop("password_hash", None)
     return TokenResponse(access_token=token, user=user_to_public(doc))
+
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    email: EmailStr
+    code: str
+    new_password: str
+
+
+@api_router.post("/auth/forgot-password")
+async def forgot_password(body: ForgotPasswordRequest):
+    """Public endpoint — sends a 6-digit code to the user's email so they can reset their password.
+
+    To avoid leaking which emails exist, this endpoint ALWAYS returns success even if the
+    email isn't registered. The code is valid for 30 minutes and single-use.
+    """
+    email = body.email.lower().strip()
+    u = await db.users.find_one({"email": email}, {"_id": 0, "id": 1, "name": 1, "email": 1})
+    # Always pretend success to avoid email enumeration
+    response = {"ok": True, "message": "Si un compte existe, un code vient d'être envoyé par email."}
+    if not u:
+        # Wait a bit to mimic real timing (avoid timing attacks)
+        await asyncio.sleep(0.3)
+        return response
+    # Generate a 6-digit code
+    import secrets as _sec
+    code = "".join([str(_sec.randbelow(10)) for _ in range(6)])
+    expiry = utcnow() + timedelta(minutes=30)
+    await db.password_resets.update_one(
+        {"user_id": u["id"]},
+        {"$set": {
+            "user_id": u["id"],
+            "email": email,
+            "code": code,
+            "expires_at": expiry,
+            "used": False,
+            "created_at": utcnow(),
+        }},
+        upsert=True,
+    )
+    # Send email with the code
+    if smtp_configured():
+        try:
+            subject = "🔐 CINÉMARIÉS — Réinitialisation de votre mot de passe"
+            html = f"""
+            <div style='font-family:system-ui,sans-serif;background:#0A0A0A;color:#F5F1E8;padding:24px;border-radius:8px;max-width:520px;margin:0 auto'>
+              <h2 style='color:#D4AF37;margin:0 0 16px'>🔐 Réinitialisation du mot de passe</h2>
+              <p style='color:#F5F1E8;line-height:1.6'>
+                Bonjour {u.get('name') or ''},<br/><br/>
+                Vous avez demandé à réinitialiser votre mot de passe. Voici votre code à usage unique :
+              </p>
+              <div style='background:rgba(212,175,55,0.12);border:2px solid #D4AF37;border-radius:8px;padding:24px;text-align:center;margin:20px 0'>
+                <div style='color:#D4AF37;font-size:36px;font-weight:bold;letter-spacing:8px;font-family:monospace'>{code}</div>
+              </div>
+              <p style='color:#A89484;font-size:13px;line-height:1.6'>
+                • Ce code est valable <b style='color:#F5F1E8'>30 minutes</b><br/>
+                • Il ne peut être utilisé qu'une seule fois<br/>
+                • Si vous n'avez pas demandé cette réinitialisation, ignorez ce message
+              </p>
+              <p style='color:#A89484;font-size:11px;margin-top:24px;border-top:1px solid #2A2A2A;padding-top:16px'>
+                CINÉMARIÉS · contact@creativindustry.com
+              </p>
+            </div>
+            """
+            await send_email(email, subject, html)
+            logging.info(f"[forgot-pwd] Reset code sent to {email}")
+        except Exception as e:
+            logging.warning(f"[forgot-pwd] Email send failed for {email}: {e}")
+    else:
+        logging.warning(f"[forgot-pwd] SMTP not configured — code for {email}: {code}")
+    return response
+
+
+@api_router.post("/auth/reset-password")
+async def reset_password(body: ResetPasswordRequest):
+    """Public endpoint — validate the 6-digit code and update the password."""
+    email = body.email.lower().strip()
+    code = body.code.strip()
+    if len(body.new_password) < 8:
+        raise HTTPException(status_code=400, detail="Le mot de passe doit contenir au moins 8 caractères.")
+    rec = await db.password_resets.find_one({"email": email, "code": code}, {"_id": 0})
+    if not rec:
+        raise HTTPException(status_code=400, detail="Code invalide ou expiré.")
+    if rec.get("used"):
+        raise HTTPException(status_code=400, detail="Ce code a déjà été utilisé.")
+    expires = rec.get("expires_at")
+    if expires and isinstance(expires, datetime) and expires < utcnow():
+        raise HTTPException(status_code=400, detail="Ce code a expiré. Demandez-en un nouveau.")
+    # Update password
+    await db.users.update_one(
+        {"id": rec["user_id"]},
+        {"$set": {"password_hash": hash_password(body.new_password), "password_changed_at": utcnow()}},
+    )
+    # Mark code as used
+    await db.password_resets.update_one(
+        {"user_id": rec["user_id"]},
+        {"$set": {"used": True, "used_at": utcnow()}},
+    )
+    logging.info(f"[reset-pwd] Password reset for {email}")
+    return {"ok": True, "message": "Votre mot de passe a été mis à jour. Vous pouvez maintenant vous connecter."}
+
 
 
 @api_router.post("/auth/login", response_model=TokenResponse)
