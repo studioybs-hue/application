@@ -10,15 +10,21 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "fr.cinemaries.app",
-      "buildNumber": "3",
+      "bundleIdentifier": "fr.creativindustry.cinemaries",
+      "buildNumber": "1",
+      "config": {
+        "usesNonExemptEncryption": false
+      },
       "infoPlist": {
-        "NSLocalNetworkUsageDescription": "Recherche les Chromecast et TV connectées sur votre Wi-Fi pour la diffusion vidéo.",
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSLocalNetworkUsageDescription": "Détecter Chromecast et TV connectées sur votre Wi-Fi.",
         "NSBonjourServices": [
           "_googlecast._tcp"
         ],
         "NSPhotoLibraryUsageDescription": "Choisir une photo pour votre mariage.",
+        "NSPhotoLibraryAddUsageDescription": "Enregistrer vos souvenirs dans votre galerie.",
         "NSCameraUsageDescription": "Prendre une photo pour votre mariage.",
+        "NSMicrophoneUsageDescription": "Lecture audio de vos films de mariage.",
         "NSUserNotificationsUsageDescription": "Vous prévenir quand votre film est en ligne."
       }
     },

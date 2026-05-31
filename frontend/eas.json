@@ -35,10 +35,23 @@
       },
       "android": {
         "buildType": "app-bundle"
+      },
+      "ios": {
+        "resourceClass": "m-medium"
       }
     }
   },
   "submit": {
-    "production": {}
+    "production": {
+      "ios": {
+        "appleId": "VOTRE_APPLE_ID_ICI",
+        "ascAppId": "VOTRE_ASC_APP_ID_ICI",
+        "appleTeamId": "VOTRE_TEAM_ID_ICI"
+      },
+      "android": {
+        "serviceAccountKeyPath": "./google-service-account.json",
+        "track": "production"
+      }
+    }
   }
 }
