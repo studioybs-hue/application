@@ -3,6 +3,23 @@ import { useEffect, useState, useCallback } from "react";
 // Default Media Receiver – streams any URL without needing to register a custom app.
 const APP_ID = "CC1AD845";
 
+// 🎬 Branded intro pre-roll (4 sec logo CINÉMARIÉS by Creativindustry)
+const INTRO_URL =
+  process.env.EXPO_PUBLIC_CAST_INTRO_URL ||
+  "https://cinemaries.fr/api/uploads/intro.mp4";
+
+// Detect if URL points to a video (intro should only play before videos, not photos)
+const isVideoUrl = (url: string): boolean => {
+  const lower = url.toLowerCase().split("?")[0];
+  return (
+    lower.endsWith(".mp4") ||
+    lower.endsWith(".webm") ||
+    lower.endsWith(".m3u8") ||
+    lower.endsWith(".mov") ||
+    lower.endsWith(".mkv")
+  );
+};
+
 declare global {
   interface Window {
     __onGCastApiAvailable?: (available: boolean) => void;
@@ -141,6 +158,37 @@ export function useCast() {
         if (poster) {
           mediaInfo.metadata.images = [new window.chrome.cast.Image(poster)];
         }
+
+        // 🎬 BRANDED INTRO PRE-ROLL (only for videos, not photos/audio)
+        // Queue the 4-second CINÉMARIÉS logo intro BEFORE the main video,
+        // creating a Netflix-like branded experience on TV.
+        if (isVideoUrl(absoluteUrl)) {
+          try {
+            const introInfo = new window.chrome.cast.media.MediaInfo(INTRO_URL, "video/mp4");
+            introInfo.metadata = new window.chrome.cast.media.GenericMediaMetadata();
+            introInfo.metadata.title = "CINÉMARIÉS";
+
+            const introQueueItem = new window.chrome.cast.media.QueueItem(introInfo);
+            const mainQueueItem = new window.chrome.cast.media.QueueItem(mediaInfo);
+
+            const queueRequest = new window.chrome.cast.media.QueueLoadRequest([
+              introQueueItem,
+              mainQueueItem,
+            ]);
+            queueRequest.startIndex = 0;
+            queueRequest.repeatMode = window.chrome.cast.media.RepeatMode.OFF;
+
+            await session.queueLoad(queueRequest);
+            return { ok: true };
+          } catch (queueErr) {
+            console.warn(
+              "[cast.web] queueLoad with intro failed, falling back to single loadMedia",
+              queueErr
+            );
+            // Fall through to plain loadMedia
+          }
+        }
+
         const request = new window.chrome.cast.media.LoadRequest(mediaInfo);
 
         try {
