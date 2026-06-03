@@ -176,16 +176,37 @@ export function useCast() {
               mainQueueItem,
             ]);
             queueRequest.startIndex = 0;
-            queueRequest.repeatMode = window.chrome.cast.media.RepeatMode.OFF;
+            try {
+              queueRequest.repeatMode = window.chrome.cast.media.RepeatMode.OFF;
+            } catch {
+              /* repeatMode optional */
+            }
 
-            await session.queueLoad(queueRequest);
+            // Chromecast Web SDK uses callbacks, NOT Promises → wrap manually
+            await new Promise<void>((resolve, reject) => {
+              try {
+                session.queueLoad(
+                  queueRequest,
+                  () => {
+                    console.log("[cast.web] intro + main video queued successfully");
+                    resolve();
+                  },
+                  (err: any) => {
+                    console.warn("[cast.web] queueLoad callback error:", err);
+                    reject(err);
+                  }
+                );
+              } catch (syncErr) {
+                reject(syncErr);
+              }
+            });
             return { ok: true };
           } catch (queueErr) {
             console.warn(
               "[cast.web] queueLoad with intro failed, falling back to single loadMedia",
               queueErr
             );
-            // Fall through to plain loadMedia
+            // Fall through to plain loadMedia below
           }
         }
 
