@@ -196,6 +196,12 @@ export default function ProfileScreen() {
               testID="profile-admin-btn"
               accent
             />
+            <Item
+              icon="lock-closed-outline"
+              label="Sécurité & 2FA"
+              onPress={() => router.push("/security")}
+              testID="profile-security-btn"
+            />
           </Section>
         )}
 

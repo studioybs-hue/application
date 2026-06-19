@@ -33,7 +33,19 @@ export default function LoginScreen() {
     }
     setLoading(true);
     try {
-      await login(email.trim().toLowerCase(), password);
+      const r: any = await login(email.trim().toLowerCase(), password);
+      if (r?.requires_2fa) {
+        // Redirect to 2FA verification screen
+        router.push({
+          pathname: "/auth/2fa",
+          params: {
+            pending_token: r.pending_token,
+            masked_email: r.masked_email,
+            expires_in_minutes: String(r.expires_in_minutes ?? 10),
+          },
+        });
+        return;
+      }
       router.replace("/(tabs)/home");
     } catch (e: any) {
       setError(e.message || "Erreur de connexion");

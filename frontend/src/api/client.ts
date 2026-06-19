@@ -49,6 +49,10 @@ export async function api<T = any>(path: string, opts: Options = {}): Promise<T>
   return data as T;
 }
 
+export type LoginResult =
+  | { requires_2fa: true; pending_token: string; masked_email: string; expires_in_minutes: number; method: string }
+  | { requires_2fa?: false; access_token: string; user: any };
+
 export const auth = {
   async register(email: string, password: string, full_name: string) {
     const r = await api<{ access_token: string; user: any }>("/auth/register", {
@@ -59,14 +63,67 @@ export const auth = {
     await setToken(r.access_token);
     return r;
   },
-  async login(email: string, password: string) {
-    const r = await api<{ access_token: string; user: any }>("/auth/login", {
+  async login(email: string, password: string): Promise<LoginResult> {
+    const r = await api<LoginResult>("/auth/login", {
       method: "POST",
       body: { email, password },
       auth: false,
     });
+    // If 2FA NOT required, store the token
+    if (!(r as any).requires_2fa && (r as any).access_token) {
+      await setToken((r as any).access_token);
+    }
+    return r;
+  },
+  async verify2FAOtp(pending_token: string, code: string) {
+    const r = await api<{ access_token: string; user: any }>("/auth/2fa/verify-otp", {
+      method: "POST",
+      body: { pending_token, code },
+      auth: false,
+    });
     await setToken(r.access_token);
     return r;
+  },
+  async use2FARecoveryCode(pending_token: string, recovery_code: string) {
+    const r = await api<{ access_token: string; user: any; recovery_codes_remaining: number }>(
+      "/auth/2fa/use-recovery-code",
+      {
+        method: "POST",
+        body: { pending_token, recovery_code },
+        auth: false,
+      },
+    );
+    await setToken(r.access_token);
+    return r;
+  },
+  async resend2FAOtp(pending_token: string) {
+    return api<{ ok: boolean; masked_email: string; expires_in_minutes: number }>(
+      "/auth/2fa/resend-otp",
+      { method: "POST", body: { pending_token }, auth: false },
+    );
+  },
+  async get2FAStatus() {
+    return api<{ enabled: boolean; method: string | null; recovery_codes_remaining: number; available_for_role: boolean }>(
+      "/auth/2fa/status",
+    );
+  },
+  async enable2FA(password: string) {
+    return api<{ ok: boolean; message: string; recovery_codes: string[] }>("/auth/2fa/enable", {
+      method: "POST",
+      body: { password },
+    });
+  },
+  async disable2FA(password: string) {
+    return api<{ ok: boolean; message: string }>("/auth/2fa/disable", {
+      method: "POST",
+      body: { password },
+    });
+  },
+  async regenerateRecoveryCodes(password: string) {
+    return api<{ ok: boolean; message: string; recovery_codes: string[] }>(
+      "/auth/2fa/regenerate-recovery-codes",
+      { method: "POST", body: { password } },
+    );
   },
   async me() {
     return api<any>("/auth/me");

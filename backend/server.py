@@ -193,6 +193,21 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _aware(dt) -> Optional[datetime]:
+    """Ensure a datetime is timezone-aware (Mongo strips tz on read)."""
+    if not dt:
+        return None
+    if isinstance(dt, datetime):
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    return None
+
+
+def _expired(dt) -> bool:
+    """True if a stored datetime is in the past (handles tz-naive from Mongo)."""
+    a = _aware(dt)
+    return bool(a and a < utcnow())
+
+
 def hash_password(pw: str) -> str:
     return bcrypt.hashpw(pw.encode(), bcrypt.gensalt()).decode()
 
@@ -440,23 +455,423 @@ async def reset_password(body: ResetPasswordRequest):
 
 
 
-@api_router.post("/auth/login", response_model=TokenResponse)
+# ======================================================================
+# 2FA (Two-Factor Authentication) — Email OTP for admin accounts
+# ======================================================================
+# Feature is OPT-IN: admins explicitly enable it from /auth/2fa/enable.
+# When enabled, login flow becomes:
+#   1) POST /auth/login (email+password) → returns {requires_2fa, pending_token}
+#   2) POST /auth/2fa/verify-otp (pending_token + 6-digit code from email) → returns full JWT
+#   OR
+#   2bis) POST /auth/2fa/use-recovery-code (pending_token + recovery code) → returns full JWT
+#
+# Emergency bypass: set env var DISABLE_2FA=true to skip 2FA enforcement (for lockout recovery).
+
+OTP_EXPIRY_MIN = 10
+PENDING_TOKEN_EXPIRY_MIN = 15
+OTP_MAX_ATTEMPTS = 5
+DISABLE_2FA = os.environ.get("DISABLE_2FA", "").lower() in ("1", "true", "yes")
+
+
+def _mask_email(email: str) -> str:
+    """Mask email for display: john.doe@gmail.com → j*****e@g****l.com"""
+    try:
+        local, domain = email.split("@", 1)
+        if len(local) <= 2:
+            ml = local[0] + "*"
+        else:
+            ml = local[0] + ("*" * (len(local) - 2)) + local[-1]
+        d_name, d_tld = (domain.split(".", 1) + [""])[:2]
+        if len(d_name) <= 2:
+            md = d_name[0] + "*"
+        else:
+            md = d_name[0] + ("*" * (len(d_name) - 2)) + d_name[-1]
+        return f"{ml}@{md}{('.' + d_tld) if d_tld else ''}"
+    except Exception:
+        return "***"
+
+
+def _gen_otp_code() -> str:
+    return "".join([str(secrets.randbelow(10)) for _ in range(6)])
+
+
+def _gen_recovery_code() -> str:
+    """Generates a recovery code like XXXX-XXXX (8 chars, no ambiguous)."""
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no 0/O/I/1
+    raw = "".join(secrets.choice(alphabet) for _ in range(8))
+    return f"{raw[:4]}-{raw[4:]}"
+
+
+def _hash_recovery_code(code: str) -> str:
+    return bcrypt.hashpw(code.encode(), bcrypt.gensalt()).decode()
+
+
+def _verify_recovery_code(code: str, hashed: str) -> bool:
+    try:
+        return bcrypt.checkpw(code.encode(), hashed.encode())
+    except Exception:
+        return False
+
+
+def _gen_pending_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+async def _send_otp_email(to_email: str, code: str, name: str = "") -> None:
+    """Send the 6-digit OTP code by email. Reuses the IONOS SMTP."""
+    subject = "🔐 CINÉMARIÉS — Code de connexion (double authentification)"
+    html = f"""
+    <div style='font-family:system-ui,sans-serif;background:#0A0A0A;color:#F5F1E8;padding:24px;border-radius:8px;max-width:520px;margin:0 auto'>
+      <h2 style='color:#D4AF37;margin:0 0 16px'>🔐 Code de connexion</h2>
+      <p style='color:#F5F1E8;line-height:1.6'>
+        Bonjour {name or ''},<br/><br/>
+        Quelqu'un vient de se connecter à votre compte CINÉMARIÉS administrateur.<br/>
+        Pour terminer la connexion, saisissez le code ci-dessous :
+      </p>
+      <div style='background:rgba(212,175,55,0.12);border:2px solid #D4AF37;border-radius:8px;padding:24px;text-align:center;margin:20px 0'>
+        <div style='color:#D4AF37;font-size:36px;font-weight:bold;letter-spacing:8px;font-family:monospace'>{code}</div>
+      </div>
+      <p style='color:#A89484;font-size:13px;line-height:1.6'>
+        • Ce code est valable <b style='color:#F5F1E8'>{OTP_EXPIRY_MIN} minutes</b><br/>
+        • Il ne peut être utilisé qu'une seule fois<br/>
+        • Si vous n'êtes pas à l'origine de cette connexion, changez votre mot de passe immédiatement
+      </p>
+      <p style='color:#A89484;font-size:11px;margin-top:24px;border-top:1px solid #2A2A2A;padding-top:16px'>
+        CINÉMARIÉS · contact@creativindustry.com
+      </p>
+    </div>
+    """
+    if smtp_configured():
+        await send_email(to_email, subject, html)
+    else:
+        logging.warning(f"[2FA] SMTP not configured — OTP for {to_email}: {code}")
+
+
+async def _create_pending_login(user_id: str) -> str:
+    """Create a pending login record after password verification.
+    Returns the pending_token used by the frontend to call /2fa/verify-otp.
+    """
+    pending_token = _gen_pending_token()
+    expires_at = utcnow() + timedelta(minutes=PENDING_TOKEN_EXPIRY_MIN)
+    await db.two_fa_pending_logins.insert_one({
+        "pending_token": pending_token,
+        "user_id": user_id,
+        "expires_at": expires_at,
+        "used": False,
+        "created_at": utcnow(),
+    })
+    return pending_token
+
+
+async def _start_2fa_flow(u: dict) -> dict:
+    """Generate OTP, store it, send email, create pending_token, and return response payload."""
+    code = _gen_otp_code()
+    expires_at = utcnow() + timedelta(minutes=OTP_EXPIRY_MIN)
+    # Replace any previous OTP for this user (1 active at a time)
+    await db.two_fa_otps.update_one(
+        {"user_id": u["id"]},
+        {"$set": {
+            "user_id": u["id"],
+            "code": code,
+            "expires_at": expires_at,
+            "attempts": 0,
+            "used": False,
+            "created_at": utcnow(),
+        }},
+        upsert=True,
+    )
+    pending_token = await _create_pending_login(u["id"])
+    target_email = u.get("two_fa_email_address") or u["email"]
+    try:
+        await _send_otp_email(target_email, code, u.get("name") or u.get("full_name") or "")
+        logging.info(f"[2FA] OTP sent to {target_email} (user={u['email']})")
+    except Exception as e:
+        logging.warning(f"[2FA] OTP send failed for {target_email}: {e}")
+        # Don't fail the login flow — admin can still use recovery code
+    return {
+        "requires_2fa": True,
+        "method": "email",
+        "pending_token": pending_token,
+        "masked_email": _mask_email(target_email),
+        "expires_in_minutes": OTP_EXPIRY_MIN,
+    }
+
+
+async def _consume_pending_login(pending_token: str) -> Optional[dict]:
+    """Validate and consume a pending_token. Returns the user dict, or None if invalid."""
+    rec = await db.two_fa_pending_logins.find_one({"pending_token": pending_token}, {"_id": 0})
+    if not rec or rec.get("used"):
+        return None
+    if _expired(rec.get("expires_at")):
+        return None
+    u = await db.users.find_one({"id": rec["user_id"]}, {"_id": 0})
+    if not u:
+        return None
+    # Mark consumed
+    await db.two_fa_pending_logins.update_one(
+        {"pending_token": pending_token},
+        {"$set": {"used": True, "used_at": utcnow()}},
+    )
+    return u
+
+
+# ====== AUTH ROUTES (incl. 2FA) ======
+
+@api_router.post("/auth/login")
 async def login(body: LoginRequest):
     u = await db.users.find_one({"email": body.email.lower()}, {"_id": 0})
     if not u or not verify_password(body.password, u.get("password_hash", "")):
         raise HTTPException(status_code=401, detail="Identifiants incorrects")
-    # IMPORTANT: deactivated accounts can now still log in (so they can reactivate from the deactivated screen).
-    # The frontend reads `is_active` and shows the deactivated screen with a "Reactivate" CTA.
+    # IMPORTANT: deactivated accounts can still log in (to access "Reactivate" screen).
     # Track last login for inactivity-based admin filtering
     await db.users.update_one({"id": u["id"]}, {"$set": {"last_login_at": utcnow()}})
     u["last_login_at"] = utcnow()
+
+    # 🔐 2FA check (only if user has it enabled AND admin AND not bypassed)
+    if u.get("two_fa_enabled") and u.get("is_admin") and not DISABLE_2FA:
+        return await _start_2fa_flow(u)
+
     # 🔧 Auto-sync subscription state from Stripe (heals webhook misses)
     try:
         u = await _sync_subscription_from_stripe(u) or u
     except Exception as e:
         logging.warning(f"Stripe auto-sync on login failed for {u.get('email')}: {e}")
     token = create_jwt(u["id"])
-    return TokenResponse(access_token=token, user=user_to_public(u))
+    return {
+        "access_token": token,
+        "user": user_to_public(u).model_dump() if hasattr(user_to_public(u), "model_dump") else user_to_public(u).dict(),
+    }
+
+
+class Verify2FAOtpRequest(BaseModel):
+    pending_token: str
+    code: str
+
+
+@api_router.post("/auth/2fa/verify-otp")
+async def verify_2fa_otp(body: Verify2FAOtpRequest):
+    """Step 2 of login: verify the 6-digit code received by email."""
+    code = (body.code or "").strip()
+    if len(code) != 6 or not code.isdigit():
+        raise HTTPException(status_code=400, detail="Code invalide (6 chiffres requis).")
+    # Look up pending login (don't consume yet — wait for code verification)
+    rec = await db.two_fa_pending_logins.find_one({"pending_token": body.pending_token}, {"_id": 0})
+    if not rec or rec.get("used"):
+        raise HTTPException(status_code=400, detail="Session expirée. Reconnectez-vous.")
+    if _expired(rec.get("expires_at")):
+        raise HTTPException(status_code=400, detail="Session expirée. Reconnectez-vous.")
+    user_id = rec["user_id"]
+    # Look up OTP
+    otp_rec = await db.two_fa_otps.find_one({"user_id": user_id}, {"_id": 0})
+    if not otp_rec or otp_rec.get("used"):
+        raise HTTPException(status_code=400, detail="Code expiré. Demandez un nouveau code.")
+    if otp_rec.get("attempts", 0) >= OTP_MAX_ATTEMPTS:
+        raise HTTPException(status_code=429, detail="Trop de tentatives. Demandez un nouveau code.")
+    if _expired(otp_rec.get("expires_at")):
+        raise HTTPException(status_code=400, detail="Code expiré. Demandez un nouveau code.")
+    if otp_rec.get("code") != code:
+        await db.two_fa_otps.update_one(
+            {"user_id": user_id},
+            {"$inc": {"attempts": 1}},
+        )
+        attempts_left = OTP_MAX_ATTEMPTS - (otp_rec.get("attempts", 0) + 1)
+        raise HTTPException(status_code=400, detail=f"Code incorrect. {attempts_left} tentative(s) restante(s).")
+    # ✅ Code valid → consume OTP & pending_token, return JWT
+    await db.two_fa_otps.update_one({"user_id": user_id}, {"$set": {"used": True, "used_at": utcnow()}})
+    await db.two_fa_pending_logins.update_one(
+        {"pending_token": body.pending_token},
+        {"$set": {"used": True, "used_at": utcnow()}},
+    )
+    u = await db.users.find_one({"id": user_id}, {"_id": 0})
+    if not u:
+        raise HTTPException(status_code=400, detail="Utilisateur introuvable.")
+    # Stripe auto-sync (same as regular login)
+    try:
+        u = await _sync_subscription_from_stripe(u) or u
+    except Exception as e:
+        logging.warning(f"Stripe auto-sync after 2FA failed: {e}")
+    token = create_jwt(u["id"])
+    return {"access_token": token, "user": user_to_public(u).model_dump() if hasattr(user_to_public(u), "model_dump") else user_to_public(u).dict()}
+
+
+class Verify2FARecoveryRequest(BaseModel):
+    pending_token: str
+    recovery_code: str
+
+
+@api_router.post("/auth/2fa/use-recovery-code")
+async def use_2fa_recovery_code(body: Verify2FARecoveryRequest):
+    """Fallback: use a one-time recovery code instead of an OTP."""
+    rec = await db.two_fa_pending_logins.find_one({"pending_token": body.pending_token}, {"_id": 0})
+    if not rec or rec.get("used"):
+        raise HTTPException(status_code=400, detail="Session expirée. Reconnectez-vous.")
+    if _expired(rec.get("expires_at")):
+        raise HTTPException(status_code=400, detail="Session expirée. Reconnectez-vous.")
+    code = (body.recovery_code or "").strip().upper().replace(" ", "")
+    if not code:
+        raise HTTPException(status_code=400, detail="Code de récupération vide.")
+    u = await db.users.find_one({"id": rec["user_id"]}, {"_id": 0})
+    if not u:
+        raise HTTPException(status_code=400, detail="Utilisateur introuvable.")
+    hashes: List[str] = list(u.get("recovery_codes_hashes") or [])
+    matched_idx = -1
+    for i, h in enumerate(hashes):
+        if _verify_recovery_code(code, h):
+            matched_idx = i
+            break
+    if matched_idx < 0:
+        raise HTTPException(status_code=400, detail="Code de récupération invalide.")
+    # ✅ Valid → remove used code, consume pending_token, return JWT
+    hashes.pop(matched_idx)
+    await db.users.update_one(
+        {"id": u["id"]},
+        {"$set": {"recovery_codes_hashes": hashes, "two_fa_last_recovery_used_at": utcnow()}},
+    )
+    await db.two_fa_pending_logins.update_one(
+        {"pending_token": body.pending_token},
+        {"$set": {"used": True, "used_at": utcnow()}},
+    )
+    # Also invalidate any pending OTP
+    await db.two_fa_otps.update_one(
+        {"user_id": u["id"]}, {"$set": {"used": True, "used_at": utcnow()}}
+    )
+    logging.warning(f"[2FA] Recovery code USED by {u.get('email')} ({len(hashes)} code(s) left)")
+    try:
+        u = await _sync_subscription_from_stripe(u) or u
+    except Exception as e:
+        logging.warning(f"Stripe auto-sync after 2FA recovery failed: {e}")
+    token = create_jwt(u["id"])
+    return {"access_token": token, "user": user_to_public(u).model_dump() if hasattr(user_to_public(u), "model_dump") else user_to_public(u).dict(), "recovery_codes_remaining": len(hashes)}
+
+
+class Resend2FAOtpRequest(BaseModel):
+    pending_token: str
+
+
+@api_router.post("/auth/2fa/resend-otp")
+async def resend_2fa_otp(body: Resend2FAOtpRequest):
+    """Resend a fresh OTP. Throttled to once every 60 seconds."""
+    rec = await db.two_fa_pending_logins.find_one({"pending_token": body.pending_token}, {"_id": 0})
+    if not rec or rec.get("used"):
+        raise HTTPException(status_code=400, detail="Session expirée. Reconnectez-vous.")
+    if _expired(rec.get("expires_at")):
+        raise HTTPException(status_code=400, detail="Session expirée. Reconnectez-vous.")
+    u = await db.users.find_one({"id": rec["user_id"]}, {"_id": 0})
+    if not u:
+        raise HTTPException(status_code=400, detail="Utilisateur introuvable.")
+    # Throttle
+    prev = await db.two_fa_otps.find_one({"user_id": u["id"]}, {"_id": 0})
+    if prev:
+        created = _aware(prev.get("created_at"))
+        if created and (utcnow() - created).total_seconds() < 60:
+            raise HTTPException(status_code=429, detail="Patientez 60 secondes avant de redemander un code.")
+    code = _gen_otp_code()
+    await db.two_fa_otps.update_one(
+        {"user_id": u["id"]},
+        {"$set": {
+            "user_id": u["id"],
+            "code": code,
+            "expires_at": utcnow() + timedelta(minutes=OTP_EXPIRY_MIN),
+            "attempts": 0,
+            "used": False,
+            "created_at": utcnow(),
+        }},
+        upsert=True,
+    )
+    target_email = u.get("two_fa_email_address") or u["email"]
+    try:
+        await _send_otp_email(target_email, code, u.get("name") or u.get("full_name") or "")
+    except Exception as e:
+        logging.warning(f"[2FA] Resend failed: {e}")
+    return {"ok": True, "masked_email": _mask_email(target_email), "expires_in_minutes": OTP_EXPIRY_MIN}
+
+
+# --- 2FA management (authed, admin-only) ---
+
+class Enable2FARequest(BaseModel):
+    password: str
+
+
+@api_router.get("/auth/2fa/status")
+async def get_2fa_status(current: dict = Depends(get_current_user)):
+    return {
+        "enabled": bool(current.get("two_fa_enabled")),
+        "method": "email" if current.get("two_fa_enabled") else None,
+        "recovery_codes_remaining": len(current.get("recovery_codes_hashes") or []),
+        "available_for_role": bool(current.get("is_admin")),
+    }
+
+
+@api_router.post("/auth/2fa/enable")
+async def enable_2fa(body: Enable2FARequest, current: dict = Depends(get_current_user)):
+    """Enable 2FA for the current user (admin only).
+    Returns the 8 recovery codes ONCE — never again.
+    """
+    if not current.get("is_admin"):
+        raise HTTPException(status_code=403, detail="2FA est réservée aux administrateurs.")
+    if not verify_password(body.password, current.get("password_hash", "")):
+        raise HTTPException(status_code=401, detail="Mot de passe incorrect.")
+    if current.get("two_fa_enabled"):
+        raise HTTPException(status_code=400, detail="2FA est déjà activée.")
+    # Generate 8 recovery codes (only hashes stored in DB)
+    plain_codes = [_gen_recovery_code() for _ in range(8)]
+    hashes = [_hash_recovery_code(c) for c in plain_codes]
+    await db.users.update_one(
+        {"id": current["id"]},
+        {"$set": {
+            "two_fa_enabled": True,
+            "two_fa_enabled_at": utcnow(),
+            "recovery_codes_hashes": hashes,
+        }},
+    )
+    logging.info(f"[2FA] Enabled for {current.get('email')}")
+    return {
+        "ok": True,
+        "message": "Double authentification activée. SAUVEGARDEZ ces 8 codes de récupération — ils ne seront plus jamais affichés.",
+        "recovery_codes": plain_codes,
+    }
+
+
+class Disable2FARequest(BaseModel):
+    password: str
+
+
+@api_router.post("/auth/2fa/disable")
+async def disable_2fa(body: Disable2FARequest, current: dict = Depends(get_current_user)):
+    if not verify_password(body.password, current.get("password_hash", "")):
+        raise HTTPException(status_code=401, detail="Mot de passe incorrect.")
+    if not current.get("two_fa_enabled"):
+        raise HTTPException(status_code=400, detail="2FA n'est pas activée.")
+    await db.users.update_one(
+        {"id": current["id"]},
+        {"$set": {"two_fa_enabled": False, "recovery_codes_hashes": [], "two_fa_disabled_at": utcnow()}},
+    )
+    # Wipe any pending OTPs / sessions
+    await db.two_fa_otps.delete_many({"user_id": current["id"]})
+    await db.two_fa_pending_logins.delete_many({"user_id": current["id"]})
+    logging.warning(f"[2FA] Disabled for {current.get('email')}")
+    return {"ok": True, "message": "Double authentification désactivée."}
+
+
+@api_router.post("/auth/2fa/regenerate-recovery-codes")
+async def regenerate_recovery_codes(body: Enable2FARequest, current: dict = Depends(get_current_user)):
+    if not verify_password(body.password, current.get("password_hash", "")):
+        raise HTTPException(status_code=401, detail="Mot de passe incorrect.")
+    if not current.get("two_fa_enabled"):
+        raise HTTPException(status_code=400, detail="Activez d'abord la 2FA.")
+    plain_codes = [_gen_recovery_code() for _ in range(8)]
+    hashes = [_hash_recovery_code(c) for c in plain_codes]
+    await db.users.update_one(
+        {"id": current["id"]},
+        {"$set": {"recovery_codes_hashes": hashes, "recovery_codes_regenerated_at": utcnow()}},
+    )
+    logging.info(f"[2FA] Recovery codes regenerated for {current.get('email')}")
+    return {
+        "ok": True,
+        "message": "Nouveaux codes de récupération générés. SAUVEGARDEZ-les — ils ne seront plus jamais affichés.",
+        "recovery_codes": plain_codes,
+    }
+
 
 
 async def _sync_subscription_from_stripe(u: dict) -> Optional[dict]:

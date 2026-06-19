@@ -15,10 +15,11 @@ type User = {
 type Ctx = {
   user: User;
   loading: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<any>;
   register: (email: string, password: string, name: string) => Promise<void>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
+  completeLoginWithUser: (u: any) => void;
 };
 
 const AuthContext = createContext<Ctx | null>(null);
@@ -63,9 +64,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [refresh]);
 
   const login = async (email: string, password: string) => {
-    const r = await authApi.login(email, password);
+    const r: any = await authApi.login(email, password);
+    if (r?.requires_2fa) {
+      // Caller (login screen) handles redirection to /auth/2fa
+      return r;
+    }
     setUser(r.user);
     if (r.user?.id) _registerPush();
+    return r;
+  };
+  const completeLoginWithUser = (u: any) => {
+    setUser(u);
+    if (u?.id) _registerPush();
   };
   const register = async (email: string, password: string, name: string) => {
     const r = await authApi.register(email, password, name);
@@ -79,7 +89,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, logout, refresh }}>
+    <AuthContext.Provider value={{ user, loading, login, register, logout, refresh, completeLoginWithUser }}>
       {children}
     </AuthContext.Provider>
   );
