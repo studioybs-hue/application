@@ -187,6 +187,23 @@ export default function ProfileScreen() {
           />
         </Section>
 
+        <Section title="Sécurité">
+          <Item
+            icon="lock-closed-outline"
+            label="Changer mon mot de passe"
+            onPress={() => router.push("/change-password")}
+            testID="profile-change-password-btn"
+          />
+          {user.is_admin && (
+            <Item
+              icon="shield-checkmark-outline"
+              label="Double authentification (2FA)"
+              onPress={() => router.push("/security")}
+              testID="profile-security-btn"
+            />
+          )}
+        </Section>
+
         {user.is_admin && (
           <Section title="Administration">
             <Item
@@ -195,12 +212,6 @@ export default function ProfileScreen() {
               onPress={() => router.push("/admin")}
               testID="profile-admin-btn"
               accent
-            />
-            <Item
-              icon="lock-closed-outline"
-              label="Sécurité & 2FA"
-              onPress={() => router.push("/security")}
-              testID="profile-security-btn"
             />
           </Section>
         )}

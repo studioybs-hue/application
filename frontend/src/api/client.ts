@@ -125,6 +125,12 @@ export const auth = {
       { method: "POST", body: { password } },
     );
   },
+  async changePassword(current_password: string, new_password: string) {
+    return api<{ ok: boolean; message: string }>("/auth/change-password", {
+      method: "POST",
+      body: { current_password, new_password },
+    });
+  },
   async me() {
     return api<any>("/auth/me");
   },
