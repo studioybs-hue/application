@@ -193,6 +193,22 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# Public base URL used to convert relative upload URLs to absolute URLs
+# (important for mobile apps that may otherwise prepend the wrong host).
+PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL") or os.environ.get("FRONTEND_URL") or "").rstrip("/")
+
+
+def _abs_url(url):
+    """Convert a relative URL (/api/uploads/xxx) to absolute (https://cinemaries.fr/api/uploads/xxx)."""
+    if not url or not isinstance(url, str):
+        return url
+    if url.startswith("http://") or url.startswith("https://"):
+        return url
+    if url.startswith("/") and PUBLIC_BASE_URL:
+        return PUBLIC_BASE_URL + url
+    return url
+
+
 def _aware(dt) -> Optional[datetime]:
     """Ensure a datetime is timezone-aware (Mongo strips tz on read)."""
     if not dt:
@@ -268,10 +284,10 @@ def video_to_public(v: dict, include_full: bool = False) -> dict:
         "title": v["title"],
         "description": v["description"],
         "category": v["category"],
-        "poster_url": v["poster_url"],
-        "hero_url": v.get("hero_url"),
-        "trailer_url": v["trailer_url"],
-        "full_url": v["full_url"] if include_full else None,
+        "poster_url": _abs_url(v["poster_url"]),
+        "hero_url": _abs_url(v.get("hero_url")),
+        "trailer_url": _abs_url(v["trailer_url"]),
+        "full_url": _abs_url(v["full_url"]) if include_full else None,
         "duration_minutes": v["duration_minutes"],
         "is_featured": v.get("is_featured", False),
         "is_top_france": v.get("is_top_france", False),
@@ -1433,6 +1449,9 @@ async def list_public_weddings():
     weddings = []
     for w in grouped.values():
         w["is_claimed"] = w["client_id"] in claims
+        # 📱 Make URLs absolute (mobile app compatibility)
+        w["poster_url"] = _abs_url(w.get("poster_url"))
+        w["hero_url"] = _abs_url(w.get("hero_url"))
         weddings.append(w)
     weddings.sort(key=lambda w: (not w["is_top_france"], not w["is_featured"], w["client_name"]))
     return {
@@ -1474,7 +1493,7 @@ async def list_claimable_weddings(q: Optional[str] = None, current: dict = Depen
         items.append({
             "client_id": w["client_id"],
             "client_name": w["client_name"],
-            "poster_url": w["poster_url"],
+            "poster_url": _abs_url(w["poster_url"]),
             "video_count": w["video_count"],
         })
     items.sort(key=lambda x: x["client_name"] or "")
