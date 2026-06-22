@@ -327,7 +327,7 @@ export default function WeddingScreen() {
               <Text style={styles.unlockedBannerTxt}>Espace privé débloqué — bonnes émotions !</Text>
             </View>
 
-            {wedding.is_my_wedding && (
+            {(wedding.is_my_wedding || user?.is_admin) && (
               <TouchableOpacity
                 style={styles.photoGalleryBtn}
                 onPress={() => router.push({ pathname: "/photos/[clientId]", params: { clientId: String(clientId) } })}
@@ -337,9 +337,13 @@ export default function WeddingScreen() {
                   <Ionicons name="images" size={26} color={colors.gold} />
                 </View>
                 <View style={{ flex: 1, marginLeft: 12 }}>
-                  <Text style={styles.photoGalleryTitle}>Galerie photo</Text>
+                  <Text style={styles.photoGalleryTitle}>
+                    {user?.is_admin && !wedding.is_my_wedding ? "Galerie photo (Admin)" : "Galerie photo"}
+                  </Text>
                   <Text style={styles.photoGallerySub}>
-                    Vos photos privées · Diaporama musical · Téléchargement
+                    {user?.is_admin && !wedding.is_my_wedding
+                      ? "Voir les photos uploadées · Mode admin"
+                      : "Vos photos privées · Diaporama musical · Téléchargement"}
                   </Text>
                 </View>
                 <Ionicons name="chevron-forward" size={20} color={colors.gold} />
