@@ -1,0 +1,33 @@
+{
+  "summary": "Frontend-only test of new admin button 'Gérer les codes d'accès (Admin)' on /wedding/[clientId]. Login admin → /wedding/hanifa-et-dali → both admin buttons visible (Galerie photo regression OK, new Invite/Codes button OK) → tap navigates to /admin/codes?clientId=hanifa-et-dali → 'Nouveau code' modal auto-opens with Hanifa et Dali pre-selected (highlighted in gold). Direct /admin/codes visit works normally (no auto-open). All acceptance criteria met.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "expo-av", "issue": "Deprecated package detected in console warnings: '[expo-av]: Expo AV has been deprecated and will be removed in SDK 54. Use the expo-audio and expo-video packages.' Pre-existing across the app, not introduced by this fix."}
+    ]
+  },
+  "test_report_links": ["/app/test_reports/iteration_3.json"],
+  "action_items": [
+    "(Pre-existing, low priority) Migrate from expo-av to expo-audio / expo-video to silence deprecation warning before SDK 54."
+  ],
+  "critical_code_review_comments": [
+    "Code in /app/frontend/app/wedding/[clientId].tsx (lines 353-379) correctly gates the button on `wedding.is_my_wedding || user?.is_admin` and branches to /admin/codes for admins.",
+    "Code in /app/frontend/app/admin/codes.tsx (lines 49-54) correctly reads useLocalSearchParams<{clientId?: string}>, pre-selects the wedding and opens the create modal automatically."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A", "frontend": "100%"},
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Login: admin@wedding.fr / Admin13!. Login route is /auth/login (NOT /login). All wedding admin actions on /wedding/[clientId] now visible: testIDs wedding-photos-btn and invite-friends-btn. /admin/codes accepts optional ?clientId=<id> to pre-select wedding + auto-open Nouveau code modal.",
+  "verified_flows": [
+    "Login admin (/auth/login, testIDs login-email-input/login-password-input/login-submit-btn) → redirected to /home",
+    "GET /wedding/hanifa-et-dali → both admin buttons visible (wedding-photos-btn shows 'Galerie photo (Admin)', invite-friends-btn shows 'Gérer les codes d'accès (Admin)' with subtitle 'Générer / révoquer les codes de ce mariage')",
+    "Tap invite-friends-btn → router.push to /admin/codes?clientId=hanifa-et-dali (verified URL)",
+    "On /admin/codes with param → 'Nouveau code' modal auto-opens, 'Hanifa et Dali' row is selected (gold highlighted) in wedding picker",
+    "Direct GET /admin/codes (no param) → page loads normally, modal NOT auto-open, + button (create-code-btn) visible — no regression"
+  ]
+}

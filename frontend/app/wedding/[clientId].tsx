@@ -350,12 +350,29 @@ export default function WeddingScreen() {
               </TouchableOpacity>
             )}
 
-            {wedding.is_my_wedding && (
-              <TouchableOpacity style={styles.inviteBtn} onPress={openInvite} testID="invite-friends-btn">
+            {(wedding.is_my_wedding || user?.is_admin) && (
+              <TouchableOpacity
+                style={styles.inviteBtn}
+                onPress={() => {
+                  if (user?.is_admin && !wedding.is_my_wedding) {
+                    // Admins gèrent les codes depuis le panneau /admin/codes avec le mariage pré-sélectionné
+                    router.push({ pathname: "/admin/codes", params: { clientId: String(clientId) } });
+                  } else {
+                    openInvite();
+                  }
+                }}
+                testID="invite-friends-btn"
+              >
                 <Ionicons name="people" size={20} color="#0A0A0A" />
                 <View style={{ flex: 1, marginLeft: 12 }}>
-                  <Text style={styles.inviteBtnTitle}>Inviter mes proches</Text>
-                  <Text style={styles.inviteBtnSub}>Générez des codes uniques à partager (1 code = jusqu'à 3 appareils)</Text>
+                  <Text style={styles.inviteBtnTitle}>
+                    {user?.is_admin && !wedding.is_my_wedding ? "Gérer les codes d'accès (Admin)" : "Inviter mes proches"}
+                  </Text>
+                  <Text style={styles.inviteBtnSub}>
+                    {user?.is_admin && !wedding.is_my_wedding
+                      ? "Générer / révoquer les codes de ce mariage"
+                      : "Générez des codes uniques à partager (1 code = jusqu'à 3 appareils)"}
+                  </Text>
                 </View>
                 <Ionicons name="chevron-forward" size={20} color="#0A0A0A" />
               </TouchableOpacity>

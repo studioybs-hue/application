@@ -3,7 +3,7 @@ import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator,
   Modal, TextInput, Share, RefreshControl, KeyboardAvoidingView, Platform,
 } from "react-native";
-import { useRouter } from "expo-router";
+import { useRouter, useLocalSearchParams } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Clipboard from "expo-clipboard";
@@ -30,6 +30,7 @@ type Wedding = { client_id: string; client_name: string; video_count: number };
 
 export default function CodesScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ clientId?: string }>();
   const confirm = useConfirm();
   const [codes, setCodes] = useState<Code[]>([]);
   const [weddings, setWeddings] = useState<Wedding[]>([]);
@@ -43,6 +44,14 @@ export default function CodesScreen() {
   const [expiresHours, setExpiresHours] = useState("");
   const [creating, setCreating] = useState(false);
   const [createdCode, setCreatedCode] = useState<string | null>(null);
+
+  // Pre-select wedding + open create modal when navigated with ?clientId=xxx
+  useEffect(() => {
+    if (params?.clientId && typeof params.clientId === "string") {
+      setSelectedClientId(params.clientId);
+      setShowCreate(true);
+    }
+  }, [params?.clientId]);
 
   const load = useCallback(async () => {
     try {
