@@ -1,0 +1,40 @@
+{
+  "summary": "Pre-TestFlight sanity check (web, mobile viewport 390x844). Goal: confirm no regression appeared after EAS Update 'Apple 3.1.1 compliance - Reader App pattern' was published. Static audit on the 8 modified files: IS_IOS_NATIVE is still imported & used (counts: claim-wedding 2, unlock 2, subscription 2, library 4, home 4, profile 5, wedding/[clientId] 3, video/[id] 3) and IOSReaderGate is still imported in the 3 full-gate screens (claim-wedding, unlock, subscription = 2 occurrences each: 1 import + 1 JSX). Live web checks all passed: admin login OK; Home shows open-unlock-btn (key) + unlock-band + footer-unlock; Library shows library-unlock-btn; Profile shows profile-unlock-btn (label 'Saisir un code de déblocage'), 'Gérer mon abonnement', 'Portail Stripe', and the iOS info notice is NOT shown on web; /wedding/hanifa-et-dali anonymous → wedding-unlock-btn visible, admin → 'Galerie photo (Admin)' wedding-photos-btn + 'Gérer les codes d'accès (Admin)' invite-friends-btn visible; /subscription, /unlock, /claim-wedding all render their native content (pricing / code-form / autocomplete) and ios-gate-back is absent on web (gate correctly returns null). Zero new pageerror — only pre-existing deprecation warnings (expo-av, shadow*, textShadow*, pointerEvents, resizeMode) already logged in iteration_4. Initial mismatches on 'profile: Saisir code' and 'wedding-unlock-btn' (admin) were testing artefacts (exact text differs / admin auto-unlocks) — re-tested by testID and anonymous flow → both PASS. Nothing has regressed; the build is safe for the user's TestFlight manual test.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "expo-av", "issue": "Pre-existing deprecation warning '[expo-av]: Expo AV has been deprecated and will be removed in SDK 54. Use the expo-audio and expo-video packages.' Unchanged since iteration_3/4. Reference: /app/frontend/package.json (expo-av entry)."}
+    ]
+  },
+  "test_report_links": ["/app/test_reports/iteration_5.json", "/app/test_reports/iteration_4.json"],
+  "action_items": [
+    "User can proceed with the TestFlight manual smoke test on iPhone — no regression detected on web. Expected iOS behaviour: Home (no key icon / no unlock band / no footer code), Library (no Code header / no 'Entrer un code' empty-state), Profile (no Saisir code / S'abonner / Portail Stripe items, info notice visible), /wedding/[clientId] (no 'Entrer le code', admin sees notice instead of 'Inviter mes proches'), /video/[id] lock card (no Code button), and /subscription, /unlock, /claim-wedding all render the IOSReaderGate full-screen notice.",
+    "(Pre-existing, low priority) Migrate from expo-av to expo-audio / expo-video before Expo SDK 54."
+  ],
+  "critical_code_review_comments": [
+    "Static grep confirms all 8 modified files retain their IS_IOS_NATIVE wrapping; IOSReaderGate import preserved in subscription/unlock/claim-wedding. No file has been touched since iteration_4 baseline.",
+    "/app/frontend/src/utils/platform.ts and /app/frontend/src/ui/IOSReaderGate.tsx unchanged and correct (Platform.OS === 'ios' check; gate returns null on web/Android; no external steering link)."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (frontend-only)", "frontend": "100% (all 10 critical web non-regression checks pass after testID/anonymous re-verification)"},
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Build is in a clean state for the Apple 3.1.1 Reader-App refactor. Web/Android UX unchanged; iOS behaviour can only be validated on a real device through TestFlight / EAS Update. Admin credentials: admin@wedding.fr / Admin13! at /auth/login. To simulate iOS in the web preview, temporarily flip Platform.OS check in /app/frontend/src/utils/platform.ts to 'web' and reload (revert after).",
+  "verified_flows": [
+    "Static: 8 target files still import & use IS_IOS_NATIVE (counts unchanged vs iteration_4).",
+    "Static: subscription/unlock/claim-wedding still import IOSReaderGate (2 occurrences each).",
+    "Web login admin → /home redirect OK; zero pageerror.",
+    "Home: open-unlock-btn, unlock-band, footer-unlock all visible.",
+    "Library: library-unlock-btn (header Code) visible.",
+    "Profile: profile-unlock-btn (Saisir un code de déblocage) + 'Gérer mon abonnement' + 'Portail Stripe' visible; iOS info notice ABSENT on web.",
+    "/wedding/hanifa-et-dali anonymous: wedding-unlock-btn visible (Entrer le code).",
+    "/wedding/hanifa-et-dali admin: wedding-photos-btn + invite-friends-btn visible (page auto-unlocks for admin, so wedding-unlock-btn correctly not rendered).",
+    "/subscription: pricing content visible, ios-gate-back absent.",
+    "/unlock: code-form content visible, ios-gate-back absent.",
+    "/claim-wedding: search content visible, ios-gate-back absent."
+  ]
+}
