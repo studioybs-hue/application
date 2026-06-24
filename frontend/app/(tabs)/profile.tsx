@@ -7,6 +7,7 @@ import { useAuth } from "@/src/auth/AuthContext";
 import { useConfirm } from "@/src/ui/ConfirmDialog";
 import { api } from "@/src/api/client";
 import { showAlert } from "@/src/utils/dialog";
+import { IS_IOS_NATIVE } from "@/src/utils/platform";
 
 export default function ProfileScreen() {
   const router = useRouter();
@@ -158,20 +159,24 @@ export default function ProfileScreen() {
             testID="profile-claim-btn"
             accent={!(user as any).claimed_client_id}
           />
-          <Item
-            icon="key-outline"
-            label="Saisir un code de déblocage"
-            onPress={() => router.push("/unlock")}
-            testID="profile-unlock-btn"
-          />
-          <Item
-            icon="card-outline"
-            label={user.is_subscribed ? "Gérer mon abonnement" : "S'abonner — 1,99€/mois"}
-            onPress={() => router.push("/subscription")}
-            testID="profile-subscription-btn"
-            accent={!user.is_subscribed}
-          />
-          {user.is_subscribed && (
+          {!IS_IOS_NATIVE && (
+            <Item
+              icon="key-outline"
+              label="Saisir un code de déblocage"
+              onPress={() => router.push("/unlock")}
+              testID="profile-unlock-btn"
+            />
+          )}
+          {!IS_IOS_NATIVE && (
+            <Item
+              icon="card-outline"
+              label={user.is_subscribed ? "Gérer mon abonnement" : "S'abonner — 1,99€/mois"}
+              onPress={() => router.push("/subscription")}
+              testID="profile-subscription-btn"
+              accent={!user.is_subscribed}
+            />
+          )}
+          {!IS_IOS_NATIVE && user.is_subscribed && (
             <Item
               icon="receipt-outline"
               label="Portail Stripe (factures, moyens de paiement)"
@@ -185,6 +190,14 @@ export default function ProfileScreen() {
             onPress={() => router.push("/(tabs)/library")}
             testID="profile-library-btn"
           />
+          {IS_IOS_NATIVE && (
+            <View style={styles.iosNotice}>
+              <Ionicons name="information-circle-outline" size={16} color={colors.textSecondary} />
+              <Text style={styles.iosNoticeTxt}>
+                Gestion de votre abonnement et saisie des codes d'accès disponibles sur cinemaries.fr
+              </Text>
+            </View>
+          )}
         </Section>
 
         <Section title="Sécurité">
@@ -367,6 +380,15 @@ const styles = StyleSheet.create({
     borderBottomColor: "rgba(255,255,255,0.05)",
   },
   itemLabel: { color: colors.ivory, flex: 1, fontSize: 15 },
+  iosNotice: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+    backgroundColor: "rgba(255,255,255,0.02)",
+  },
+  iosNoticeTxt: { color: colors.textSecondary, fontSize: 12, flex: 1, lineHeight: 17 },
   logoutBtn: {
     marginTop: spacing.lg,
     flexDirection: "row",

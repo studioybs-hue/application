@@ -16,6 +16,7 @@ import { colors, spacing, radii } from "@/src/theme";
 import { useAuth } from "@/src/auth/AuthContext";
 import { getDeviceId, getDeviceLabel } from "@/src/utils/deviceId";
 import { showAlert } from "@/src/utils/dialog";
+import { IS_IOS_NATIVE } from "@/src/utils/platform";
 
 type Video = {
   id: string;
@@ -297,14 +298,25 @@ export default function WeddingScreen() {
             <Text style={styles.lockedSub}>
               Ce mariage est réservé aux invités. Entrez le code unique que les mariés vous ont fourni pour découvrir leurs {wedding.video_count} vidéo{wedding.video_count > 1 ? "s" : ""}.
             </Text>
-            <TouchableOpacity style={styles.unlockBtn} onPress={() => setCodeModal(true)} testID="wedding-unlock-btn">
-              <Ionicons name="key" size={18} color="#0A0A0A" />
-              <Text style={styles.unlockTxt}>Entrer le code</Text>
-            </TouchableOpacity>
+            {!IS_IOS_NATIVE ? (
+              <>
+                <TouchableOpacity style={styles.unlockBtn} onPress={() => setCodeModal(true)} testID="wedding-unlock-btn">
+                  <Ionicons name="key" size={18} color="#0A0A0A" />
+                  <Text style={styles.unlockTxt}>Entrer le code</Text>
+                </TouchableOpacity>
 
-            <Text style={styles.helpTxt}>
-              {user ? "" : "Pas besoin de compte : entrez simplement votre code."}
-            </Text>
+                <Text style={styles.helpTxt}>
+                  {user ? "" : "Pas besoin de compte : entrez simplement votre code."}
+                </Text>
+              </>
+            ) : (
+              <View style={styles.iosNoticeBox}>
+                <Ionicons name="information-circle-outline" size={18} color={colors.textSecondary} />
+                <Text style={styles.iosNoticeBoxTxt}>
+                  Saisie de code disponible sur cinemaries.fr.{"\n"}Une fois votre code activé, ce mariage sera automatiquement débloqué ici dès que vous vous connecterez à votre compte.
+                </Text>
+              </View>
+            )}
 
             <View style={styles.previewSection}>
               <Text style={styles.previewLabel}>APERÇU</Text>
@@ -350,7 +362,7 @@ export default function WeddingScreen() {
               </TouchableOpacity>
             )}
 
-            {(wedding.is_my_wedding || user?.is_admin) && (
+            {!IS_IOS_NATIVE && (wedding.is_my_wedding || user?.is_admin) && (
               <TouchableOpacity
                 style={styles.inviteBtn}
                 onPress={() => {
@@ -565,9 +577,21 @@ const styles = StyleSheet.create({
   lockCircle: { width: 78, height: 78, borderRadius: 39, borderWidth: 1.5, borderColor: colors.gold, backgroundColor: "rgba(212,175,55,0.08)", alignItems: "center", justifyContent: "center", marginTop: spacing.md },
   lockedTitle: { color: colors.ivory, fontSize: 22, fontWeight: "700", marginTop: spacing.md, textAlign: "center" },
   lockedSub: { color: colors.textSecondary, fontSize: 14, textAlign: "center", marginTop: 8, lineHeight: 20, marginBottom: spacing.lg },
-  unlockBtn: { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: colors.gold, paddingHorizontal: 28, paddingVertical: 14, borderRadius: radii.sm },
-  unlockTxt: { color: "#0A0A0A", fontWeight: "700", fontSize: 15 },
+  unlockBtn: { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: colors.gold, paddingHorizontal: 28, paddingVertical: 14, borderRadius: radii.sm },  unlockTxt: { color: "#0A0A0A", fontWeight: "700", fontSize: 15 },
   helpTxt: { color: colors.textDisabled, fontSize: 11, marginTop: 8, fontStyle: "italic" },
+  iosNoticeBox: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+    backgroundColor: "rgba(255,255,255,0.04)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+    borderRadius: radii.sm,
+    padding: spacing.md,
+    marginTop: spacing.md,
+    width: "100%",
+  },
+  iosNoticeBoxTxt: { color: colors.textSecondary, fontSize: 13, flex: 1, lineHeight: 18 },
   previewSection: { width: "100%", marginTop: spacing.xl },
   previewLabel: { color: colors.textSecondary, fontSize: 11, letterSpacing: 2, marginBottom: spacing.sm },
   previewRow: { flexDirection: "row", alignItems: "center", backgroundColor: colors.surface, padding: 10, borderRadius: radii.sm, marginBottom: 8 },

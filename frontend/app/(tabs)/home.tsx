@@ -11,6 +11,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "@/src/api/client";
 import { colors, spacing, radii } from "@/src/theme";
 import { useAuth } from "@/src/auth/AuthContext";
+import { IS_IOS_NATIVE } from "@/src/utils/platform";
 
 type Wedding = {
   client_id: string;
@@ -79,9 +80,11 @@ export default function HomeScreen() {
                     <Text style={styles.brandTxt}>CINÉMARIÉS</Text>
                     <Text style={styles.brandTagline}>Le cinéma de votre plus beau jour</Text>
                   </View>
-                  <TouchableOpacity onPress={() => router.push("/unlock")} style={styles.iconBtn} testID="open-unlock-btn">
-                    <Ionicons name="key-outline" size={22} color={colors.gold} />
-                  </TouchableOpacity>
+                  {!IS_IOS_NATIVE && (
+                    <TouchableOpacity onPress={() => router.push("/unlock")} style={styles.iconBtn} testID="open-unlock-btn">
+                      <Ionicons name="key-outline" size={22} color={colors.gold} />
+                    </TouchableOpacity>
+                  )}
                 </View>
               </SafeAreaView>
               <View style={styles.heroContent}>
@@ -107,16 +110,18 @@ export default function HomeScreen() {
           </TouchableOpacity>
         )}
 
-        <TouchableOpacity style={styles.unlockBand} onPress={() => router.push("/unlock")} testID="unlock-band">
-          <View style={styles.unlockBandLeft}>
-            <Ionicons name="lock-closed" size={18} color={colors.gold} />
-            <View style={{ marginLeft: 12 }}>
-              <Text style={styles.unlockTitle}>Débloquez votre film de mariage</Text>
-              <Text style={styles.unlockSub}>Entrez votre code client unique</Text>
+        {!IS_IOS_NATIVE && (
+          <TouchableOpacity style={styles.unlockBand} onPress={() => router.push("/unlock")} testID="unlock-band">
+            <View style={styles.unlockBandLeft}>
+              <Ionicons name="lock-closed" size={18} color={colors.gold} />
+              <View style={{ marginLeft: 12 }}>
+                <Text style={styles.unlockTitle}>Débloquez votre film de mariage</Text>
+                <Text style={styles.unlockSub}>Entrez votre code client unique</Text>
+              </View>
             </View>
-          </View>
-          <Ionicons name="chevron-forward" size={20} color={colors.gold} />
-        </TouchableOpacity>
+            <Ionicons name="chevron-forward" size={20} color={colors.gold} />
+          </TouchableOpacity>
+        )}
 
         <TouchableOpacity style={styles.hostBand} onPress={() => router.push("/host")} testID="host-band">
           <View style={styles.unlockBandLeft}>
@@ -201,10 +206,14 @@ function Row({ title, weddings, router }: { title: string; weddings: Wedding[]; 
             <TouchableOpacity onPress={() => router.push("/host")} testID="footer-host">
               <Text style={styles.footerLink}>Hébergement</Text>
             </TouchableOpacity>
-            <Text style={styles.footerSep}>·</Text>
-            <TouchableOpacity onPress={() => router.push("/unlock")} testID="footer-unlock">
-              <Text style={styles.footerLink}>Code d'accès</Text>
-            </TouchableOpacity>
+            {!IS_IOS_NATIVE && (
+              <>
+                <Text style={styles.footerSep}>·</Text>
+                <TouchableOpacity onPress={() => router.push("/unlock")} testID="footer-unlock">
+                  <Text style={styles.footerLink}>Code d'accès</Text>
+                </TouchableOpacity>
+              </>
+            )}
           </View>
           <Text style={styles.footerCopyright}>© {new Date().getFullYear()} CINÉMARIÉS — France</Text>
         </View>

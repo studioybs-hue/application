@@ -23,6 +23,8 @@ import { api } from "@/src/api/client";
 import { useAuth } from "@/src/auth/AuthContext";
 import { showAlert, showConfirm } from "@/src/utils/dialog";
 import { colors, spacing, radii } from "@/src/theme";
+import { IS_IOS_NATIVE } from "@/src/utils/platform";
+import IOSReaderGate from "@/src/ui/IOSReaderGate";
 
 type W = { client_id: string; client_name: string; poster_url: string; video_count: number };
 
@@ -35,6 +37,19 @@ export default function ClaimWeddingScreen() {
   const [claiming, setClaiming] = useState(false);
   const [alreadyClaimed, setAlreadyClaimed] = useState<string | null>(null);
   const debounceRef = useRef<any>(null);
+
+  // === App Store Guideline 3.1.1 — Reader App ===
+  // Revendiquer un mariage déclenche l'activation Premium (paiement externe).
+  // Sur iOS, on bloque cette page entièrement.
+  if (IS_IOS_NATIVE) {
+    return (
+      <IOSReaderGate
+        title="Revendication sur le web"
+        message="La revendication de votre mariage se fait sur cinemaries.fr depuis votre navigateur."
+        hint="Une fois revendiqué, votre mariage apparaîtra automatiquement dans cette app à votre prochaine connexion."
+      />
+    );
+  }
 
   const search = async (query: string) => {
     setLoading(true);

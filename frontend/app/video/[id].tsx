@@ -21,6 +21,7 @@ import { colors, spacing, radii } from "@/src/theme";
 import { useAuth } from "@/src/auth/AuthContext";
 import { useCast, NativeCastButton } from "@/src/cast";
 import { showAlert } from "@/src/utils/dialog";
+import { IS_IOS_NATIVE } from "@/src/utils/platform";
 
 type Video = {
   id: string;
@@ -298,18 +299,22 @@ export default function VideoScreen() {
             <View style={{ flex: 1, marginLeft: 12 }}>
               <Text style={styles.lockTitle}>Vidéo privée</Text>
               <Text style={styles.lockSub}>
-                Entrez votre code unique pour accéder à la version complète.
+                {IS_IOS_NATIVE
+                  ? "Activez votre code sur cinemaries.fr depuis votre navigateur."
+                  : "Entrez votre code unique pour accéder à la version complète."}
               </Text>
             </View>
-            <TouchableOpacity
-              style={styles.unlockBtn}
-              onPress={() =>
-                user ? router.push("/unlock") : router.push("/auth/login")
-              }
-              testID="video-unlock-btn"
-            >
-              <Text style={styles.unlockTxt}>Code</Text>
-            </TouchableOpacity>
+            {!IS_IOS_NATIVE && (
+              <TouchableOpacity
+                style={styles.unlockBtn}
+                onPress={() =>
+                  user ? router.push("/unlock") : router.push("/auth/login")
+                }
+                testID="video-unlock-btn"
+              >
+                <Text style={styles.unlockTxt}>Code</Text>
+              </TouchableOpacity>
+            )}
           </View>
         )}
 

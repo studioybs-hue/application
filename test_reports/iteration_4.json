@@ -1,0 +1,45 @@
+{
+  "summary": "Frontend non-regression test (web) for Apple Guideline 3.1.1 Reader-App refactor. Static audit + live UI test on http://localhost:3000 (mobile viewport 390x844). Static: all 8 modified files correctly import IS_IOS_NATIVE / IOSReaderGate and wrap the right elements with !IS_IOS_NATIVE / IS_IOS_NATIVE branches (grep confirmed). Live web: admin login OK → all CTAs that must remain on web/Android are visible: Home (open-unlock-btn, unlock-band, footer-unlock), Library (library-unlock-btn), Profile (items 'Saisir code', 'S'abonner/Gérer abonnement', 'Portail Stripe'), Wedding /hanifa-et-dali (wedding-photos-btn + invite-friends-btn), /subscription shows pricing plans (no gate), /unlock shows code form (no gate), /claim-wedding shows autocomplete with results (no gate). Zero pageerror, no red-screen. The IOSReaderGate correctly returns null on web (verified by gate's testID ios-gate-back NOT visible on subscription/unlock/claim-wedding). iOS-specific behaviour can't be tested via web preview — needs real device via eas update (as noted in request).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "expo-av", "issue": "Pre-existing deprecation warning '[expo-av]: Expo AV has been deprecated and will be removed in SDK 54. Use the expo-audio and expo-video packages.' Not introduced by this fix; flagged in iteration_3 as well."}
+    ]
+  },
+  "test_report_links": ["/app/test_reports/iteration_4.json"],
+  "action_items": [
+    "After eas update, perform manual smoke test on a real iPhone to confirm: Home (no key icon, no unlock band, no footer code link), Library (no Code header button, empty-state has no 'Entrer un code'), Profile (no Saisir code / S'abonner / Portail Stripe items, info notice present), /wedding/[clientId] (no 'Entrer le code', no 'Inviter mes proches' admin button — admin replaced by notice), /video/[id] lock card (no Code button), and that /subscription, /unlock, /claim-wedding all render the IOSReaderGate instead of their native content.",
+    "(Pre-existing, low priority) Migrate from expo-av to expo-audio / expo-video before Expo SDK 54."
+  ],
+  "critical_code_review_comments": [
+    "/app/frontend/src/utils/platform.ts — Clean, well-documented. IS_IOS_NATIVE = Platform.OS === 'ios' is the correct check (web returns 'web', Android returns 'android'). HIDE_PREMIUM_UI alias defined but unused so far — fine.",
+    "/app/frontend/src/ui/IOSReaderGate.tsx — Early return `if (!IS_IOS_NATIVE) return null` is correct: on web/Android the parent screen continues rendering. Component contains NO link to external website (Apple anti-steering compliant).",
+    "/app/frontend/app/subscription.tsx, unlock.tsx, claim-wedding.tsx — Each does `if (IS_IOS_NATIVE) return <IOSReaderGate .../>` BEFORE any hook side-effects that fetch billing/code-validation. This is structurally safe — early return is positioned after the hooks block so React hook order remains stable across re-renders. Verified by reading the files; no conditional hooks above the return.",
+    "/app/frontend/app/(tabs)/profile.tsx (L162-193) — Three `!IS_IOS_NATIVE && (...)` guards correctly wrap the Saisir-code / S'abonner / Portail-Stripe items, plus `IS_IOS_NATIVE && (...)` shows an info notice on iOS.",
+    "/app/frontend/app/(tabs)/home.tsx (L83, 113, 209) — Header key icon, unlock band, footer 'Code d'accès' are all wrapped. Confirmed via grep.",
+    "/app/frontend/app/(tabs)/library.tsx (L86, 119) — Header Code button and empty-state 'Entrer un code' wrapped; line 115 swaps the empty-state copy via ternary on IS_IOS_NATIVE.",
+    "/app/frontend/app/wedding/[clientId].tsx (L301, 365) — 'Entrer le code' card (L301) uses `!IS_IOS_NATIVE ? (...) : (...)` so iOS gets an alternate node instead of the unlock-by-code CTA; admin/owner 'Inviter mes proches / Gérer les codes' button gated additionally with `!IS_IOS_NATIVE` — good.",
+    "/app/frontend/app/video/[id].tsx (L302, 307) — Lock-card text adapted via IS_IOS_NATIVE ternary; 'Entrer un code' button hidden on iOS."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (frontend-only)", "frontend": "100% (9/9 web non-regression checks)"},
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Apple Guideline 3.1.1 Reader-App refactor — web/Android UX unchanged, iOS hides all payment & code-entry CTAs. To test iOS behaviour without a real device, you could temporarily change `Platform.OS === 'ios'` to `Platform.OS === 'web'` in /app/frontend/src/utils/platform.ts and reload to see the hidden-state on web; revert after. The real validation must be done via eas update on iPhone. Admin login: admin@wedding.fr / Admin13! at /auth/login.",
+  "verified_flows": [
+    "Static grep on 8 target files: all import IS_IOS_NATIVE, the 3 full-gate screens (subscription, unlock, claim-wedding) also import IOSReaderGate and early-return on iOS.",
+    "Web login admin → /home redirect OK.",
+    "Home tab: testIDs open-unlock-btn, unlock-band, footer-unlock all visible.",
+    "Library tab: library-unlock-btn visible.",
+    "Profile tab: 'Saisir code', 'S'abonner/Gérer abonnement', 'Portail Stripe' items rendered.",
+    "/wedding/hanifa-et-dali (admin): wedding-photos-btn + invite-friends-btn visible.",
+    "/subscription: pricing content rendered, ios-gate-back NOT visible.",
+    "/unlock: code form content rendered, ios-gate-back NOT visible.",
+    "/claim-wedding: autocomplete with Hanifa et Dali / Sarahaline & Elarif visible, ios-gate-back NOT visible.",
+    "Zero pageerror (window-level) across all navigations; only pre-existing expo-av and prop-deprecation warnings."
+  ]
+}

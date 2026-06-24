@@ -15,6 +15,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "@/src/api/client";
 import { colors, spacing, radii } from "@/src/theme";
 import { useAuth } from "@/src/auth/AuthContext";
+import { IS_IOS_NATIVE } from "@/src/utils/platform";
 
 type Video = {
   id: string;
@@ -82,14 +83,16 @@ export default function LibraryScreen() {
     <SafeAreaView style={styles.root} edges={["top"]}>
       <View style={styles.header}>
         <Text style={styles.title}>Ma Bibliothèque</Text>
-        <TouchableOpacity
-          style={styles.unlockBtn}
-          onPress={() => router.push("/unlock")}
-          testID="library-unlock-btn"
-        >
-          <Ionicons name="key-outline" size={16} color={colors.gold} />
-          <Text style={styles.unlockTxt}>Code</Text>
-        </TouchableOpacity>
+        {!IS_IOS_NATIVE && (
+          <TouchableOpacity
+            style={styles.unlockBtn}
+            onPress={() => router.push("/unlock")}
+            testID="library-unlock-btn"
+          >
+            <Ionicons name="key-outline" size={16} color={colors.gold} />
+            <Text style={styles.unlockTxt}>Code</Text>
+          </TouchableOpacity>
+        )}
       </View>
       <ScrollView
         contentContainerStyle={{ padding: spacing.md, paddingBottom: spacing.xl }}
@@ -109,16 +112,20 @@ export default function LibraryScreen() {
             <Ionicons name="film-outline" size={56} color={colors.textDisabled} />
             <Text style={styles.emptyTitle}>Aucune vidéo débloquée</Text>
             <Text style={styles.emptySub}>
-              Entrez votre code client unique pour accéder à vos films de mariage.
+              {IS_IOS_NATIVE
+                ? "Activez votre code d'accès sur cinemaries.fr depuis votre navigateur, puis reconnectez-vous ici."
+                : "Entrez votre code client unique pour accéder à vos films de mariage."}
             </Text>
-            <TouchableOpacity
-              style={styles.primaryBtn}
-              onPress={() => router.push("/unlock")}
-              testID="library-add-code-btn"
-            >
-              <Ionicons name="key" size={16} color="#0A0A0A" />
-              <Text style={styles.primaryTxt}>Entrer un code</Text>
-            </TouchableOpacity>
+            {!IS_IOS_NATIVE && (
+              <TouchableOpacity
+                style={styles.primaryBtn}
+                onPress={() => router.push("/unlock")}
+                testID="library-add-code-btn"
+              >
+                <Ionicons name="key" size={16} color="#0A0A0A" />
+                <Text style={styles.primaryTxt}>Entrer un code</Text>
+              </TouchableOpacity>
+            )}
           </View>
         ) : (
           <View style={styles.grid}>

@@ -17,6 +17,8 @@ import { api } from "@/src/api/client";
 import { colors, spacing, radii } from "@/src/theme";
 import { useAuth } from "@/src/auth/AuthContext";
 import { showAlert, confirmAction } from "@/src/utils/dialog";
+import { IS_IOS_NATIVE } from "@/src/utils/platform";
+import IOSReaderGate from "@/src/ui/IOSReaderGate";
 
 type PlanCode = "annual_commit" | "annual_free" | "monthly_free";
 
@@ -68,6 +70,19 @@ export default function SubscriptionScreen() {
   const [config, setConfig] = useState<BillingConfig | null>(null);
   const [loading, setLoading] = useState(false);
   const [verifying, setVerifying] = useState(false);
+
+  // === App Store Guideline 3.1.1 — Reader App ===
+  // On iOS, we cannot offer subscription purchase outside of In-App Purchase.
+  // The full subscribe flow is available on cinemaries.fr (web) and the Android app.
+  if (IS_IOS_NATIVE) {
+    return (
+      <IOSReaderGate
+        title="Abonnement géré sur le web"
+        message="L'inscription et la gestion de votre abonnement Premium se font sur cinemaries.fr depuis votre navigateur."
+        hint="Une fois votre compte Premium activé sur le web, reconnectez-vous ici pour accéder à toutes vos vidéos."
+      />
+    );
+  }
   const [canceling, setCanceling] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState<PlanCode>(
     (params.plan as PlanCode) || "monthly_free"

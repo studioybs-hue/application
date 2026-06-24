@@ -19,6 +19,8 @@ import { useAuth } from "@/src/auth/AuthContext";
 import { api } from "@/src/api/client";
 import { storage } from "@/src/utils/storage";
 import { getDeviceId, getDeviceLabel } from "@/src/utils/deviceId";
+import { IS_IOS_NATIVE } from "@/src/utils/platform";
+import IOSReaderGate from "@/src/ui/IOSReaderGate";
 
 const CODES_KEY = "ws_unlocked_codes"; // same key as wedding/[clientId].tsx
 
@@ -39,6 +41,20 @@ export default function UnlockScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [availableWeddings, setAvailableWeddings] = useState<AvailableWedding[] | null>(null);
+
+  // === App Store Guideline 3.1.1 — Reader App ===
+  // Apple forbids unlocking digital content via codes inside the iOS app.
+  // Family/guests must enter their code on cinemaries.fr; once their account is linked,
+  // the wedding becomes available in this app on next login.
+  if (IS_IOS_NATIVE) {
+    return (
+      <IOSReaderGate
+        title="Saisie de code sur le web"
+        message="L'activation de votre code d'accès se fait sur cinemaries.fr depuis votre navigateur."
+        hint="Une fois votre code activé sur le web, reconnectez-vous ici : le mariage apparaîtra automatiquement."
+      />
+    );
+  }
 
   const submit = async (clientIdOverride?: string) => {
     setError("");
