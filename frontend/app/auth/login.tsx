@@ -114,12 +114,6 @@ export default function LoginScreen() {
             <Text style={styles.forgotTxt}>Mot de passe oublié ?</Text>
           </TouchableOpacity>
 
-          <View style={styles.divider}>
-            <View style={styles.line} />
-            <Text style={styles.dividerTxt}>ou</Text>
-            <View style={styles.line} />
-          </View>
-
           {!IS_IOS_NATIVE && (
             <>
               <View style={styles.divider}>
