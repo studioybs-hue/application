@@ -1,0 +1,47 @@
+{
+  "summary": "Non-regression frontend testing on web preview for Apple Guideline 3.1.3(a) v2 patch (signup removal on iOS). On web (IS_IOS_NATIVE=false), all expected elements render: register form, login form + 'Créer un compte' button, profile guest screen + register link. Discover signup band gated by total>0 (no demo videos seeded so not visible — not a regression). One UI regression found: duplicate 'ou' divider on login screen (the unconditional divider was kept above the conditional block, causing two dividers on web and a dangling orphan divider on iOS).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "auth/login.tsx",
+        "issue": "Duplicate 'ou' divider rendered on web (count=2 instead of 1). The first <View style={styles.divider}> block at lines 117-121 is unconditional and renders ALWAYS, while a second identical divider lives inside the {!IS_IOS_NATIVE && (...)} block at lines 125-129. On web: 2 dividers shown back-to-back. On iOS: 1 orphan/dangling divider with nothing under it (looks visually broken). Fix: remove lines 117-121 (the unconditional divider) and keep only the one inside the !IS_IOS_NATIVE conditional.",
+        "testID": "n/a (visual)",
+        "priority": "MEDIUM"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {
+        "screen": "auth/login (iOS only — not testable on web)",
+        "issues": ["Dangling 'ou' divider would render alone on iOS with nothing below it because the 'Créer un compte' button is hidden but the first divider is not. Same root cause as the ui_bug above."]
+      }
+    ],
+    "react_native_issues": [
+      {
+        "component": "expo-av",
+        "issue": "Deprecated expo-av detected in app logs ('Expo AV has been deprecated and will be removed in SDK 54. Use the expo-audio and expo-video packages'). Not related to current patch but flagged per Expo Related Pointers."
+      }
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Fix duplicate 'ou' divider in /app/frontend/app/auth/login.tsx — delete the unconditional <View style={styles.divider}> block at lines 117-121 (keep only the one inside the !IS_IOS_NATIVE conditional at lines 125-129). This also fixes the dangling orphan divider on iOS.",
+    "(Out of scope but noted) Migrate expo-av to expo-audio / expo-video before SDK 54."
+  ],
+  "critical_code_review_comments": [
+    "login.tsx: copy-paste error introduced a duplicate divider; either keep the one inside the conditional (preferred) or remove the conditional duplicate. Current state breaks both web (dup) and iOS (orphan).",
+    "All four files correctly import IS_IOS_NATIVE; register.tsx correctly imports IOSReaderGate.",
+    "Non-iOS branches (web) all render the expected pre-patch UI: register form, 'Créer un compte' button on login, register link on profile guest screen."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (not requested)", "frontend": "95% (4 of 4 screens render correctly; 1 cosmetic divider duplication bug)"},
+  "seed_data_creation": "None — anonymous testing only.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "After main agent removes the duplicate divider in login.tsx, re-verify that exactly one 'ou' divider renders on web above the 'Créer un compte' button. No need to retest register/profile/discover unless those files are touched again. Discover signup band cannot be visually verified in this environment because no showcase videos are seeded (total=0); main agent should either seed a showcase video or trust the code path.",
+  "rca_of_issue": "Root cause: when wrapping the 'Créer un compte' button inside {!IS_IOS_NATIVE && (...)} the developer also duplicated the divider inside the fragment but forgot to delete the original divider above. Reproduction: navigate to http://localhost:3000/auth/login on web → observe TWO 'ou' dividers stacked between the 'Mot de passe oublié ?' link and the 'Créer un compte' button. On iOS the unconditional divider would render with nothing beneath it. Mitigation: delete lines 117-121 of /app/frontend/app/auth/login.tsx."
+}

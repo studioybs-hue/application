@@ -99,7 +99,9 @@ export default function ProfileScreen() {
         <Ionicons name="person-circle-outline" size={80} color={colors.gold} />
         <Text style={styles.guestTitle}>Bienvenue</Text>
         <Text style={styles.guestSub}>
-          Créez un compte pour débloquer vos vidéos et profiter du streaming premium.
+          {IS_IOS_NATIVE
+            ? "Connectez-vous pour accéder à vos vidéos. Création de compte sur cinemaries.fr."
+            : "Créez un compte pour débloquer vos vidéos et profiter du streaming premium."}
         </Text>
         <TouchableOpacity
           style={styles.primaryBtn}
@@ -108,9 +110,11 @@ export default function ProfileScreen() {
         >
           <Text style={styles.primaryTxt}>Se connecter</Text>
         </TouchableOpacity>
-        <TouchableOpacity onPress={() => router.push("/auth/register")} testID="profile-register-link">
-          <Text style={styles.linkTxt}>Créer un compte</Text>
-        </TouchableOpacity>
+        {!IS_IOS_NATIVE && (
+          <TouchableOpacity onPress={() => router.push("/auth/register")} testID="profile-register-link">
+            <Text style={styles.linkTxt}>Créer un compte</Text>
+          </TouchableOpacity>
+        )}
       </SafeAreaView>
     );
   }

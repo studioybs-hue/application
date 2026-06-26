@@ -18,6 +18,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "@/src/api/client";
 import { colors, spacing, radii } from "@/src/theme";
 import { useAuth } from "@/src/auth/AuthContext";
+import { IS_IOS_NATIVE } from "@/src/utils/platform";
 
 type ShowcaseVideo = {
   id: string;
@@ -167,7 +168,7 @@ export default function DiscoverScreen() {
         )}
 
         {/* CTA inscription si non connecté */}
-        {!user && total > 0 && (
+        {!user && total > 0 && !IS_IOS_NATIVE && (
           <View style={styles.signupBand}>
             <View style={styles.signupBandIcon}>
               <Ionicons name="person-add" size={18} color="#0A0A0A" />

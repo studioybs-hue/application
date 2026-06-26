@@ -15,6 +15,8 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { colors, spacing, radii } from "@/src/theme";
 import { useAuth } from "@/src/auth/AuthContext";
+import { IS_IOS_NATIVE } from "@/src/utils/platform";
+import IOSReaderGate from "@/src/ui/IOSReaderGate";
 
 export default function RegisterScreen() {
   const router = useRouter();
@@ -26,6 +28,19 @@ export default function RegisterScreen() {
   const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  // === App Store Guideline 3.1.3(a) — Reader App ===
+  // Apple forbids account registration on iOS for apps that access paid content.
+  // Existing users can sign in; new users must register on cinemaries.fr.
+  if (IS_IOS_NATIVE) {
+    return (
+      <IOSReaderGate
+        title="Inscription sur le web"
+        message="La création de compte se fait sur cinemaries.fr depuis votre navigateur."
+        hint="Une fois votre compte créé sur le web, revenez ici pour vous connecter et accéder à votre mariage."
+      />
+    );
+  }
 
   const submit = async () => {
     setError("");

@@ -15,6 +15,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { colors, spacing, radii } from "@/src/theme";
 import { useAuth } from "@/src/auth/AuthContext";
+import { IS_IOS_NATIVE } from "@/src/utils/platform";
 
 export default function LoginScreen() {
   const router = useRouter();
@@ -119,13 +120,23 @@ export default function LoginScreen() {
             <View style={styles.line} />
           </View>
 
-          <TouchableOpacity
-            style={styles.secondaryBtn}
-            onPress={() => router.push("/auth/register")}
-            testID="login-go-register"
-          >
-            <Text style={styles.secondaryTxt}>Créer un compte</Text>
-          </TouchableOpacity>
+          {!IS_IOS_NATIVE && (
+            <>
+              <View style={styles.divider}>
+                <View style={styles.line} />
+                <Text style={styles.dividerTxt}>ou</Text>
+                <View style={styles.line} />
+              </View>
+
+              <TouchableOpacity
+                style={styles.secondaryBtn}
+                onPress={() => router.push("/auth/register")}
+                testID="login-go-register"
+              >
+                <Text style={styles.secondaryTxt}>Créer un compte</Text>
+              </TouchableOpacity>
+            </>
+          )}
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
