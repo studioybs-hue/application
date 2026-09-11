@@ -1,0 +1,43 @@
+{
+  "summary": "Backend upload fix verified on production https://cinemaries.fr. All 5 requested test scenarios (A/B/C/D/E) PASS. Nginx alias mismatch is resolved by symlink /var/www/cinemaries/backend/uploads -> /srv/cinemaries/uploads. Fresh uploads via POST /api/admin/upload land in the correct directory and are immediately servable via /api/uploads/{name}.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/admin/upload", "issue": "Response 'url' is relative (starts with /api/uploads/...) because APP_PUBLIC_URL env var is empty on prod. Not blocking (frontend already handles this) but inconsistent with intent of code line 3812 which prefixes with APP_PUBLIC_URL. Consider setting APP_PUBLIC_URL=https://cinemaries.fr in backend env."},
+      {"endpoint": "N/A (filesystem)", "issue": "Files freshly uploaded by the FastAPI service are owned by root:root (not www-data:www-data). Perms 644 keep them readable by Nginx so it works, but service should ideally run as www-data or files be chown'd on write for consistency."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_uploads_prod.py",
+    "/app/test_reports/pytest/upload_prod_results.xml"
+  ],
+  "action_items": [
+    "Optional: set APP_PUBLIC_URL=https://cinemaries.fr in backend .env so /api/admin/upload returns absolute URLs (consistent with hosting_upload endpoints).",
+    "Optional: run the FastAPI service as www-data (or chown newly written files) so uploads have consistent ownership with pre-existing files."
+  ],
+  "critical_code_review_comments": [
+    "UPLOAD_DIR = ROOT_DIR / 'uploads' (server.py:59) is fragile — relies on external symlink to align with Nginx alias. Consider reading it from env (e.g. UPLOAD_DIR env var) with a documented default matching Nginx config, to prevent regression if the symlink is ever removed."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_uploads_prod.py (new)"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "N/A (backend-only test)"},
+  "seed_data_creation": "Uploaded two tiny 1x1 JPEGs (350 bytes each) via /api/admin/upload during Test B. Both were cleaned up from /srv/cinemaries/uploads/ via SSH after verification. DB rows in db.uploads were NOT deleted (no delete endpoint used) — 2 small entries remain.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Test file /app/backend/tests/test_uploads_prod.py hits production directly (https://cinemaries.fr). It logs in as contact@cinemaries.fr, uploads a tiny JPEG, and verifies immediate GET on returned URL. Two DB rows in uploads collection (350-byte test JPEGs) may remain after runs — non-blocking.",
+  "rca_of_issue": "Original bug: UPLOAD_DIR = ROOT_DIR / 'uploads' resolved to /var/www/cinemaries/backend/uploads/ while Nginx serves /api/uploads/* from an alias to /srv/cinemaries/uploads/. Files landed in the former, Nginx searched the latter -> 404. Fix (server-side, no code): rsync'd existing files to /srv/cinemaries/uploads/, replaced /var/www/cinemaries/backend/uploads with a symlink -> /srv/cinemaries/uploads, chown www-data:www-data, chmod 755, restarted cinemaries-backend. Verified: symlink present, fresh POST /api/admin/upload writes to /srv/cinemaries/uploads and GET on returned URL returns 200 with correct Content-Type and exact size.",
+  "detailed_results": {
+    "test_A_recent_upload": "PASS — GET fb33a3e1805a40c78239386ff29aa790.jpg -> 200, image/jpeg, 1,810,478 bytes",
+    "test_B_fresh_upload_roundtrip": "PASS — login -> POST /api/admin/upload (kind=image, tiny jpg 350B) -> URL returned -> immediate GET -> 200, content-length matches source",
+    "test_C_old_uploads": "PASS — both ca3e1fb7a4684f50877dd15c9b2e1edc.jpg and ea256a56a1a54e4eb5b51cbdadb20858.jpg -> 200 image/jpeg",
+    "test_D_symlink_correct": "PASS — /var/www/cinemaries/backend/uploads is symlink -> /srv/cinemaries/uploads (verified via ssh readlink). Target dir owned www-data:www-data, mode 755.",
+    "test_E_non_regression": "PASS — POST /api/auth/login -> 200 + access_token; GET /api/admin/stats with token -> 200 (dict response)"
+  }
+}

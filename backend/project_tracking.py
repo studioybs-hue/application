@@ -582,6 +582,33 @@ def register_project_tracking_routes(
                     "source": "video",
                 }
 
+        # NEW: registered users with a wedding directly linked (client_id set by admin)
+        # This is the main source now — we want couples who created an account.
+        async for u in db.users.find(
+            {
+                "$or": [
+                    {"client_id": {"$exists": True, "$ne": None, "$ne": ""}},
+                    {"claimed_client_id": {"$exists": True, "$ne": None, "$ne": ""}},
+                ]
+            },
+            {"email": 1, "phone": 1, "full_name": 1, "client_id": 1, "claimed_client_id": 1, "claimed_client_name": 1, "id": 1},
+        ):
+            cid = u.get("client_id") or u.get("claimed_client_id")
+            if not cid or cid in existing:
+                continue
+            # Prefer nicer name : claimed_client_name > full_name > from client_id
+            name = u.get("claimed_client_name") or u.get("full_name") or cid.replace("-", " ").title()
+            entry = {
+                "client_id": cid,
+                "wedding_name": name,
+                "owner_user_id": u.get("id"),
+                "owner_email": u.get("email"),
+                "owner_phone": u.get("phone"),
+                "source": "registered_user",
+            }
+            # Registered users take priority over anonymous sources (codes/videos)
+            candidates[cid] = entry
+
         return {"items": list(candidates.values())}
 
     log.info("[project_tracking] routes registered")
