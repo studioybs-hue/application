@@ -169,7 +169,7 @@ export default function PhotoViewerScreen() {
       {controlsVisible && (
         <SafeAreaView edges={["top"]} style={s.headerOverlay}>
           <View style={s.headerRow}>
-            <TouchableOpacity onPress={() => router.back()} style={s.headerBtn}>
+            <TouchableOpacity onPress={() => (router.canGoBack() ? router.back() : router.replace("/"))} style={s.headerBtn}>
               <Ionicons name="chevron-back" size={28} color="#fff" />
             </TouchableOpacity>
             <Text style={s.counter}>

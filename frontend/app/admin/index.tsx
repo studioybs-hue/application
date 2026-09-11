@@ -48,7 +48,7 @@ export default function AdminDashboard() {
   return (
     <SafeAreaView style={styles.root} edges={["top"]}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} testID="admin-back">
+        <TouchableOpacity onPress={() => (router.canGoBack() ? router.back() : router.replace("/"))} testID="admin-back">
           <Ionicons name="chevron-back" size={26} color={colors.ivory} />
         </TouchableOpacity>
         <View>

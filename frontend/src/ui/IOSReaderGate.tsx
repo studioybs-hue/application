@@ -30,7 +30,7 @@ export default function IOSReaderGate({ title, message, hint }: Props) {
 
   return (
     <SafeAreaView style={styles.root} edges={["top", "left", "right"]}>
-      <TouchableOpacity style={styles.backBtn} onPress={() => router.back()} testID="ios-gate-back">
+      <TouchableOpacity style={styles.backBtn} onPress={() => (router.canGoBack() ? router.back() : router.replace("/"))} testID="ios-gate-back">
         <Ionicons name="chevron-back" size={22} color={colors.ivory} />
         <Text style={styles.backTxt}>Retour</Text>
       </TouchableOpacity>

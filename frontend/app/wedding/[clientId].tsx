@@ -266,7 +266,7 @@ export default function WeddingScreen() {
             pointerEvents="none"
           />
           <SafeAreaView edges={["top"]} style={styles.heroTop}>
-            <TouchableOpacity onPress={() => router.back()} style={styles.iconBtn} testID="wedding-back">
+            <TouchableOpacity onPress={() => (router.canGoBack() ? router.back() : router.replace("/"))} style={styles.iconBtn} testID="wedding-back">
               <Ionicons name="chevron-back" size={26} color={colors.ivory} />
             </TouchableOpacity>
             <View style={styles.teaserBadge}>

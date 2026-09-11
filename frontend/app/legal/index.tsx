@@ -17,7 +17,7 @@ export default function LegalIndex() {
     <SafeAreaView style={styles.root} edges={["top"]}>
       <ScrollView contentContainerStyle={{ padding: spacing.md }}>
         <View style={styles.headerRow}>
-          <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
+          <TouchableOpacity onPress={() => (router.canGoBack() ? router.back() : router.replace("/"))} style={styles.backBtn}>
             <Ionicons name="chevron-back" size={24} color={colors.ivory} />
             <Text style={styles.backTxt}>Retour</Text>
           </TouchableOpacity>

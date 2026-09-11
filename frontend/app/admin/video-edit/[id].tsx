@@ -355,7 +355,7 @@ export default function VideoEdit() {
       } else {
         await api(`/admin/videos/${id}`, { method: "PATCH", body: payload });
       }
-      router.back();
+      (router.canGoBack() ? router.back() : router.replace("/"));
     } catch (e: any) {
       showAlert("Erreur", e.message);
     } finally {
@@ -371,7 +371,7 @@ export default function VideoEdit() {
     <SafeAreaView style={styles.root} edges={["top"]}>
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()} testID="video-edit-back">
+          <TouchableOpacity onPress={() => (router.canGoBack() ? router.back() : router.replace("/"))} testID="video-edit-back">
             <Ionicons name="chevron-back" size={26} color={colors.ivory} />
           </TouchableOpacity>
           <Text style={styles.title}>{isNew ? "Nouvelle vidéo" : "Modifier la vidéo"}</Text>

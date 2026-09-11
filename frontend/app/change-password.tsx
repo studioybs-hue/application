@@ -55,7 +55,7 @@ export default function ChangePasswordScreen() {
       setCurrentPwd("");
       setNewPwd("");
       setConfirmPwd("");
-      router.back();
+      (router.canGoBack() ? router.back() : router.replace("/"));
     } catch (e: any) {
       setError(e?.message || "Erreur");
     } finally {
@@ -70,7 +70,7 @@ export default function ChangePasswordScreen() {
         style={{ flex: 1 }}
       >
         <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
-          <TouchableOpacity onPress={() => router.back()} style={styles.back}>
+          <TouchableOpacity onPress={() => (router.canGoBack() ? router.back() : router.replace("/"))} style={styles.back}>
             <Ionicons name="chevron-back" size={26} color={colors.ivory} />
           </TouchableOpacity>
 

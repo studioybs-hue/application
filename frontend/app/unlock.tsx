@@ -118,7 +118,7 @@ export default function UnlockScreen() {
       <SafeAreaView style={{ flex: 1 }}>
         <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
           <View style={styles.header}>
-            <TouchableOpacity onPress={() => router.back()} style={styles.back} testID="unlock-back">
+            <TouchableOpacity onPress={() => (router.canGoBack() ? router.back() : router.replace("/"))} style={styles.back} testID="unlock-back">
               <Ionicons name="close" size={26} color={colors.ivory} />
             </TouchableOpacity>
           </View>

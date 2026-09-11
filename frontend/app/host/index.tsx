@@ -126,7 +126,7 @@ export default function HostScreen() {
       <LinearGradient colors={[colors.burgundy, colors.bg]} style={StyleSheet.absoluteFillObject} />
       <SafeAreaView style={{ flex: 1 }} edges={["top"]}>
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()} style={styles.back} testID="host-back">
+          <TouchableOpacity onPress={() => (router.canGoBack() ? router.back() : router.replace("/"))} style={styles.back} testID="host-back">
             <Ionicons name="close" size={28} color={colors.ivory} />
           </TouchableOpacity>
         </View>

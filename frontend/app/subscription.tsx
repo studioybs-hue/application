@@ -200,7 +200,7 @@ export default function SubscriptionScreen() {
   return (
     <SafeAreaView style={styles.root} edges={["top"]}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()}>
+        <TouchableOpacity onPress={() => (router.canGoBack() ? router.back() : router.replace("/"))}>
           <Ionicons name="chevron-back" size={26} color={colors.ivory} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Premium</Text>

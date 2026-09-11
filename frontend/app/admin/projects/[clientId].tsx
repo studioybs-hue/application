@@ -114,7 +114,7 @@ export default function AdminProjectDetail() {
           onPress: async () => {
             try {
               await api(`/admin/projects/${clientId}`, { method: "DELETE" });
-              router.back();
+              (router.canGoBack() ? router.back() : router.replace("/"));
             } catch (e: any) {
               Alert.alert("Erreur", e?.message || "Suppression impossible");
             }
@@ -127,7 +127,7 @@ export default function AdminProjectDetail() {
   return (
     <SafeAreaView style={styles.root} edges={["top"]}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} testID="project-detail-back">
+        <TouchableOpacity onPress={() => (router.canGoBack() ? router.back() : router.replace("/"))} testID="project-detail-back">
           <Ionicons name="chevron-back" size={26} color={colors.ivory} />
         </TouchableOpacity>
         <Text style={styles.headerTitle} numberOfLines={1}>{project?.wedding_name || clientId}</Text>

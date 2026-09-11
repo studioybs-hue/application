@@ -275,7 +275,7 @@ export default function SlideshowScreen() {
             <>
               <Ionicons name="images-outline" size={48} color={colors.textSecondary} />
               <Text style={s.empty}>Aucune photo</Text>
-              <TouchableOpacity onPress={() => router.back()} style={s.backBtn}>
+              <TouchableOpacity onPress={() => (router.canGoBack() ? router.back() : router.replace("/"))} style={s.backBtn}>
                 <Text style={s.backTxt}>Retour</Text>
               </TouchableOpacity>
             </>
@@ -395,7 +395,7 @@ export default function SlideshowScreen() {
         <>
           {/* Top bar */}
           <View style={[s.topBar, mode === "stories" && { paddingTop: 80 }]}>
-            <TouchableOpacity onPress={() => router.back()} style={s.iconBtn}>
+            <TouchableOpacity onPress={() => (router.canGoBack() ? router.back() : router.replace("/"))} style={s.iconBtn}>
               <Ionicons name="close" size={28} color="#fff" />
             </TouchableOpacity>
             <Text style={s.counter}>

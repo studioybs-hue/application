@@ -136,7 +136,7 @@ export default function AdminWeddingCover() {
         },
       });
       showAlert("✅ Enregistré", "La couverture du mariage a été mise à jour.");
-      router.back();
+      (router.canGoBack() ? router.back() : router.replace("/"));
     } catch (e: any) {
       showAlert("Erreur", e.message || "Sauvegarde impossible");
     } finally {
@@ -177,7 +177,7 @@ export default function AdminWeddingCover() {
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
       <SafeAreaView style={styles.root} edges={["top"]}>
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()} style={styles.iconBtn}>
+          <TouchableOpacity onPress={() => (router.canGoBack() ? router.back() : router.replace("/"))} style={styles.iconBtn}>
             <Ionicons name="chevron-back" size={26} color={colors.ivory} />
           </TouchableOpacity>
           <Text style={styles.title}>Couvertures du mariage</Text>

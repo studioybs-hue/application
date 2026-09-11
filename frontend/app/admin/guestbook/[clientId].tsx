@@ -55,7 +55,7 @@ export function AdminGuestbookIndex() {
   return (
     <SafeAreaView style={styles.root} edges={["top"]}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()}><Ionicons name="chevron-back" size={26} color={colors.ivory} /></TouchableOpacity>
+        <TouchableOpacity onPress={() => (router.canGoBack() ? router.back() : router.replace("/"))}><Ionicons name="chevron-back" size={26} color={colors.ivory} /></TouchableOpacity>
         <Text style={styles.headerTitle}>Livre d’or</Text>
         <View style={{ width: 26 }} />
       </View>
@@ -166,7 +166,7 @@ function AdminGuestbookDetail({ clientId }: { clientId: string }) {
   return (
     <SafeAreaView style={styles.root} edges={["top"]}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()}><Ionicons name="chevron-back" size={26} color={colors.ivory} /></TouchableOpacity>
+        <TouchableOpacity onPress={() => (router.canGoBack() ? router.back() : router.replace("/"))}><Ionicons name="chevron-back" size={26} color={colors.ivory} /></TouchableOpacity>
         <Text style={styles.headerTitle} numberOfLines={1}>{data?.wedding_name || clientId}</Text>
         <View style={{ width: 26 }} />
       </View>

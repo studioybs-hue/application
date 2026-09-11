@@ -62,7 +62,7 @@ export default function NewTicket() {
     <SafeAreaView style={styles.root} edges={["top"]}>
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()}>
+          <TouchableOpacity onPress={() => (router.canGoBack() ? router.back() : router.replace("/"))}>
             <Ionicons name="chevron-back" size={26} color={colors.ivory} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Nouvelle demande</Text>

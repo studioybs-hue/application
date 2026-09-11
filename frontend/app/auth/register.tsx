@@ -76,7 +76,7 @@ export default function RegisterScreen() {
     <SafeAreaView style={styles.root}>
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
-          <TouchableOpacity onPress={() => router.back()} style={styles.back} testID="register-back">
+          <TouchableOpacity onPress={() => (router.canGoBack() ? router.back() : router.replace("/"))} style={styles.back} testID="register-back">
             <Ionicons name="chevron-back" size={26} color={colors.ivory} />
           </TouchableOpacity>
           <Text style={styles.brand}>CINÉMARIÉS</Text>

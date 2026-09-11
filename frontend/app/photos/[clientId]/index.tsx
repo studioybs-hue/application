@@ -183,7 +183,7 @@ export default function PhotosGalleryScreen() {
   if (loading) {
     return (
       <SafeAreaView style={s.container} edges={["top"]}>
-        <Header title="Galerie photo" onBack={() => router.back()} />
+        <Header title="Galerie photo" onBack={() => (router.canGoBack() ? router.back() : router.replace("/"))} />
         <View style={s.center}>
           <ActivityIndicator color={colors.gold} size="large" />
           <Text style={s.dimText}>Chargement…</Text>
@@ -199,7 +199,7 @@ export default function PhotosGalleryScreen() {
     const isUnauth = reason === "not_authenticated";
     return (
       <SafeAreaView style={s.container} edges={["top"]}>
-        <Header title="Galerie photo" onBack={() => router.back()} />
+        <Header title="Galerie photo" onBack={() => (router.canGoBack() ? router.back() : router.replace("/"))} />
         <View style={s.gateContainer}>
           <Ionicons
             name={isCoupleOnly ? "heart" : "lock-closed"}
@@ -237,7 +237,7 @@ export default function PhotosGalleryScreen() {
   if (!info || info.photos_count === 0) {
     return (
       <SafeAreaView style={s.container} edges={["top"]}>
-        <Header title="Galerie photo" onBack={() => router.back()} />
+        <Header title="Galerie photo" onBack={() => (router.canGoBack() ? router.back() : router.replace("/"))} />
         <View style={s.center}>
           <Ionicons name="images-outline" size={64} color={colors.textDisabled} />
           <Text style={s.emptyTitle}>Aucune photo disponible</Text>
@@ -275,7 +275,7 @@ export default function PhotosGalleryScreen() {
       ) : (
         <Header
           title={`${info.photos_count} photos`}
-          onBack={() => router.back()}
+          onBack={() => (router.canGoBack() ? router.back() : router.replace("/"))}
           right={
             <TouchableOpacity
               onPress={() =>

@@ -45,7 +45,7 @@ export default function GuestbookListPage() {
     return (
       <SafeAreaView style={styles.root} edges={["top"]}>
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()} testID="gb-list-back">
+          <TouchableOpacity onPress={() => (router.canGoBack() ? router.back() : router.replace("/"))} testID="gb-list-back">
             <Ionicons name="chevron-back" size={26} color={colors.ivory} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Livre d&apos;or numérique</Text>
@@ -66,7 +66,7 @@ export default function GuestbookListPage() {
   return (
     <SafeAreaView style={styles.root} edges={["top"]}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} testID="gb-list-back">
+        <TouchableOpacity onPress={() => (router.canGoBack() ? router.back() : router.replace("/"))} testID="gb-list-back">
           <Ionicons name="chevron-back" size={26} color={colors.ivory} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Livre d&apos;or numérique</Text>

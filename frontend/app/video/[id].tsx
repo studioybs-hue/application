@@ -214,7 +214,7 @@ export default function VideoScreen() {
     <View style={styles.root}>
       <SafeAreaView style={styles.headerWrap} edges={["top"]}>
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()} style={styles.iconBtn} testID="video-back">
+          <TouchableOpacity onPress={() => (router.canGoBack() ? router.back() : router.replace("/"))} style={styles.iconBtn} testID="video-back">
             <Ionicons name="chevron-back" size={26} color={colors.ivory} />
           </TouchableOpacity>
           <TouchableOpacity onPress={onCastPress} style={styles.iconBtn} testID="video-cast-btn">

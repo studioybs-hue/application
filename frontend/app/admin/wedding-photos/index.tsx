@@ -56,7 +56,7 @@ export default function AdminWeddingPhotosListScreen() {
   return (
     <SafeAreaView style={s.root} edges={["top"]}>
       <View style={s.header}>
-        <TouchableOpacity onPress={() => router.back()}>
+        <TouchableOpacity onPress={() => (router.canGoBack() ? router.back() : router.replace("/"))}>
           <Ionicons name="chevron-back" size={28} color={colors.ivory} />
         </TouchableOpacity>
         <Text style={s.headerTitle}>Galeries photos</Text>

@@ -94,7 +94,7 @@ export default function AdminDeletionRequestsScreen() {
     <SafeAreaView style={styles.root} edges={["top"]}>
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
+          <TouchableOpacity onPress={() => (router.canGoBack() ? router.back() : router.replace("/"))} style={styles.backBtn}>
             <Ionicons name="chevron-back" size={24} color={colors.ivory} />
           </TouchableOpacity>
           <View style={{ flex: 1 }}>

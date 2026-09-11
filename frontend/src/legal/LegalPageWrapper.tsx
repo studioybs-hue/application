@@ -33,7 +33,7 @@ export function LegalPageWrapper({ title, subtitle, lastUpdate, children }: Prop
           {/* Header */}
           <View style={styles.headerRow}>
             <TouchableOpacity
-              onPress={() => (router.canGoBack() ? router.back() : router.replace("/(tabs)/home"))}
+              onPress={() => (router.canGoBack() ? (router.canGoBack() ? router.back() : router.replace("/")) : router.replace("/(tabs)/home"))}
               style={styles.backBtn}
               testID="legal-back"
             >

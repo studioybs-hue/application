@@ -231,7 +231,7 @@ export default function SecurityScreen() {
   return (
     <SafeAreaView style={styles.root}>
       <ScrollView contentContainerStyle={styles.scroll}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.back}>
+        <TouchableOpacity onPress={() => (router.canGoBack() ? router.back() : router.replace("/"))} style={styles.back}>
           <Ionicons name="chevron-back" size={26} color={colors.ivory} />
         </TouchableOpacity>
 
