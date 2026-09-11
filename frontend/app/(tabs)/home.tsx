@@ -38,6 +38,7 @@ export default function HomeScreen() {
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [activeGuestbooks, setActiveGuestbooks] = useState<{ client_id: string; wedding_name: string; message_count: number }[]>([]);
 
   const load = useCallback(async () => {
     try {
@@ -48,6 +49,13 @@ export default function HomeScreen() {
     } finally {
       setLoading(false);
       setRefreshing(false);
+    }
+    // Load active guestbooks (public endpoint) — skip on iOS native (Reader App)
+    if (!IS_IOS_NATIVE) {
+      try {
+        const g = await api<{ items: any[] }>("/guestbook/active", { auth: false });
+        setActiveGuestbooks(g.items || []);
+      } catch {}
     }
   }, []);
 
@@ -134,6 +142,27 @@ export default function HomeScreen() {
           <Ionicons name="chevron-forward" size={20} color="#0A0A0A" />
         </TouchableOpacity>
 
+        {!IS_IOS_NATIVE && (
+          <TouchableOpacity
+            style={styles.guestbookBand}
+            onPress={() => router.push("/guestbook-list")}
+            testID="guestbook-band"
+          >
+            <View style={styles.unlockBandLeft}>
+              <Text style={{ fontSize: 20 }}>💌</Text>
+              <View style={{ marginLeft: 12 }}>
+                <Text style={styles.guestbookTitle}>Livre d&apos;or numérique</Text>
+                <Text style={styles.guestbookSub}>
+                  {activeGuestbooks.length > 0
+                    ? `${activeGuestbooks.length} mariage${activeGuestbooks.length > 1 ? "s" : ""} en cours — laissez un mot`
+                    : "Laissez un message aux mariés"}
+                </Text>
+              </View>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color={colors.gold} />
+          </TouchableOpacity>
+        )}
+
         {topFrance.length > 0 && <Row title="N°1 en France" weddings={topFrance} router={router} />}
         {featured.length > 0 && <Row title="À l'affiche" weddings={featured} router={router} />}
         {recent.length > 0 && <Row title="Nos derniers mariages" weddings={recent} router={router} />}
@@ -210,7 +239,7 @@ function Row({ title, weddings, router }: { title: string; weddings: Wedding[]; 
               <>
                 <Text style={styles.footerSep}>·</Text>
                 <TouchableOpacity onPress={() => router.push("/unlock")} testID="footer-unlock">
-                  <Text style={styles.footerLink}>Code d'accès</Text>
+                  <Text style={styles.footerLink}>Code d&apos;accès</Text>
                 </TouchableOpacity>
               </>
             )}
@@ -248,6 +277,14 @@ const styles = StyleSheet.create({
   hostBand: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginHorizontal: spacing.md, marginTop: 10, padding: spacing.md, backgroundColor: colors.gold, borderRadius: radii.md },
   hostTitle: { color: "#0A0A0A", fontWeight: "800", fontSize: 14 },
   hostSub: { color: "rgba(0,0,0,0.7)", fontSize: 11, marginTop: 2, fontWeight: "600" },
+  guestbookBand: {
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    marginHorizontal: spacing.md, marginTop: 10, padding: spacing.md,
+    backgroundColor: colors.surface, borderRadius: radii.md,
+    borderWidth: 1, borderColor: "rgba(212,175,55,0.3)",
+  },
+  guestbookTitle: { color: colors.gold, fontWeight: "800", fontSize: 14 },
+  guestbookSub: { color: colors.textSecondary, fontSize: 11, marginTop: 2 },
   row: { marginTop: spacing.lg },
   rowTitle: { color: colors.ivory, fontSize: 18, fontWeight: "600", paddingHorizontal: spacing.md, marginBottom: spacing.sm },
   poster: { width: 130, marginRight: 10 },

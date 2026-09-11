@@ -161,6 +161,37 @@ export default function AdminProjectDetail() {
             </View>
           </View>
 
+          {/* Guestbook activation toggle */}
+          <TouchableOpacity
+            style={[
+              styles.guestbookToggle,
+              (project as any).is_guestbook_active && styles.guestbookToggleActive,
+            ]}
+            onPress={async () => {
+              try {
+                const r = await api<{ is_guestbook_active: boolean }>(
+                  `/admin/guestbook/${clientId}/activation`,
+                  { method: "PATCH" }
+                );
+                setProject({ ...project, ...(r as any) } as any);
+              } catch (e: any) {
+                Alert.alert("Erreur", e?.message);
+              }
+            }}
+            testID="guestbook-toggle"
+          >
+            <Text style={{ fontSize: 20 }}>💌</Text>
+            <View style={{ flex: 1, marginLeft: 12 }}>
+              <Text style={styles.guestbookToggleTitle}>Livre d&apos;or numérique</Text>
+              <Text style={styles.guestbookToggleSub}>
+                {(project as any).is_guestbook_active
+                  ? "Actif — les invités peuvent laisser des messages"
+                  : "Inactif — cliquez pour activer"}
+              </Text>
+            </View>
+            <View style={[styles.dot, (project as any).is_guestbook_active && { backgroundColor: "#4ADE80" }]} />
+          </TouchableOpacity>
+
           {/* Tracking view */}
           <ProjectTrackingView
             project={project}
@@ -367,6 +398,29 @@ const styles = StyleSheet.create({
   },
   contactRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   contactText: { color: colors.textSecondary, fontSize: 12 },
+
+  guestbookToggle: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: spacing.md,
+    borderRadius: radii.md,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    marginBottom: spacing.md,
+  },
+  guestbookToggleActive: {
+    borderColor: "#4ADE80",
+    backgroundColor: "rgba(74,222,128,0.05)",
+  },
+  guestbookToggleTitle: { color: colors.ivory, fontSize: 14, fontWeight: "700" },
+  guestbookToggleSub: { color: colors.textSecondary, fontSize: 11, marginTop: 2 },
+  dot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: "#3F3F46",
+  },
 
   deleteBtn: {
     marginTop: spacing.xl,

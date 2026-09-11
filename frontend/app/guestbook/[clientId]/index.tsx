@@ -285,6 +285,21 @@ export default function GuestbookPage() {
           <Text style={styles.footer}>
             Vos messages seront révélés aux mariés en surprise après leur cérémonie 💕
           </Text>
+
+          <TouchableOpacity
+            style={styles.coupleLink}
+            onPress={() => {
+              if (Platform.OS === "web") {
+                window.location.href = `/guestbook/${clientId}/reveal`;
+              }
+            }}
+            testID="couple-reveal-link"
+          >
+            <Ionicons name="key-outline" size={14} color={colors.gold} />
+            <Text style={styles.coupleLinkText}>
+              Je suis les marié(e)s — Découvrir mes messages
+            </Text>
+          </TouchableOpacity>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -361,6 +376,17 @@ const styles = StyleSheet.create({
     marginTop: spacing.xl,
     lineHeight: 18,
   },
+  coupleLink: {
+    marginTop: spacing.lg,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    padding: 10,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  coupleLinkText: { color: colors.gold, fontSize: 12, textDecorationLine: "underline" },
 
   thankEmoji: { fontSize: 72 },
   thankTitle: { color: colors.gold, fontSize: 32, fontWeight: "800", marginTop: 12 },

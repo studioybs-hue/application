@@ -28,7 +28,8 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 import qrcode
-from qrcode.constants import ERROR_CORRECT_M
+from qrcode.constants import ERROR_CORRECT_H
+from PIL import Image, ImageDraw, ImageFont
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -314,23 +315,140 @@ def register_guestbook_routes(
             raise HTTPException(404, "Mariage introuvable")
         public_url = os.environ.get("APP_PUBLIC_URL", "https://cinemaries.fr")
         url = f"{public_url}/guestbook/{client_id}"
+
+        # Generate QR with high error correction to allow logo overlay
         qr = qrcode.QRCode(
             version=None,
-            error_correction=ERROR_CORRECT_M,
-            box_size=10,
+            error_correction=ERROR_CORRECT_H,
+            box_size=12,
             border=2,
         )
         qr.add_data(url)
         qr.make(fit=True)
-        img = qr.make_image(fill_color="#0A0A0A", back_color="#FFFFF0")
+        qr_img = qr.make_image(fill_color="#0A0A0A", back_color="#FFFFF0").convert("RGB")
+
+        # Overlay CINÉMARIÉS logo in center
+        logo_path = Path(__file__).parent / "brand_logo.png"
+        if logo_path.exists():
+            try:
+                logo = Image.open(logo_path).convert("RGBA")
+                qr_w, qr_h = qr_img.size
+                logo_size = int(qr_w * 0.20)
+                logo = logo.resize((logo_size, logo_size), Image.LANCZOS)
+                # White background circle behind logo
+                bg = Image.new("RGB", (logo_size + 20, logo_size + 20), "#FFFFF0")
+                bg_pos = ((qr_w - bg.width) // 2, (qr_h - bg.height) // 2)
+                qr_img.paste(bg, bg_pos)
+                pos = ((qr_w - logo_size) // 2, (qr_h - logo_size) // 2)
+                qr_img.paste(logo, pos, logo)
+            except Exception as e:
+                log.warning("[guestbook] logo overlay failed: %s", e)
+
+        # Build final card: QR + title + couple name
+        card_w = qr_img.width + 80
+        card_h = qr_img.height + 220
+        card = Image.new("RGB", (card_w, card_h), "#FFFFF0")
+        draw = ImageDraw.Draw(card)
+
+        # Header
+        try:
+            font_brand = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 32)
+            font_couple = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSerif-Italic.ttf", 26)
+            font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 16)
+        except Exception:
+            font_brand = ImageFont.load_default()
+            font_couple = ImageFont.load_default()
+            font_small = ImageFont.load_default()
+
+        # Brand
+        brand = "CINÉMARIÉS"
+        brand_w = draw.textlength(brand, font=font_brand)
+        draw.text(((card_w - brand_w) // 2, 25), brand, fill="#D4AF37", font=font_brand)
+
+        # Sub label
+        sub = "LIVRE D'OR NUMÉRIQUE"
+        sub_w = draw.textlength(sub, font=font_small)
+        draw.text(((card_w - sub_w) // 2, 72), sub, fill="#0A0A0A", font=font_small)
+
+        # QR
+        card.paste(qr_img, ((card_w - qr_img.width) // 2, 110))
+
+        # Couple name
+        couple = info["wedding_name"]
+        couple_w = draw.textlength(couple, font=font_couple)
+        draw.text(((card_w - couple_w) // 2, 110 + qr_img.height + 15), couple, fill="#0A0A0A", font=font_couple)
+
+        # Instruction
+        instr = "Scannez pour laisser un mot doux"
+        instr_w = draw.textlength(instr, font=font_small)
+        draw.text(((card_w - instr_w) // 2, 110 + qr_img.height + 55), instr, fill="#666666", font=font_small)
+
         buf = io.BytesIO()
-        img.save(buf, format="PNG")
+        card.save(buf, format="PNG", optimize=True)
         buf.seek(0)
         return StreamingResponse(
             buf,
             media_type="image/png",
-            headers={"Content-Disposition": f'inline; filename="qr-{client_id}.png"',
-                     "X-Guestbook-Url": url},
+            headers={
+                "Content-Disposition": f'inline; filename="livre-or-{client_id}.png"',
+                "X-Guestbook-Url": url,
+            },
         )
+
+    # -------------------------------------------------------------------
+    # Guestbook activation toggle & public list
+    # -------------------------------------------------------------------
+    @api_router.get("/guestbook/active")
+    async def list_active_guestbooks():
+        """Public — list weddings where the guestbook is currently enabled."""
+        rows = await db.project_tracking.find(
+            {"is_guestbook_active": True},
+            {"_id": 0, "client_id": 1, "wedding_name": 1}
+        ).to_list(200)
+        items = []
+        for r in rows:
+            count = await db.guestbook_entries.count_documents({
+                "client_id": r["client_id"], "status": STATUS_PUBLISHED,
+            })
+            items.append({
+                "client_id": r["client_id"],
+                "wedding_name": r.get("wedding_name") or r["client_id"],
+                "message_count": count,
+            })
+        return {"items": items}
+
+    @api_router.patch("/admin/guestbook/{client_id}/activation")
+    async def admin_toggle_activation(client_id: str, admin: dict = Depends(require_admin)):
+        p = await db.project_tracking.find_one({"client_id": client_id})
+        if not p:
+            raise HTTPException(404, "Projet introuvable (créez d'abord un suivi de projet)")
+        new_state = not p.get("is_guestbook_active", False)
+        await db.project_tracking.update_one(
+            {"client_id": client_id},
+            {"$set": {"is_guestbook_active": new_state, "updated_at": _utcnow()}},
+        )
+        log.info("[guestbook] activation toggled for %s → %s", client_id, new_state)
+        return {"client_id": client_id, "is_guestbook_active": new_state}
+
+    # -------------------------------------------------------------------
+    # Couple's surprise view (with unlock code auth)
+    # -------------------------------------------------------------------
+    @api_router.get("/guestbook/{client_id}/reveal")
+    async def couple_reveal(client_id: str, code: str):
+        """Couple's surprise view — requires an unlock code for this wedding."""
+        info = await _wedding_info(client_id)
+        if not info:
+            raise HTTPException(404, "Mariage introuvable")
+        c = await db.unlock_codes.find_one({"code": code.strip().upper(), "client_id": client_id})
+        if not c:
+            raise HTTPException(403, "Code invalide pour ce mariage")
+        items = await db.guestbook_entries.find(
+            {"client_id": client_id, "status": STATUS_PUBLISHED}
+        ).sort("created_at", -1).to_list(500)
+        return {
+            "wedding_name": info["wedding_name"],
+            "count": len(items),
+            "items": [_to_public(e) for e in items],
+        }
 
     log.info("[guestbook] routes registered")

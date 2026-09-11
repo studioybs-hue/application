@@ -12,7 +12,12 @@ User's primary language: **French** — always respond in French.
 
 ## Current Status (2026-09-11)
 
-### ✅ Completed this session
+### ✅ Completed this session (rebuild prep)
+0. **Rebuild prep 1.6.1** :
+   - iOS Reader App audit : bandeau "Livre d'or" masqué sur iOS natif (home + guestbook-list) — évite rejet Apple
+   - Version bumped : `1.6.0` → `1.6.1` (Android versionCode 4→5, iOS buildNumber 1→13)
+   - Nouveau script `scripts/deploy_web.sh` : déploiement atomique via symlink + rotation (fini les 403 Nginx après build)
+   - Nouveau script `scripts/setup_nginx_deploy.sh` : setup initial du dossier `/var/www/cinemaries/` + conf Nginx recommandée
 1. **DNS + SSL + site remise en route** — SSL Let's Encrypt actif jusqu'au 10 déc. 2026
 2. **Migration dev → VPS** — 5 users, 33 codes, 11 videos, 4 tickets support, 911 Mo de fichiers
 3. **Feature "Suivi de projet"** implémentée à l'identique de creativindustry.com :
