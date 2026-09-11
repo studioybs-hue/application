@@ -1,0 +1,47 @@
+{
+  "summary": "Backend/HTTP-only test of the Nginx cache-control fix on https://cinemaries.fr. Created pytest suite at /app/backend/tests/test_nginx_cache_headers.py (12 tests). ALL 12 TESTS PASSED. Verified: (A) all 6 HTML SPA routes return Cache-Control containing 'no-store' and 'must-revalidate' + Pragma: no-cache; (B) hashed Expo asset /_expo/static/js/web/entry-*.js returns Cache-Control: public, max-age=31536000, immutable; (C) /api/uploads/*.jpg returns 200 with long-cache header; (D) non-regression: homepage 200 + contains 'CINÉMARIÉS', /api/videos/public 200, /api/guestbook/active 200; (E) non-regression admin: login via /api/auth/login with contact@cinemaries.fr / Reset2026! returns 200 + token, and GET /api/admin/stats with token returns 200. The Nginx fix is confirmed live in production and does not regress any API. One cosmetic observation only.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "GET/HEAD https://cinemaries.fr/{html-route}",
+        "issue": "Response contains TWO Cache-Control headers: 'no-cache' (from upstream Node/Expo server) and 'no-store, no-cache, must-revalidate' (added by Nginx). Browsers merge them so the strict Nginx value wins and behavior is correct, but it's slightly messy. To clean up, add 'proxy_hide_header Cache-Control;' before the 'add_header Cache-Control ...' directive in the location / block of /etc/nginx/sites-enabled/cinemaries. Purely cosmetic — the fix is fully functional."
+      },
+      {
+        "endpoint": "GET/HEAD https://cinemaries.fr/{html-route}",
+        "issue": "Expires header returns a future date (e.g. 'Fri, 11 Sep 2026 23:24:09 GMT') instead of the intended 'Expires: -1'. Likely the upstream server sets its own Expires and Nginx add_header appends rather than replaces. Non-blocking because Cache-Control no-store takes precedence per RFC 7234, but recommend adding 'proxy_hide_header Expires;' before the 'add_header Expires -1;' directive for consistency."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_nginx_cache_headers.py",
+    "/app/test_reports/pytest/nginx_cache_results.xml"
+  ],
+  "action_items": [
+    "OPTIONAL cosmetic cleanup only: in /etc/nginx/sites-enabled/cinemaries, add 'proxy_hide_header Cache-Control;' and 'proxy_hide_header Expires;' before the corresponding 'add_header' directives in the location / block, so upstream headers don't duplicate Nginx's. Not required — current behavior is correct because Cache-Control no-store wins over any duplicate/expires header.",
+    "No other action required. The Nginx cache-control fix is verified working in production."
+  ],
+  "critical_code_review_comments": [
+    "Fix scope is Nginx-only (no application code touched) — the change is safe and minimal.",
+    "The chosen strategy (no-store on HTML + immutable long-cache on hashed assets) is the industry-standard pattern for SPA deployments and is correct here.",
+    "Recommend keeping this test file in the regression suite — future deployments/Nginx reloads should keep these 12 tests green."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_nginx_cache_headers.py (new)"
+  ],
+  "success_rate": {
+    "backend": "100% (12/12)",
+    "frontend": "not tested (backend/HTTP-only scope as requested)"
+  },
+  "seed_data_creation": "None. Tests are read-only against production HTTPS endpoints.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Regression suite at /app/backend/tests/test_nginx_cache_headers.py validates Nginx cache-control fix on https://cinemaries.fr. Run: pytest /app/backend/tests/test_nginx_cache_headers.py -v. All 12 tests must stay green after any Nginx config change or Expo deploy. Admin creds live in /app/memory/test_credentials.md (contact@cinemaries.fr / Reset2026!). Login endpoint is /api/auth/login (not /api/admin/login).",
+  "rca_of_issue": "Original bug: Chrome aggressively cached the buggy old admin HTML (infinite spinner) because Nginx sent no Cache-Control on SPA HTML responses. Fix: /etc/nginx/sites-enabled/cinemaries now adds 'Cache-Control: no-store, no-cache, must-revalidate' + 'Pragma: no-cache' + 'Expires: -1' on location / (HTML/SPA), and 'Cache-Control: public, max-age=31536000, immutable' on location /_expo/ (fingerprinted JS/CSS assets). Verified live via curl HEAD on all 6 HTML routes and on a real hashed JS asset. Nginx was reloaded with 'nginx -s reload' (zero downtime). No app-code regression: /api/videos/public, /api/guestbook/active, /api/auth/login, /api/admin/stats all still return 200."
+}
