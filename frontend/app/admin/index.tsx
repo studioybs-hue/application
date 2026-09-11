@@ -148,6 +148,13 @@ export default function AdminDashboard() {
               testID="admin-projects-btn"
             />
             <ActionRow
+              icon="mail-open-outline"
+              label="Livre d'or numérique"
+              hint="Messages audio/vidéo laissés par les invités via QR code"
+              onPress={() => router.push("/admin/guestbook")}
+              testID="admin-guestbook-btn"
+            />
+            <ActionRow
               icon="settings-outline"
               label="Paramètres SMTP & SMS"
               hint="Configurer email IONOS + SMS Brevo (mot de passe modifiable)"

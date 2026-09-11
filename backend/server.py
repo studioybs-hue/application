@@ -23,6 +23,7 @@ from mailer import send_email, render_email, is_configured as smtp_configured, b
 from photos import register_photo_routes
 from project_tracking import register_project_tracking_routes, send_brevo_sms, bind_db as bind_pt_db
 from app_settings import register_settings_routes
+from guestbook import register_guestbook_routes
 import httpx
 
 ROOT_DIR = Path(__file__).parent
@@ -5077,6 +5078,13 @@ register_settings_routes(
     db=db,
     require_admin=require_admin,
     send_email_fn=send_email,
+    send_sms_fn=send_brevo_sms,
+)
+register_guestbook_routes(
+    api_router=api_router,
+    db=db,
+    UPLOAD_DIR=UPLOAD_DIR,
+    require_admin=require_admin,
     send_sms_fn=send_brevo_sms,
 )
 # Bind DB into helper modules so they can read admin-configured settings
