@@ -1,0 +1,33 @@
+{
+  "summary": "Backend-only regression for the 'Admin -> Client project tracking assignment' fix on production https://cinemaries.fr. Created /app/backend/tests/test_project_tracking_assignment.py with 8 tests covering the 5 scenarios A-E from the review request. ALL 8 PASS (6.04s). Verified: (A) GET /api/projects/me with test@wedding.fr's token returns project.client_id='hanifa-et-dali', wedding_name mentions Hanifa & Dali, and 9 tracking steps — the direct users.client_id lookup added to project_tracking.py works and no longer requires a wedding_claims doc. (B) GET /api/guestbook/mine returns client_id='hanifa-et-dali' with items array and count>=3. (C) Admin can GET /api/admin/projects (list contains 'hanifa-et-dali') and GET /api/admin/projects/hanifa-et-dali (returns 9 steps). (D) A freshly-registered orphan user (no client_id, no claim) receives 200 with {'project': null} — no crash. (E) Admin without claim receives a project payload with admin_preview=True. No backend changes made; the fix in /app/backend/project_tracking.py:369 (client_id/claimed_client_id first, wedding_claims fallback) behaves correctly on prod.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_project_tracking_assignment.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Frontend profile.tsx additions ('Mon espace' + 'Livre d'or' shortcuts) were NOT tested here (backend-only run per review_request). Main agent should self-verify on Expo web preview or request a frontend testing pass.",
+    "Consider adding periodic cleanup for the ephemeral orphan-*@wedding-test.fr users the test creates (one per pytest run) to avoid slow accumulation in prod DB."
+  ],
+  "critical_code_review_comments": [
+    "project_tracking.py:369 correctly prefers current.get('client_id') then claimed_client_id then wedding_claims — good defence in depth.",
+    "get_my_project's admin_preview path (line 379-383) returns the FIRST project by natural insertion order; if an admin is later assigned a client_id, they'd bypass admin_preview and see only their own project. Behaviour is consistent with the review_request; documented for future reference.",
+    "TestProjectsMeNullForUnclaimed relies on /api/auth/register being open. On prod it currently works; if registration gates are added (invite code, captcha) the test will skip — acceptable."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (8/8)", "frontend": "N/A"},
+  "seed_data_creation": "One ephemeral prod user orphan-<uuid8>@wedding-test.fr / Orphan1234! is created per run to validate the 'no client_id -> project=null' contract. No cleanup performed (no delete-my-account endpoint exercised).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Prod credentials (2026-01): admin contact@cinemaries.fr / Reset2026!, client test@wedding.fr / test1234 (users.client_id='hanifa-et-dali' set directly, NO wedding_claims doc). The fix under test is in /app/backend/project_tracking.py get_my_project (line ~358): direct users.client_id / claimed_client_id lookup precedes the wedding_claims fallback. Regression suite is /app/backend/tests/test_project_tracking_assignment.py (8 tests, ~6s). Frontend changes in /app/frontend/app/(tabs)/profile.tsx (wedding + guestbook shortcuts) still need UI validation.",
+  "rca_of_issue": "Original bug: /api/projects/me only queried the wedding_claims collection, so a user assigned to a wedding by the admin via users.client_id (without a claim record) got project=null. Fix reads current.get('client_id') or current.get('claimed_client_id') first, falls back to wedding_claims. Verified end-to-end on prod: test@wedding.fr now gets the hanifa-et-dali project with all 9 tracking steps."
+}

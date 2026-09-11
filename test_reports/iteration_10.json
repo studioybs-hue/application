@@ -1,0 +1,56 @@
+{
+  "summary": "Backend-only validation of the admin dashboard 'infinite spinner' fix on PRODUCTION (https://cinemaries.fr). 3 tests PASSED: (1) invalid Bearer token on /api/admin/stats correctly returns 401 (which is what the new frontend global 401 handler consumes); (2) missing Authorization header returns 401/403; (3) Nginx redirect http://cinemaries.com/ -> https://cinemaries.fr/ is a 301 followed by a 200 on .fr. BLOCKER: 4 tests could not run because BOTH production credentials in /app/memory/test_credentials.md are currently rejected with HTTP 401 'Identifiants incorrects': (a) contact@cinemaries.fr / Reset2026! (also tried Reset2026New!), (b) test@wedding.fr / test1234. Backend itself is healthy (POST /api/auth/login with empty body returns 422; unknown routes return 404), so the login logic is up — only the passwords no longer match what the DB stores. This blocks Test 2 (valid admin -> 200 on /admin/stats with users/premium/videos/codes_total), Test 4 endpoints (/auth/me, /auth/2fa/status), and Test 5 (non-admin -> 403). The 401-handling half of the fix (frontend contract) is verified; the admin-authorized path could not be verified end-to-end due to the credentials issue.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "POST /api/auth/login (prod)",
+        "issue": "Admin account contact@cinemaries.fr rejects BOTH Reset2026! and Reset2026New! with 401 'Identifiants incorrects'. Same account was successfully rotated + reverted in iteration_9. Either the password was changed again out-of-band, or is_active was flipped, or the passlib 'wrap detection' bug flagged in iteration_9 re-appeared. Cannot verify /api/admin/stats 200 path without an admin token.",
+        "priority": "CRITICAL"
+      },
+      {
+        "endpoint": "POST /api/auth/login (prod)",
+        "issue": "Client account test@wedding.fr / test1234 also returns 401. Blocks the non-admin 403 security test on /api/admin/stats.",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "GET /api/health",
+        "issue": "Returns 404 in production — no health endpoint is exposed, which makes ops probes harder. Not part of this fix but worth adding."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_admin_dashboard_401_fix.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "URGENT: Re-reset the admin password for contact@cinemaries.fr (bcrypt-direct, same procedure as iteration_9) so ops + tests can authenticate again. Confirm is_active=true, two_fa_enabled=false. Then update /app/memory/test_credentials.md if the value changes.",
+    "URGENT: Verify test@wedding.fr / test1234 in the prod users collection — either re-seed it or update test_credentials.md to reflect the real value.",
+    "Once credentials are restored, re-run: pytest /app/backend/tests/test_admin_dashboard_401_fix.py -v — the 4 blocked tests should then confirm /api/admin/stats returns 200 with keys {users, premium, videos, codes_total}, /auth/me and /auth/2fa/status work, and a non-admin token gets 403 on /admin/stats.",
+    "Consider adding a /api/health endpoint (returns 200) so the dashboard/uptime probes can detect prod outages cleanly.",
+    "Investigate why admin credentials keep drifting on production between test runs — likely the passlib bcrypt wrap-detection bug flagged in iteration_9 has NOT been fixed at the source and is silently corrupting the stored hash on every /auth/change-password call."
+  ],
+  "critical_code_review_comments": [
+    "The 401 contract on /api/admin/stats is correct and stable: invalid token -> 401, missing token -> 401/403. The frontend 'cm:unauthorized' global handler will therefore fire reliably and eliminate the infinite spinner regardless of why the token became invalid (stale, expired, revoked).",
+    "Nginx server block for cinemaries.com -> https://cinemaries.fr is a proper 301 (permanent). Good for SEO + saves the user from the SSL error they hit."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_admin_dashboard_401_fix.py"
+  ],
+  "success_rate": {
+    "backend": "43% (3 passed, 1 skipped, 3 errored out of 7 — all failures are credential-blocked, NOT fix-related)",
+    "frontend": "N/A (not in scope per review request)"
+  },
+  "seed_data_creation": "None. Tests run directly against production. No data written because admin login was rejected before any state-changing call could be made.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Prod credentials in /app/memory/test_credentials.md are currently BROKEN as of 2026-01: both contact@cinemaries.fr (Reset2026! and Reset2026New!) and test@wedding.fr (test1234) return 401 on https://cinemaries.fr/api/auth/login. Do NOT waste cycles trying variations — ask main agent to re-reset via SSH+Mongo (same procedure as iteration_9's RCA). The test file /app/backend/tests/test_admin_dashboard_401_fix.py already covers the 5 scenarios from the review request; once credentials are fixed just re-run pytest and all 7 cases should pass.",
+  "rca_of_issue": "For the original bug (admin dashboard infinite spinner): backend behaviour is correct — /api/admin/stats returns 401 for invalid/expired tokens. The frontend fix (global 401 handler in client.ts, AuthContext listener on 'cm:unauthorized', AdminDashboard error state + redirect to /auth/login) is the right shape and will resolve the spinner. Verified backend contract: invalid token -> 401 (confirmed), missing token -> 401/403 (confirmed). Nginx cinemaries.com -> cinemaries.fr redirect confirmed as 301. The remaining scenarios (admin happy path, non-admin 403) are BLOCKED by a separate production credentials issue that must be fixed before final sign-off."
+}

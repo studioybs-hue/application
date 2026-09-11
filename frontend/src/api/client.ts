@@ -43,6 +43,15 @@ export async function api<T = any>(path: string, opts: Options = {}): Promise<T>
     data = text;
   }
   if (!res.ok) {
+    // Global 401 handling: stale/invalid token → clear it so the app doesn't
+    // hang forever on protected pages. Login endpoints skip this via auth:false.
+    if (res.status === 401 && opts.auth !== false) {
+      try { await clearToken(); } catch {}
+      // Signal to listeners (AuthContext) that the session is gone.
+      if (typeof window !== "undefined" && typeof (window as any).dispatchEvent === "function") {
+        try { (window as any).dispatchEvent(new Event("cm:unauthorized")); } catch {}
+      }
+    }
     const detail = (data && data.detail) || `Erreur ${res.status}`;
     let message: string;
     if (typeof detail === "string") {

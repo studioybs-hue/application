@@ -185,13 +185,43 @@ export default function ProfileScreen() {
               <ProjectTrackingView project={project} />
             </View>
           ) : null}
-          <Item
-            icon="heart-outline"
-            label={(user as any).claimed_client_name ? `💍 Mon mariage : ${(user as any).claimed_client_name}` : "💍 Mon mariage — Revendiquer"}
-            onPress={() => router.push("/claim-wedding")}
-            testID="profile-claim-btn"
-            accent={!(user as any).claimed_client_id}
-          />
+          {/* Direct link to the couple's wedding space + guestbook — shows for
+              users linked to a wedding (either directly via client_id or claimed). */}
+          {(() => {
+            const anyUser = user as any;
+            const weddingId: string | null = anyUser.client_id || anyUser.claimed_client_id || null;
+            const weddingName: string | null = anyUser.claimed_client_name || null;
+            if (!weddingId) {
+              return (
+                <Item
+                  icon="heart-outline"
+                  label="💍 Mon mariage — Revendiquer"
+                  onPress={() => router.push("/claim-wedding")}
+                  testID="profile-claim-btn"
+                  accent
+                />
+              );
+            }
+            return (
+              <>
+                <Item
+                  icon="heart-outline"
+                  label={weddingName ? `💍 Mon espace : ${weddingName}` : "💍 Mon espace mariage"}
+                  onPress={() => router.push({ pathname: "/wedding/[clientId]", params: { clientId: weddingId } })}
+                  testID="profile-my-wedding-btn"
+                  accent
+                />
+                {!IS_IOS_NATIVE && (
+                  <Item
+                    icon="mail-open-outline"
+                    label="💌 Découvrir les messages du livre d'or"
+                    onPress={() => router.push({ pathname: "/guestbook/[clientId]/reveal", params: { clientId: weddingId } })}
+                    testID="profile-guestbook-reveal-btn"
+                  />
+                )}
+              </>
+            );
+          })()}
           {!IS_IOS_NATIVE && (
             <Item
               icon="key-outline"

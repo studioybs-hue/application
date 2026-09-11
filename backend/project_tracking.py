@@ -357,19 +357,35 @@ def register_project_tracking_routes(
     # -----------------------------
     @api_router.get("/projects/me")
     async def get_my_project(current: dict = Depends(get_current_user)):
-        """Return the tracking of the wedding the current user has claimed (if any).
-        Admins get the first project as a preview (for admin testing)."""
-        claim = await db.wedding_claims.find_one({"user_id": current["id"]}, {"_id": 0})
-        if not claim:
+        """Return the tracking of the wedding the current user is linked to.
+
+        The user is linked either:
+        - directly, via `users.client_id` set by the admin, OR
+        - via a claim record (users.claimed_client_id / wedding_claims collection)
+
+        Admins get the first project as a preview (for admin testing).
+        """
+        # 1) Direct link on the user document (set by admin)
+        wedding_id = current.get("client_id") or current.get("claimed_client_id")
+
+        # 2) Fallback to the wedding_claims collection
+        if not wedding_id:
+            claim = await db.wedding_claims.find_one({"user_id": current["id"]}, {"_id": 0})
+            if claim:
+                wedding_id = claim.get("client_id")
+
+        if not wedding_id:
+            # Admin preview: return the first project so admins can inspect the UI
             if current.get("is_admin"):
                 p = await db.project_tracking.find_one({}, {"_id": 0})
                 if not p:
                     return {"project": None, "hint": "Aucun projet en base. Créez-en un depuis l'admin."}
                 return {"project": await _project_to_public(p), "admin_preview": True}
             return {"project": None}
-        p = await db.project_tracking.find_one({"client_id": claim["client_id"]})
+
+        p = await db.project_tracking.find_one({"client_id": wedding_id})
         if not p:
-            return {"project": None, "client_id": claim["client_id"]}
+            return {"project": None, "client_id": wedding_id}
         return {"project": await _project_to_public(p)}
 
     # -----------------------------

@@ -63,6 +63,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     })();
   }, [refresh]);
 
+  // Global 401 handler: when the api client detects an invalid token, it
+  // fires a "cm:unauthorized" event. We drop the user so the app returns to
+  // its logged-out state (no infinite spinners on protected pages).
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handler = () => setUser(null);
+    (window as any).addEventListener("cm:unauthorized", handler);
+    return () => (window as any).removeEventListener("cm:unauthorized", handler);
+  }, []);
+
   const login = async (email: string, password: string) => {
     const r: any = await authApi.login(email, password);
     if (r?.requires_2fa) {

@@ -29,17 +29,25 @@ export default function AdminDashboard() {
   const router = useRouter();
   const [stats, setStats] = useState<Stats | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
+    setError(null);
     try {
       const s = await api<Stats>("/admin/stats");
       setStats(s);
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
+      // On 401 the api client already cleared the token — redirect to login
+      if (e?.status === 401) {
+        router.replace("/auth/login");
+        return;
+      }
+      setError(e?.message || "Impossible de charger le tableau de bord");
     } finally {
       setRefreshing(false);
     }
-  }, []);
+  }, [router]);
 
   useEffect(() => {
     load();
@@ -59,9 +67,25 @@ export default function AdminDashboard() {
       </View>
 
       {!stats ? (
-        <View style={styles.loading}>
-          <ActivityIndicator color={colors.gold} />
-        </View>
+        error ? (
+          <View style={styles.loading}>
+            <Ionicons name="alert-circle" size={48} color={colors.gold} />
+            <Text style={{ color: colors.ivory, fontSize: 15, marginTop: 12, textAlign: "center", paddingHorizontal: 24 }}>
+              {error}
+            </Text>
+            <TouchableOpacity
+              onPress={load}
+              style={{ marginTop: 20, paddingVertical: 12, paddingHorizontal: 20, borderRadius: 8, borderWidth: 1, borderColor: colors.gold }}
+              testID="admin-retry"
+            >
+              <Text style={{ color: colors.gold, fontWeight: "700" }}>Réessayer</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <View style={styles.loading}>
+            <ActivityIndicator color={colors.gold} />
+          </View>
+        )
       ) : (
         <ScrollView
           contentContainerStyle={{ padding: spacing.md, paddingBottom: spacing.xl }}

@@ -1,0 +1,29 @@
+{
+  "summary": "Re-ran /app/backend/tests/test_admin_dashboard_401_fix.py after credential restoration (contact@cinemaries.fr password reset to Reset2026! and test@wedding.fr / test1234 created in prod). All 7 backend tests now PASS on https://cinemaries.fr in 2.69s. The previously blocked tests (admin_token / client_token fixtures and their dependents) are green: admin login returns access_token without requiring 2FA, /admin/stats returns 200 with {users, premium, videos, codes_total} all int >= 0, /auth/me returns email=contact@cinemaries.fr, /auth/2fa/status returns enabled=False, and non-admin test@wedding.fr correctly receives 403 on /admin/stats. Invalid/missing token still returns 401/403 and cinemaries.com -> https://cinemaries.fr 301 redirect still works. No frontend testing performed (backend only per request). No code changes made.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_admin_dashboard_401_fix.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Admin should change temporary password Reset2026! after next login via /security (per credentials note).",
+    "Re-enable 2FA by email only after IONOS SMTP is unblocked."
+  ],
+  "critical_code_review_comments": [],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (7/7)", "frontend": "N/A"},
+  "seed_data_creation": "None. Main agent had already reset admin password and created test@wedding.fr in prod before this re-run.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Prod credentials that WORK (2026-01): admin contact@cinemaries.fr / Reset2026! (2FA disabled), client test@wedding.fr / test1234. Test suite /app/backend/tests/test_admin_dashboard_401_fix.py is the reference regression for the admin dashboard 401 fix and nginx .com->.fr redirect. If admin password gets rotated again, update ADMIN_PASSWORD constant at the top of that file and /app/memory/test_credentials.md in sync.",
+  "rca_of_issue": "Iteration_10 blockage was purely a credential drift (admin pw unknown + client user missing in prod), not a code defect. After main agent's bcrypt reset for contact@cinemaries.fr and creation of test@wedding.fr in production, the two login fixtures now succeed and all downstream assertions on /admin/stats, /auth/me, /auth/2fa/status and 403 for non-admin pass without any code change."
+}
