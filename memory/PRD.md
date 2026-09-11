@@ -12,6 +12,18 @@ User's primary language: **French** — always respond in French.
 
 ## Current Status (2026-09-11)
 
+### 🚨 Hotfix 2026-09-11 (soir) — Home page en loader infini
+- **Root cause** : Le dossier VPS `/var/www/cinemaries/frontend/app/` avait été corrompu lors d'un rsync précédent. `app/index.tsx` contenait le code de `admin/index.tsx` (dashboard admin) au lieu du splash. Plusieurs fichiers admin (`videos.tsx`, `codes.tsx`, `users.tsx`, `hosting.tsx`, `settings.tsx`, `contact.tsx`, `devis.tsx`, `deletion-requests.tsx`, `wedding-covers.tsx`, `wedding-photos/*.tsx`, `video-edit/*.tsx`, `support/*.tsx`, `guestbook/*.tsx`) étaient DUPLIQUÉS à la racine de `app/`, court-circuitant les routes normales.
+- **Symptôme** : `https://cinemaries.fr/` restait bloqué sur "ADMIN CINÉMARIÉS" + spinner doré infini (même en navigation privée et sur mobile). L'app faisait un appel à `/api/admin/stats` renvoyant 401.
+- **Fix** :
+  1. Backup du VPS `app/` → `app.bak.20260911-233503`
+  2. `rsync -avz --delete /app/frontend/app/ VPS:/var/www/cinemaries/frontend/app/` (targeted sur `app/` uniquement)
+  3. Rebuild : `npx expo export --platform web --output-dir dist.new` sur le VPS
+  4. Atomic swap : `dist` → `dist.old.20260911-233653`, `dist.new` → `dist`
+  5. `nginx -s reload`
+- **Résultat** : `/` affiche le splash CINÉMARIÉS puis redirige vers `/home` (hero, tabs, guestbook actif). `/admin`, `/discover`, `/auth/login` OK.
+- **Sanity check** : ⚠️ `app.bak.previous` sur le VPS pourrait contenir un app.tsx corrompu — utiliser désormais le nouveau `app.bak.20260911-233503` comme référence.
+
 ### ✅ Completed this session (rebuild prep)
 0. **Rebuild prep 1.6.1** :
    - iOS Reader App audit : bandeau "Livre d'or" masqué sur iOS natif (home + guestbook-list) — évite rejet Apple
