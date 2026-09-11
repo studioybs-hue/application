@@ -1,0 +1,38 @@
+{
+  "summary": "Backend-only validation on PRODUCTION (https://cinemaries.fr) of the admin password reset + 2FA disable fix for contact@cinemaries.fr. All 5 scenarios (8 pytest cases) passed: (1) login without 2FA returns 200 with access_token, no requires_2fa, user.is_admin=true, user.is_active=true; (2) JWT grants access to /auth/me and /auth/2fa/status (enabled=false); (3) /auth/change-password returns ok=true; (4) new password works, old password rejected with 401; (5) password successfully reverted to Reset2026! to keep test_credentials.md accurate.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_prod_admin_login.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "SMTP IONOS is still blocked externally — do NOT re-enable email 2FA on contact@cinemaries.fr until IONOS unblocks external SMTP, otherwise the same lockout will recur.",
+    "Investigate the passlib 'wrap detection' bug that forced the main agent to use bcrypt directly — this bug will re-appear on future password changes performed through the same code path and should be fixed at the source (likely passlib version pin or replacing passlib with plain bcrypt in auth service).",
+    "Consider adding an admin-only recovery endpoint / self-service '2FA lost access' flow so that a locked-out admin does not require SSH+DB access to recover."
+  ],
+  "critical_code_review_comments": [
+    "The passlib bcrypt wrap-detection issue mentioned in the request is a latent risk: verify hashing uses `bcrypt` directly or pin passlib to a working version.",
+    "Login endpoint correctly returns HTTP 401 with clear error for invalid credentials (verified in Test 4)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_prod_admin_login.py"
+  ],
+  "success_rate": {
+    "backend": "100% (8/8 pytest cases passed)",
+    "frontend": "N/A (not in scope)"
+  },
+  "seed_data_creation": "None. Tests ran directly against production admin account. Password was temporarily rotated to Reset2026New! and reverted to Reset2026! at the end so test_credentials.md remains accurate.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Password for contact@cinemaries.fr on production is Reset2026! (2FA disabled). If future tests change it, always revert. Production URL for backend testing: https://cinemaries.fr. SMTP IONOS still blocked → email-based 2FA and password-reset emails will fail.",
+  "rca_of_issue": "Root cause: admin had two_fa_enabled=true with two_fa_method='email' while the IONOS SMTP relay was blocked, so login stayed stuck at requires_2fa=true because no OTP could ever be delivered. Additionally, is_active was None (falsy) and a passlib bcrypt 'wrap detection' quirk prevented normal password rotation. Fix (applied by main agent via SSH+Mongo): bcrypt-hash Reset2026! directly, set is_active=true, two_fa_enabled=false, two_fa_method=null, and $unset two_fa_secret/two_fa_recovery_codes/totp_secret. Verification: all 8 pytest cases pass on the live prod endpoint (login → me → 2fa/status → change-password → old rejected → revert)."
+}
