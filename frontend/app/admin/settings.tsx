@@ -107,7 +107,7 @@ export default function AdminSettings() {
       if (smtpForm.password.trim()) body.password = smtpForm.password.trim();
       const updated = await api<SmtpCfg>("/admin/settings/smtp", {
         method: "PUT",
-        body: JSON.stringify(body),
+        body: body,
       });
       setSmtp(updated);
       setSmtpForm({ ...smtpForm, password: "" });
@@ -128,7 +128,7 @@ export default function AdminSettings() {
     try {
       const r = await api<{ ok: boolean; error?: string }>(
         "/admin/settings/smtp/test",
-        { method: "POST", body: JSON.stringify({ to: smtpTestTo.trim() }) }
+        { method: "POST", body: { to: smtpTestTo.trim() } }
       );
       if (r.ok) {
         Alert.alert("✅ Envoyé", `Email de test envoyé à ${smtpTestTo}. Vérifiez la boîte de réception.`);
@@ -153,7 +153,7 @@ export default function AdminSettings() {
       if (brevoForm.api_key.trim()) body.api_key = brevoForm.api_key.trim();
       const updated = await api<BrevoCfg>("/admin/settings/brevo-sms", {
         method: "PUT",
-        body: JSON.stringify(body),
+        body: body,
       });
       setBrevo(updated);
       setBrevoForm({ ...brevoForm, api_key: "" });
@@ -176,10 +176,10 @@ export default function AdminSettings() {
         "/admin/settings/brevo-sms/test",
         {
           method: "POST",
-          body: JSON.stringify({
+          body: {
             to: brevoTestTo.trim(),
             message: "CINEMARIES: test SMS depuis l'admin.",
-          }),
+          },
         }
       );
       if (r.ok) {

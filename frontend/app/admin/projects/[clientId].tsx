@@ -68,7 +68,7 @@ export default function AdminProjectDetail() {
         `/admin/projects/${clientId}/steps/${editingStep.key}`,
         {
           method: "PATCH",
-          body: JSON.stringify({ status, notify }),
+          body: { status, notify },
         }
       );
       setProject(updated);
@@ -85,13 +85,13 @@ export default function AdminProjectDetail() {
     try {
       const updated = await api<ProjectTracking>(`/admin/projects/${clientId}`, {
         method: "PATCH",
-        body: JSON.stringify({
+        body: {
           wedding_name: pForm.wedding_name.trim() || null,
           owner_email: pForm.owner_email.trim() || null,
           owner_phone: pForm.owner_phone.trim() || null,
           admin_note: pForm.admin_note,
           eta_delivery: pForm.eta_delivery.trim() || null,
-        }),
+        },
       });
       setProject(updated);
       setEditProject(false);

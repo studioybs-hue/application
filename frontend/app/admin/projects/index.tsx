@@ -70,12 +70,12 @@ export default function AdminProjectsList() {
     try {
       await api("/admin/projects", {
         method: "POST",
-        body: JSON.stringify({
+        body: {
           client_id: creating.client_id,
           wedding_name: form.wedding_name.trim(),
           owner_email: form.owner_email.trim() || null,
           owner_phone: form.owner_phone.trim() || null,
-        }),
+        },
       });
       setCreating(null);
       await load();

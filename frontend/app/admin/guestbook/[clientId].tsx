@@ -123,7 +123,7 @@ function AdminGuestbookDetail({ clientId }: { clientId: string }) {
 
   const toggleStatus = async (id: string) => {
     try {
-      await api(`/admin/guestbook/${id}`, { method: "PATCH", body: JSON.stringify({}) });
+      await api(`/admin/guestbook/${id}`, { method: "PATCH", body: {} });
       await load();
     } catch (e: any) {
       Alert.alert("Erreur", e?.message);

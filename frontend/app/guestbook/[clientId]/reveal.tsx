@@ -37,17 +37,53 @@ export default function GuestbookRevealPage() {
   const { clientId } = useLocalSearchParams<{ clientId: string }>();
   const [code, setCode] = useState("");
   const [loading, setLoading] = useState(false);
+  const [autoLoading, setAutoLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<{ wedding_name: string; count: number; items: Entry[] } | null>(null);
   const [revealedCount, setRevealedCount] = useState(0);
   const introAnim = useRef(new Animated.Value(0)).current;
+
+  const revealItems = (items: Entry[]) => {
+    Animated.timing(introAnim, {
+      toValue: 1,
+      duration: 1500,
+      easing: Easing.out(Easing.ease),
+      useNativeDriver: true,
+    }).start();
+    let i = 0;
+    const total = items.length;
+    const revealInterval = setInterval(() => {
+      i++;
+      setRevealedCount(i);
+      if (i >= total) clearInterval(revealInterval);
+    }, 700);
+  };
+
+  // Try authenticated access first — logged-in couple doesn't need a code
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await api<any>(`/guestbook/mine`);
+        // If user's client_id matches the URL, we can auto-reveal
+        if (r && r.client_id === clientId) {
+          setData(r);
+          revealItems(r.items || []);
+        }
+      } catch {
+        // Not logged in or client mismatch — fall back to code entry
+      } finally {
+        setAutoLoading(false);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clientId]);
 
   if (IS_IOS_NATIVE) {
     return (
       <SafeAreaView style={styles.root}>
         <View style={styles.center}>
           <Ionicons name="globe-outline" size={48} color={colors.gold} />
-          <Text style={styles.title}>Livre d'or</Text>
+          <Text style={styles.title}>Livre d&apos;or</Text>
           <Text style={styles.subtle}>
             La révélation surprise est disponible sur cinemaries.fr depuis Safari{"\n"}pour une meilleure expérience 💌
           </Text>
@@ -66,26 +102,25 @@ export default function GuestbookRevealPage() {
     try {
       const r = await api<any>(`/guestbook/${clientId}/reveal?code=${encodeURIComponent(code.trim())}`);
       setData(r);
-      Animated.timing(introAnim, {
-        toValue: 1,
-        duration: 1500,
-        easing: Easing.out(Easing.ease),
-        useNativeDriver: true,
-      }).start();
-      // Progressively reveal cards
-      let i = 0;
-      const total = r.items.length;
-      const revealInterval = setInterval(() => {
-        i++;
-        setRevealedCount(i);
-        if (i >= total) clearInterval(revealInterval);
-      }, 700);
+      revealItems(r.items || []);
     } catch (e: any) {
       setError(e?.message || "Code invalide");
     } finally {
       setLoading(false);
     }
   };
+
+  // Show a loader while we check the authenticated fast-path
+  if (autoLoading) {
+    return (
+      <SafeAreaView style={styles.root}>
+        <View style={styles.center}>
+          <ActivityIndicator color={colors.gold} size="large" />
+          <Text style={[styles.subtle, { marginTop: 16 }]}>Un instant...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   if (!data) {
     return (

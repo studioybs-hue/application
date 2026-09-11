@@ -390,6 +390,21 @@ export default function WeddingScreen() {
               </TouchableOpacity>
             )}
 
+            {!IS_IOS_NATIVE && wedding.is_my_wedding && (
+              <TouchableOpacity
+                style={styles.guestbookBtn}
+                onPress={() => router.push({ pathname: "/guestbook/[clientId]/reveal", params: { clientId: String(clientId) } })}
+                testID="wedding-guestbook-btn"
+              >
+                <Text style={{ fontSize: 22 }}>💌</Text>
+                <View style={{ flex: 1, marginLeft: 12 }}>
+                  <Text style={styles.guestbookBtnTitle}>Livre d&apos;or numérique</Text>
+                  <Text style={styles.guestbookBtnSub}>Découvrez les messages surprise de vos invités</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={20} color={colors.gold} />
+              </TouchableOpacity>
+            )}
+
             <Text style={styles.sectionTitle}>Films de ce mariage</Text>
             {wedding.videos.map((v) => (
               <TouchableOpacity
@@ -601,6 +616,18 @@ const styles = StyleSheet.create({
   unlockedSection: { padding: spacing.md },
   unlockedBanner: { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: "rgba(46,125,50,0.15)", borderWidth: 1, borderColor: colors.success, padding: spacing.md, borderRadius: radii.sm, marginBottom: spacing.lg },
   unlockedBannerTxt: { color: colors.ivory, fontSize: 13, fontWeight: "600" },
+  guestbookBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: spacing.md,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderColor: colors.gold,
+    backgroundColor: "rgba(212, 175, 55, 0.06)",
+    marginBottom: spacing.md,
+  },
+  guestbookBtnTitle: { color: colors.gold, fontSize: 15, fontWeight: "700" },
+  guestbookBtnSub: { color: colors.textSecondary, fontSize: 12, marginTop: 2 },
   sectionTitle: { color: colors.ivory, fontSize: 20, fontWeight: "700", marginBottom: spacing.md },
   videoCard: { backgroundColor: colors.surface, borderRadius: radii.md, overflow: "hidden", marginBottom: spacing.md },
   videoThumb: { width: "100%", aspectRatio: 16 / 9, backgroundColor: colors.surfaceElevated },

@@ -5086,6 +5086,7 @@ register_guestbook_routes(
     UPLOAD_DIR=UPLOAD_DIR,
     require_admin=require_admin,
     send_sms_fn=send_brevo_sms,
+    get_current_user=get_current_user,
 )
 # Bind DB into helper modules so they can read admin-configured settings
 bind_mailer_db(db)

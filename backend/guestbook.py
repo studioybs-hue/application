@@ -87,6 +87,7 @@ def register_guestbook_routes(
     UPLOAD_DIR: str,
     require_admin,
     send_sms_fn=None,
+    get_current_user=None,
 ):
     """Attach guestbook routes."""
 
@@ -450,5 +451,35 @@ def register_guestbook_routes(
             "count": len(items),
             "items": [_to_public(e) for e in items],
         }
+
+    # -------------------------------------------------------------------
+    # Couple's authenticated view (no code needed — uses client_id from user)
+    # -------------------------------------------------------------------
+    if get_current_user is not None:
+        @api_router.get("/guestbook/mine")
+        async def my_guestbook(current_user: dict = Depends(get_current_user)):
+            """
+            Authenticated couple's view.
+            Returns guestbook entries for the wedding owned by the logged-in user.
+            No unlock code needed — auth via Bearer token is sufficient.
+            """
+            client_id = current_user.get("client_id")
+            if not client_id:
+                raise HTTPException(
+                    403,
+                    "Aucun mariage lié à votre compte. Contactez votre wedding videographer."
+                )
+            info = await _wedding_info(client_id)
+            if not info:
+                raise HTTPException(404, "Mariage introuvable")
+            items = await db.guestbook_entries.find(
+                {"client_id": client_id, "status": STATUS_PUBLISHED}
+            ).sort("created_at", -1).to_list(500)
+            return {
+                "client_id": client_id,
+                "wedding_name": info["wedding_name"],
+                "count": len(items),
+                "items": [_to_public(e) for e in items],
+            }
 
     log.info("[guestbook] routes registered")

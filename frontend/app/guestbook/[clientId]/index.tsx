@@ -75,12 +75,18 @@ export default function GuestbookPage() {
       Alert.alert("Web uniquement", "Ouvrez cette page depuis un navigateur pour enregistrer.");
       return;
     }
-    // Use a native file input with capture for mobile browsers (opens camera/mic)
+    // Use a native file input — accept alone controls the file type filter.
+    // On mobile, accept="audio/*" opens the voice recorder, accept="video/*" opens the camera.
+    // NOTE: `capture` attribute values must be "user" or "environment" (spec).
+    //       Using invalid values like "microphone" makes browsers fall back to video capture.
+    //       For audio, we OMIT capture entirely so the OS picks the right recorder from `accept`.
     const input = document.createElement("input");
     input.type = "file";
     input.accept = type === "audio" ? "audio/*" : "video/*";
-    // 'capture' hint for mobile — 'user' = front camera / mic
-    (input as any).capture = type === "audio" ? "microphone" : "user";
+    if (type === "video") {
+      // Only set capture for video (front camera hint on mobile)
+      (input as any).capture = "user";
+    }
     input.onchange = async () => {
       const file = (input.files && input.files[0]) as any;
       if (!file) return;
@@ -124,12 +130,12 @@ export default function GuestbookPage() {
     try {
       await api(`/guestbook/${clientId}/entries`, {
         method: "POST",
-        body: JSON.stringify({
+        body: {
           guest_name: name.trim() || null,
           message_text: text.trim() || null,
           media_type: media?.type || null,
           media_url: media?.url || null,
-        }),
+        },
       });
       setSent(true);
     } catch (e: any) {
