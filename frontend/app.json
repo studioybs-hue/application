@@ -2,7 +2,7 @@
   "expo": {
     "name": "Cinémariés",
     "slug": "cinemaries",
-    "version": "1.6.1",
+    "version": "1.6.3",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "cinemaries",
@@ -11,7 +11,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "fr.creativindustry.cinemaries",
-      "buildNumber": "13",
+      "buildNumber": "14",
       "config": {
         "usesNonExemptEncryption": false
       },
@@ -22,15 +22,12 @@
           "_googlecast._tcp"
         ],
         "NSPhotoLibraryUsageDescription": "Choisir une photo pour votre mariage.",
-        "NSPhotoLibraryAddUsageDescription": "Enregistrer vos souvenirs dans votre galerie.",
-        "NSCameraUsageDescription": "Prendre une photo pour votre mariage.",
-        "NSMicrophoneUsageDescription": "Lecture audio de vos films de mariage.",
-        "NSUserNotificationsUsageDescription": "Vous prévenir quand votre film est en ligne."
+        "NSPhotoLibraryAddUsageDescription": "Enregistrer vos souvenirs dans votre galerie."
       }
     },
     "android": {
       "package": "fr.cinemaries.app",
-      "versionCode": 5,
+      "versionCode": 6,
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#000"
