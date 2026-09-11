@@ -19,8 +19,10 @@ from pydantic import BaseModel, EmailStr, Field
 from typing import List, Optional
 from datetime import datetime, timedelta, timezone
 
-from mailer import send_email, render_email, is_configured as smtp_configured
+from mailer import send_email, render_email, is_configured as smtp_configured, bind_db as bind_mailer_db
 from photos import register_photo_routes
+from project_tracking import register_project_tracking_routes, send_brevo_sms, bind_db as bind_pt_db
+from app_settings import register_settings_routes
 import httpx
 
 ROOT_DIR = Path(__file__).parent
@@ -5064,6 +5066,22 @@ register_photo_routes(
     get_current_user=get_optional_user,
     require_admin=require_admin,
 )
+register_project_tracking_routes(
+    api_router=api_router,
+    db=db,
+    get_current_user=get_current_user,
+    require_admin=require_admin,
+)
+register_settings_routes(
+    api_router=api_router,
+    db=db,
+    require_admin=require_admin,
+    send_email_fn=send_email,
+    send_sms_fn=send_brevo_sms,
+)
+# Bind DB into helper modules so they can read admin-configured settings
+bind_mailer_db(db)
+bind_pt_db(db)
 app.include_router(api_router)
 app.add_middleware(
     CORSMiddleware,

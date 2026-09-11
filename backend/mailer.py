@@ -1,5 +1,10 @@
 """Lightweight SMTP transactional mailer for CINÉMARIÉS.
 Uses Python stdlib (smtplib) to avoid external deps.
+
+Configuration is loaded from `app_settings` collection first (via
+`app_settings.get_smtp_config(db)`), and falls back to environment variables.
+This allows admins to update the SMTP password from the admin panel without
+having to SSH into the server.
 """
 from __future__ import annotations
 import os
@@ -13,8 +18,28 @@ from typing import Optional
 
 log = logging.getLogger("mailer")
 
+# Module-level reference to the DB, injected by server.py at startup.
+_db = None
 
-def _get_cfg():
+
+def bind_db(db):
+    """Called once by server.py to allow mailer to query app_settings."""
+    global _db
+    _db = db
+
+
+async def _get_cfg_async() -> dict:
+    """Return the effective SMTP config (DB > env)."""
+    if _db is not None:
+        try:
+            from app_settings import get_smtp_config
+            return await get_smtp_config(_db)
+        except Exception as e:
+            log.warning("[mailer] Failed to fetch DB config, fallback env: %s", e)
+    return _get_cfg_env()
+
+
+def _get_cfg_env() -> dict:
     return {
         "host": os.environ.get("SMTP_HOST", ""),
         "port": int(os.environ.get("SMTP_PORT", "465") or 465),
@@ -26,14 +51,18 @@ def _get_cfg():
     }
 
 
+# Kept for backwards compatibility (sync callers)
+def _get_cfg():
+    return _get_cfg_env()
+
+
 def is_configured() -> bool:
-    cfg = _get_cfg()
+    cfg = _get_cfg_env()
     return bool(cfg["host"] and cfg["user"] and cfg["password"] and cfg["from_email"])
 
 
-def _send_sync(to_email: str, subject: str, html: str, text: Optional[str] = None) -> bool:
-    cfg = _get_cfg()
-    if not is_configured():
+def _send_sync(cfg: dict, to_email: str, subject: str, html: str, text: Optional[str] = None) -> bool:
+    if not (cfg.get("host") and cfg.get("user") and cfg.get("password") and cfg.get("from_email")):
         log.warning("[mailer] SMTP not configured; skipping email to %s", to_email)
         return False
     try:
@@ -71,8 +100,9 @@ def _html_to_text(html: str) -> str:
 
 
 async def send_email(to_email: str, subject: str, html: str, text: Optional[str] = None) -> bool:
-    """Async wrapper — runs SMTP in a thread to avoid blocking the event loop."""
-    return await asyncio.to_thread(_send_sync, to_email, subject, html, text)
+    """Async wrapper — fetches config from DB (with env fallback) and sends via SMTP in a thread."""
+    cfg = await _get_cfg_async()
+    return await asyncio.to_thread(_send_sync, cfg, to_email, subject, html, text)
 
 
 # --- Brand-styled HTML wrapper ---

@@ -8,11 +8,35 @@ import { useConfirm } from "@/src/ui/ConfirmDialog";
 import { api } from "@/src/api/client";
 import { showAlert } from "@/src/utils/dialog";
 import { IS_IOS_NATIVE } from "@/src/utils/platform";
+import { useEffect, useState } from "react";
+import {
+  ProjectTrackingView,
+  type ProjectTracking,
+} from "@/src/features/project-tracking/ProjectTrackingView";
 
 export default function ProfileScreen() {
   const router = useRouter();
   const { user, logout } = useAuth();
   const confirm = useConfirm();
+  const [project, setProject] = useState<ProjectTracking | null>(null);
+  const [loadingProject, setLoadingProject] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await api<{ project: ProjectTracking | null }>("/projects/me");
+        if (!cancelled) setProject(r.project);
+      } catch {
+        if (!cancelled) setProject(null);
+      } finally {
+        if (!cancelled) setLoadingProject(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
 
   const exportData = async () => {
     try {
@@ -156,6 +180,11 @@ export default function ProfileScreen() {
         </View>
 
         <Section title="Mon compte">
+          {project ? (
+            <View style={styles.trackingCard} testID="profile-project-tracking">
+              <ProjectTrackingView project={project} />
+            </View>
+          ) : null}
           <Item
             icon="heart-outline"
             label={(user as any).claimed_client_name ? `💍 Mon mariage : ${(user as any).claimed_client_name}` : "💍 Mon mariage — Revendiquer"}
@@ -374,6 +403,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
   },
   section: { backgroundColor: colors.surface, borderRadius: radii.md, overflow: "hidden", borderWidth: 1, borderColor: "rgba(255,255,255,0.05)" },
+  trackingCard: {
+    padding: spacing.md,
+    backgroundColor: colors.bg,
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(255,255,255,0.05)",
+  },
   item: {
     flexDirection: "row",
     alignItems: "center",

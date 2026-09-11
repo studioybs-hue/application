@@ -141,6 +141,20 @@ export default function AdminDashboard() {
               testID="admin-hosting-btn"
             />
             <ActionRow
+              icon="checkmark-done-circle-outline"
+              label="Suivi de projet"
+              hint="Avancement des mariages (9 étapes) + notifications SMS/Email"
+              onPress={() => router.push("/admin/projects")}
+              testID="admin-projects-btn"
+            />
+            <ActionRow
+              icon="settings-outline"
+              label="Paramètres SMTP & SMS"
+              hint="Configurer email IONOS + SMS Brevo (mot de passe modifiable)"
+              onPress={() => router.push("/admin/settings")}
+              testID="admin-settings-btn"
+            />
+            <ActionRow
               icon="chatbubbles-outline"
               label="Support / Messages"
               hint="Tickets de support des utilisateurs"

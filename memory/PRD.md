@@ -1,70 +1,89 @@
 # CINÉMARIÉS — PRD & Session Log
 
 ## Product Overview
-Netflix-style mobile app for wedding videos. iOS app is LIVE (Reader App compliance). Android is LIVE. Web at cinemaries.fr. Features: private wedding films via access codes, Stripe Premium subscriptions, lifetime hosting, Chromecast, Push Notifications, restricted Photo Gallery, public Discover, Admin dashboard.
+Netflix-style mobile app for wedding videos. iOS app is LIVE (Reader App compliance). Android is LIVE. Web at cinemaries.fr. Features: private wedding films via access codes, Stripe Premium subscriptions, lifetime hosting, Chromecast, Push Notifications, restricted Photo Gallery, public Discover, Admin dashboard, **9-step project tracking with SMS+email notifications**, **admin-editable SMTP/SMS config**.
 
 ## Language
 User's primary language: **French** — always respond in French.
 
 ## Critical Constraints
-- **Apple Reader App compliance (Guideline 3.1.3a)**: NEVER add subscription purchase, access code entry, or account registration UI on iOS native app. All these must stay web-only. Enforced via `IS_IOS_NATIVE` from `frontend/src/utils/platform.ts`.
-- **Emergency VPS recovery in progress**: old IONOS VPS was deleted, new VPS is `31.70.142.150`.
+- **Apple Reader App compliance (Guideline 3.1.3a)**: NEVER add subscription purchase, access code entry, or account registration UI on iOS native app. Enforced via `IS_IOS_NATIVE` from `frontend/src/utils/platform.ts`.
+- **Emergency VPS recovery**: old IONOS VPS deleted, new VPS is `31.70.142.150`.
 
-## Current Status (2026-09-11 session)
+## Current Status (2026-09-11)
 
 ### ✅ Completed this session
-1. **DNS diagnostic** — identified user modified DNS on wrong domain (`cinemaries.com` instead of `cinemaries.fr`). Guided user to fix.
-2. **Web frontend rebuild** with relative API URLs (`EXPO_PUBLIC_BACKEND_URL=""`) so site works via IP fallback and any origin.
-3. **Data migration from dev container to VPS**:
-   - MongoDB dump of `wedding_stream` → restored into `cinemaries` on VPS
-   - Rsync 911 Mo uploads (9 videos + photos + hosting_2ebd1b43) to `/srv/cinemaries/uploads/`
-   - Cleaned automated test accounts
-4. **SSL/HTTPS Certbot installation** — Let's Encrypt cert valid until 2026-12-10, auto-renewal enabled
-5. **iOS/Android app reconnected** — user confirmed login works again
-
-### Restored data on VPS after migration
-- 5 users (admin + 3 real + 1 test)
-- 33 unlock codes (18 hanifa-et-dali, 13 sarahaline-elarif, 2 generic)
-- 11 videos (with actual .mp4 files on disk)
-- 4 support tickets + 6 messages
-- 14 Stripe checkout sessions history
-- 4 hosting requests + 4 deletion requests
-- 20 upload records
-- 9 real .mp4/.mov files (911 Mo total)
+1. **DNS + SSL + site remise en route** — SSL Let's Encrypt actif jusqu'au 10 déc. 2026
+2. **Migration dev → VPS** — 5 users, 33 codes, 11 videos, 4 tickets support, 911 Mo de fichiers
+3. **Feature "Suivi de projet"** implémentée à l'identique de creativindustry.com :
+   - 9 étapes : Vidage cartes, Sauvegarde serveurs, Tri, Retouche/Montage, Photos déposées, Sélection 40 photos, Musique, Vérification qualité, Livraison
+   - 3 états visuels (vert Terminé / jaune En cours / gris À venir)
+   - Barre de progression jaune→vert en dégradé
+   - Note publique par admin + ETA
+   - Notifications automatiques : Email (IONOS SMTP) + SMS (Brevo)
+4. **Admin Settings SMTP/SMS** — Config email et SMS Brevo modifiable depuis l'admin avec bouton "Tester la config" (envoie un email/SMS de test)
+   - `mailer.py` et `project_tracking.py` lisent d'abord la DB (`app_settings` collection), fallback env
+   - Cache 30s en mémoire pour éviter DB hit à chaque email
 
 ### 🔴 Pending (P0)
-- **Stripe Live keys** — placeholders in `.env`, all payments currently blocked (returns 503)
-- Verify Stripe payment flow end-to-end
+- **User doit mettre à jour le password SMTP IONOS + le port** via `/admin/settings` (Email SMTP tab). Actuellement port 587 avec SSL=on = incompatible.
+- **Stripe Live keys** — placeholders, tous les paiements bloqués
 
 ### 🟡 Backlog (P1)
-- Automated MongoDB + uploads backups to Backblaze B2 (nightly cron)
+- Sauvegardes automatiques MongoDB + uploads → Backblaze B2 (nightly cron)
 - UptimeRobot monitoring
-- Deployment script hardening (avoid Nginx 403 on `expo export`)
+- Push notifications (nécessite rebuild iOS/Android via Publish)
 
 ### 🟢 Future features (P2)
 - Livre d'or numérique (web only — avoid Apple re-review)
-- Suivi de projet photo/vidéo (progress bar for clients)
-- Admin: edit contact info
 - Admin UX: direct Photos/Videos links from wedding list
+- Admin: edit contact info
 
-### Future / Backlog (P3+)
-- Refactor `server.py` (5085 lines) into modular routers
-- Legacy users claim migration
+## New Files Created
+### Backend
+- `/app/backend/project_tracking.py` — Complete module (routes, models, notif service, Brevo SMS)
+- `/app/backend/app_settings.py` — DB-first settings storage (SMTP + Brevo), replaces env fallback
+- `/app/backend/mailer.py` — Updated to read config from DB first
+
+### Frontend
+- `/app/frontend/src/features/project-tracking/ProjectTrackingView.tsx` — Reusable stepper component
+- `/app/frontend/app/admin/projects/index.tsx` — Admin list of projects + candidates
+- `/app/frontend/app/admin/projects/[clientId].tsx` — Admin project detail (edit steps, notes, ETA)
+- `/app/frontend/app/admin/settings.tsx` — SMTP + Brevo config UI
+- `/app/frontend/app/(tabs)/profile.tsx` — Added `ProjectTrackingView` card for clients
+- `/app/frontend/app/admin/index.tsx` — Added 2 new admin entries
+
+## New API Endpoints
+- `GET  /api/projects/me` — Client's own tracking (admin sees first as preview)
+- `GET  /api/admin/projects` — List all projects (auto-syncs from wedding_claims)
+- `GET  /api/admin/projects-candidates` — Distinct client_ids that could be tracked
+- `POST /api/admin/projects` — Create tracking for a wedding
+- `GET  /api/admin/projects/{client_id}` — Detail
+- `PATCH /api/admin/projects/{client_id}` — Update name/email/phone/note/ETA
+- `PATCH /api/admin/projects/{client_id}/steps/{step_key}` — Update step status (triggers notif)
+- `POST /api/admin/projects/{client_id}/test-notify` — Test email/SMS
+- `DELETE /api/admin/projects/{client_id}` — Remove tracking
+- `GET  /api/admin/settings/smtp` — Current SMTP config (password masked)
+- `PUT  /api/admin/settings/smtp` — Update SMTP config
+- `POST /api/admin/settings/smtp/test` — Send test email
+- `GET  /api/admin/settings/brevo-sms` — Current Brevo SMS config
+- `PUT  /api/admin/settings/brevo-sms` — Update Brevo config
+- `POST /api/admin/settings/brevo-sms/test` — Send test SMS
+
+## New DB Collections
+- `project_tracking` — one doc per wedding, with 9 steps array
+- `app_settings` — key/value pairs for `smtp` and `brevo_sms`
 
 ## Tech Stack
 - Backend: FastAPI + MongoDB (`cinemaries` DB) + FFmpeg
 - Frontend: Expo Router + React Native (SDK 54)
 - Hosting: VPS at `31.70.142.150`, Nginx reverse-proxy, systemd `cinemaries-backend.service`
-- SSL: Let's Encrypt via Certbot (nginx plugin)
-- CDN: none (Cloudflare proposed but not adopted)
+- SSL: Let's Encrypt via Certbot
 - Payments: Stripe (Live mode — pending keys)
-
-## Key Files
-- `/app/frontend/src/utils/platform.ts` — `IS_IOS_NATIVE` for Apple compliance
-- `/app/frontend/src/ui/IOSReaderGate.tsx` — gate for restricted routes on iOS
-- `/app/frontend/app/wedding/[clientId].tsx` — code entry masked on iOS
-- `/app/backend/server.py` — monolith, `_seed_admin`, Stripe endpoints, webhooks
+- Email: IONOS SMTP (via `mailer.py`, config in DB `app_settings.smtp`)
+- SMS: Brevo Transactional (Sender ID `CINEMARIES`, 302 credits available on account `contact@creativindustry.com`)
 
 ## Credentials
 - Admin: `admin@wedding.fr` / `Admin13!`
 - VPS: `root@31.70.142.150` / `Xp9dnmy91rRO`
+- Brevo API key: stored in `.env` + DB (`app_settings.brevo_sms`) — user shared it in chat, should rotate after go-live
