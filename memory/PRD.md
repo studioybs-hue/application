@@ -1,66 +1,70 @@
-# Wedding Stream — PRD
+# CINÉMARIÉS — PRD & Session Log
 
-## Vision
-"Netflix exclusivement pour les mariages" — une plateforme de streaming premium permettant aux mariés et invités de revivre les plus beaux moments des mariages. Chaque client reçoit un code unique pour débloquer son propre film de mariage. Catalogue public (extraits/bandes-annonces) visible par tous, contenu complet réservé aux clients identifiés ou abonnés Premium.
+## Product Overview
+Netflix-style mobile app for wedding videos. iOS app is LIVE (Reader App compliance). Android is LIVE. Web at cinemaries.fr. Features: private wedding films via access codes, Stripe Premium subscriptions, lifetime hosting, Chromecast, Push Notifications, restricted Photo Gallery, public Discover, Admin dashboard.
 
-## Cible
-- Mariés (clients principaux)
-- Famille et invités (via codes partagés)
-- Vidéastes / sociétés de production qui distribuent les films via la plateforme
+## Language
+User's primary language: **French** — always respond in French.
 
-## MVP (livré)
+## Critical Constraints
+- **Apple Reader App compliance (Guideline 3.1.3a)**: NEVER add subscription purchase, access code entry, or account registration UI on iOS native app. All these must stay web-only. Enforced via `IS_IOS_NATIVE` from `frontend/src/utils/platform.ts`.
+- **Emergency VPS recovery in progress**: old IONOS VPS was deleted, new VPS is `31.70.142.150`.
 
-### Authentification
-- Inscription / connexion email + mot de passe (JWT bcrypt)
-- Tokens stockés via Expo SecureStore (`@/src/utils/storage`)
-- AuthContext global
+## Current Status (2026-09-11 session)
 
-### Catalogue public
-- Page Accueil de type Netflix avec hero banner (vidéo en N°1 en France)
-- Lignes horizontales par catégorie : À l'affiche, Cérémonies, Soirées, Best Of
-- Posters de mariage cinématographiques
-- Badge "N°1 EN FRANCE" sur la vedette
+### ✅ Completed this session
+1. **DNS diagnostic** — identified user modified DNS on wrong domain (`cinemaries.com` instead of `cinemaries.fr`). Guided user to fix.
+2. **Web frontend rebuild** with relative API URLs (`EXPO_PUBLIC_BACKEND_URL=""`) so site works via IP fallback and any origin.
+3. **Data migration from dev container to VPS**:
+   - MongoDB dump of `wedding_stream` → restored into `cinemaries` on VPS
+   - Rsync 911 Mo uploads (9 videos + photos + hosting_2ebd1b43) to `/srv/cinemaries/uploads/`
+   - Cleaned automated test accounts
+4. **SSL/HTTPS Certbot installation** — Let's Encrypt cert valid until 2026-12-10, auto-renewal enabled
+5. **iOS/Android app reconnected** — user confirmed login works again
 
-### Vidéos privées & codes uniques
-- Chaque vidéo a un `trailer_url` (public) et `full_url` (privé)
-- Code de déblocage à 8 caractères alphanumériques
-- Écran de saisie de code stylisé
-- Bibliothèque personnelle des vidéos débloquées
-- Codes à usage limité / expirables côté backend
+### Restored data on VPS after migration
+- 5 users (admin + 3 real + 1 test)
+- 33 unlock codes (18 hanifa-et-dali, 13 sarahaline-elarif, 2 generic)
+- 11 videos (with actual .mp4 files on disk)
+- 4 support tickets + 6 messages
+- 14 Stripe checkout sessions history
+- 4 hosting requests + 4 deletion requests
+- 20 upload records
+- 9 real .mp4/.mov files (911 Mo total)
 
-### Player vidéo
-- Lecteur intégré (HTML5 via WebView mobile, balise `<video>` sur web)
-- Bouton Chromecast (maquette, prêt pour V2 native TV)
-- Action share / ma liste
+### 🔴 Pending (P0)
+- **Stripe Live keys** — placeholders in `.env`, all payments currently blocked (returns 503)
+- Verify Stripe payment flow end-to-end
 
-### Abonnement Premium Stripe
-- Page premium 1,99€/mois
-- Stripe Checkout Session (mode subscription)
-- Retour via deeplink + vérification status côté backend
-- Statut `is_subscribed` sur l'utilisateur
+### 🟡 Backlog (P1)
+- Automated MongoDB + uploads backups to Backblaze B2 (nightly cron)
+- UptimeRobot monitoring
+- Deployment script hardening (avoid Nginx 403 on `expo export`)
 
-### Design
-- Thème "Jewel & Luxury" : noir profond, or champagne, bordeaux/vin
-- Typo cinématographique élégante
-- Animations subtiles, micro-interactions
+### 🟢 Future features (P2)
+- Livre d'or numérique (web only — avoid Apple re-review)
+- Suivi de projet photo/vidéo (progress bar for clients)
+- Admin: edit contact info
+- Admin UX: direct Photos/Videos links from wedding list
 
-## Architecture technique
-- **Frontend** : Expo SDK 54, React Native 0.81, expo-router file-based, TypeScript
-- **Backend** : FastAPI + Motor (MongoDB), JWT, bcrypt
-- **Paiement** : Stripe (clé sk_test_emergent fournie par l'env)
-- **Vidéo** : WebView/HTML5 (compatible Expo Go)
-- **Stockage local** : `@/src/utils/storage` (SecureStore)
+### Future / Backlog (P3+)
+- Refactor `server.py` (5085 lines) into modular routers
+- Legacy users claim migration
 
-## Roadmap V2
-- Chromecast natif (build EAS)
-- Version TV (tvOS / Android TV)
-- Téléchargement hors-ligne
-- Dashboard vidéaste (création de codes en masse)
-- Albums photos liés aux mariages
-- Quality picker (1080p / 4K / HDR)
-- Webhooks Stripe pour gestion proactive des abonnements
+## Tech Stack
+- Backend: FastAPI + MongoDB (`cinemaries` DB) + FFmpeg
+- Frontend: Expo Router + React Native (SDK 54)
+- Hosting: VPS at `31.70.142.150`, Nginx reverse-proxy, systemd `cinemaries-backend.service`
+- SSL: Let's Encrypt via Certbot (nginx plugin)
+- CDN: none (Cloudflare proposed but not adopted)
+- Payments: Stripe (Live mode — pending keys)
 
-## Modèle économique
-- Premium 1,99€/mois (catalogue complet + futures fonctionnalités TV)
-- Codes uniques fournis par les vidéastes B2B (revenu B2B futur)
-- Marketplace de vidéastes (commission sur ventes)
+## Key Files
+- `/app/frontend/src/utils/platform.ts` — `IS_IOS_NATIVE` for Apple compliance
+- `/app/frontend/src/ui/IOSReaderGate.tsx` — gate for restricted routes on iOS
+- `/app/frontend/app/wedding/[clientId].tsx` — code entry masked on iOS
+- `/app/backend/server.py` — monolith, `_seed_admin`, Stripe endpoints, webhooks
+
+## Credentials
+- Admin: `admin@wedding.fr` / `Admin13!`
+- VPS: `root@31.70.142.150` / `Xp9dnmy91rRO`
