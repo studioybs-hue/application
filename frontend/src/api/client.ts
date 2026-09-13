@@ -5,7 +5,7 @@ const BASE = BACKEND_URL || "";
 
 export const TOKEN_KEY = "ws_token";
 
-async function getToken(): Promise<string | null> {
+export async function getToken(): Promise<string | null> {
   return await storage.secureGet<string>(TOKEN_KEY, "");
 }
 

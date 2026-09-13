@@ -24,6 +24,7 @@ import {
   type ProjectStep,
   type StepStatus,
 } from "@/src/features/project-tracking/ProjectTrackingView";
+import { AdminDeliverablesPanel } from "@/src/features/project-tracking/AdminDeliverablesPanel";
 
 export default function AdminProjectDetail() {
   const { clientId } = useLocalSearchParams<{ clientId: string }>();
@@ -211,6 +212,9 @@ export default function AdminProjectDetail() {
             </View>
             <View style={[styles.dot, (project as any).is_guestbook_active && { backgroundColor: "#4ADE80" }]} />
           </TouchableOpacity>
+
+          {/* Livrables : photos ZIP / lien Synology, sélection, musique, livraison */}
+          <AdminDeliverablesPanel project={project} onChanged={setProject} reload={load} />
 
           {/* Tracking view */}
           <ProjectTrackingView

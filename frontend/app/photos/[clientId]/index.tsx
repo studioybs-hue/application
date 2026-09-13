@@ -16,6 +16,7 @@ import { colors, spacing, radii } from "@/src/theme";
 import { useAuth } from "@/src/auth/AuthContext";
 import { showAlert } from "@/src/utils/dialog";
 import { BACKEND_URL } from "@/src/api/baseUrl";
+import { SELECTION_MAX } from "@/src/features/project-tracking/deliverables";
 
 const BASE_URL = BACKEND_URL || "";
 const { width: SCREEN_W } = Dimensions.get("window");
@@ -46,7 +47,7 @@ type PhotosInfo = {
 
 export default function PhotosGalleryScreen() {
   const router = useRouter();
-  const { clientId } = useLocalSearchParams<{ clientId: string }>();
+  const { clientId, select } = useLocalSearchParams<{ clientId: string; select?: string }>();
   const { user } = useAuth();
 
   const [info, setInfo] = useState<PhotosInfo | null>(null);
@@ -58,8 +59,53 @@ export default function PhotosGalleryScreen() {
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [downloading, setDownloading] = useState(false);
+  // Mode « Sélection des 40 photos » (étape 6 du suivi de projet)
+  const pickMode = select === "1";
+  const [pickedIds, setPickedIds] = useState<Set<string>>(new Set());
+  const [submittingPick, setSubmittingPick] = useState(false);
+  const [pickLoaded, setPickLoaded] = useState(false);
 
   const PER_PAGE = 50;
+
+  useEffect(() => {
+    if (!pickMode || !clientId) return;
+    api<{ deliverables?: { selection?: { photo_ids?: string[] } } }>(`/projects/${clientId}/deliverables`)
+      .then((d) => setPickedIds(new Set(d.deliverables?.selection?.photo_ids || [])))
+      .catch(() => {})
+      .finally(() => setPickLoaded(true));
+  }, [pickMode, clientId]);
+
+  const togglePick = (id: string) => {
+    setPickedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else if (next.size >= SELECTION_MAX) {
+        showAlert("Maximum atteint", `Vous pouvez choisir ${SELECTION_MAX} photos maximum. Décochez une photo pour en ajouter une autre.`);
+        return prev;
+      } else next.add(id);
+      return next;
+    });
+  };
+
+  const submitPick = async () => {
+    if (pickedIds.size === 0) {
+      showAlert("Aucune photo", "Touchez les photos pour les cocher, puis validez.");
+      return;
+    }
+    setSubmittingPick(true);
+    try {
+      await api(`/projects/${clientId}/selection`, { method: "POST", body: { photo_ids: Array.from(pickedIds) } });
+      showAlert(
+        "✅ Sélection envoyée",
+        `Vos ${pickedIds.size} photos ont été transmises au studio. Vous pouvez la modifier à tout moment depuis votre suivi.`,
+        () => (router.canGoBack() ? router.back() : router.replace("/(tabs)/profile"))
+      );
+    } catch (e: any) {
+      showAlert("Erreur", e?.message || "Envoi impossible");
+    } finally {
+      setSubmittingPick(false);
+    }
+  };
 
   const loadInfo = useCallback(async () => {
     try {
@@ -253,7 +299,20 @@ export default function PhotosGalleryScreen() {
   return (
     <SafeAreaView style={s.container} edges={["top"]}>
       {/* Header */}
-      {selectionMode ? (
+      {pickMode ? (
+        <View style={s.selectionHeader} testID="pick-header">
+          <TouchableOpacity onPress={() => (router.canGoBack() ? router.back() : router.replace("/(tabs)/profile"))} style={s.headerBtn}>
+            <Ionicons name="chevron-back" size={26} color={colors.textPrimary} />
+          </TouchableOpacity>
+          <View style={{ flex: 1, alignItems: "center" }}>
+            <Text style={s.selectionCount} testID="pick-counter">
+              {pickedIds.size} / {SELECTION_MAX} photos
+            </Text>
+            <Text style={s.pickSub}>Touchez vos photos préférées pour le montage</Text>
+          </View>
+          <View style={{ width: 40 }}>{!pickLoaded && <ActivityIndicator color={colors.gold} />}</View>
+        </View>
+      ) : selectionMode ? (
         <View style={s.selectionHeader}>
           <TouchableOpacity onPress={exitSelection} style={s.headerBtn}>
             <Ionicons name="close" size={26} color={colors.textPrimary} />
@@ -304,11 +363,13 @@ export default function PhotosGalleryScreen() {
         onEndReached={onEndReached}
         onEndReachedThreshold={0.5}
         renderItem={({ item }) => {
-          const selected = selectedIds.has(item.id);
+          const selected = pickMode ? pickedIds.has(item.id) : selectedIds.has(item.id);
           return (
             <TouchableOpacity
               onPress={() => {
-                if (selectionMode) {
+                if (pickMode) {
+                  togglePick(item.id);
+                } else if (selectionMode) {
                   toggleSelect(item.id);
                 } else {
                   router.push({
@@ -317,9 +378,10 @@ export default function PhotosGalleryScreen() {
                   });
                 }
               }}
-              onLongPress={() => !selectionMode && enterSelection(item.id)}
+              onLongPress={() => !pickMode && !selectionMode && enterSelection(item.id)}
               activeOpacity={0.7}
               style={[s.cell, selected && s.cellSelected]}
+              testID={`photo-cell-${item.id}`}
             >
               <Image
                 source={{ uri: `${BASE_URL}${item.thumb_url}` }}
@@ -327,14 +389,14 @@ export default function PhotosGalleryScreen() {
                 contentFit="cover"
                 transition={200}
               />
-              {item.is_favorite && (
+              {item.is_favorite && !pickMode && (
                 <View style={s.favBadge}>
                   <Ionicons name="heart" size={14} color="#fff" />
                 </View>
               )}
-              {selectionMode && (
+              {(selectionMode || pickMode) && (
                 <View style={[s.checkbox, selected && s.checkboxOn]}>
-                  {selected && <Ionicons name="checkmark" size={16} color="#000" />}
+                  {selected && <Ionicons name={pickMode ? "heart" : "checkmark"} size={16} color="#000" />}
                 </View>
               )}
             </TouchableOpacity>
@@ -349,8 +411,22 @@ export default function PhotosGalleryScreen() {
         }
       />
 
+      {/* FAB : valider la sélection des 40 photos */}
+      {pickMode && (
+        <TouchableOpacity style={s.fab} onPress={submitPick} disabled={submittingPick} testID="pick-submit">
+          {submittingPick ? (
+            <ActivityIndicator color="#000" />
+          ) : (
+            <>
+              <Ionicons name="checkmark-circle" size={22} color="#000" />
+              <Text style={s.fabText}>Valider ma sélection ({pickedIds.size})</Text>
+            </>
+          )}
+        </TouchableOpacity>
+      )}
+
       {/* FAB Download All */}
-      {!selectionMode && (
+      {!selectionMode && !pickMode && (
         <TouchableOpacity
           style={s.fab}
           onPress={() =>
@@ -422,6 +498,7 @@ const s = StyleSheet.create({
     backgroundColor: colors.surface, borderBottomWidth: 1, borderBottomColor: colors.border,
   },
   selectionCount: { color: colors.gold, fontSize: 16, fontWeight: "600" },
+  pickSub: { color: colors.textSecondary, fontSize: 11, marginTop: 2 },
   gridContent: { padding: spacing.sm, paddingBottom: 100 },
   row: { gap: spacing.sm, marginBottom: spacing.sm },
   cell: {

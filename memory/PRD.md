@@ -12,6 +12,18 @@ User's primary language: **French** — always respond in French.
 
 ## Current Status (2026-09-13)
 
+### ✅ Feature 2026-09-13 — Livrables du suivi de projet (photos / sélection 40 / musique / livraison)
+- **Backend** : nouveau module `backend/project_deliverables.py` (enregistré en fin de `server.py`, après l'auto-import).
+  - Données dans `project_tracking.deliverables` : `photos {mode gallery|link, link, imported_count, import{status,total,done,error}}`, `selection {photo_ids, filenames, filenames_text, link, note, count, submitted_at}`, `music {title, artist, link, note, file_url}`, `delivery {link}`.
+  - Client : `GET /projects/{cid}/deliverables`, `POST /projects/{cid}/selection` (max 40), `POST /projects/{cid}/music`, `POST /projects/{cid}/music/file` (multipart ≤ 40 Mo). Accès : admin, `users.client_id`/`claimed_client_id` ou `project.owner_user_id`.
+  - Admin : `PATCH /admin/projects/{cid}/deliverables {photos_link, delivery_link, notify}`, `GET …/zip-candidates`, `POST …/photos/import-zip {filename}` (ZIP dans ftp_drop, tâche de fond, ZIP supprimé après succès), `POST …/photos/import-zip/upload` (multipart), `GET …/selection/download?token=JWT` (ZIP des photos cochées).
+  - Étapes auto → « Terminé » : photos_delivery (ZIP importé ou lien posé, mariés notifiés), photo_selection, music (alerte admin), delivery (lien posé, mariés notifiés). Alertes admin = réglages email/SMS de l'import automatique (`app_settings.auto_import`).
+  - **Watcher FTP** : `auto_import.AutoImporter.zip_handler` → tout `.zip` déposé dans ftp_drop (ex. « Yassina & Bensaid photos.zip », mots-clés photos/photo/galerie ignorés) est extrait dans la galerie du suivi correspondant (match suivis puis mariages ; sinon job PENDING). Journalisé dans `import_jobs` (type `photos_zip`).
+  - `photos.py` : `_wedding_exists` accepte suivi de projet / wedding_meta (photos avant le film) ; accès galerie aussi via `claimed_client_id` et `owner_user_id` ; `PHOTOS_PER_WEDDING_MAX=3000`, `ZIP_MAX_PHOTOS=200`.
+- **Frontend** : `ProjectTrackingView` prop `stepActions` (bouton or + hint sous une étape) ; `coupleStepActions.ts` (profil mariés) ; galerie `/photos/[clientId]?select=1` = mode « Choisir mes 40 photos » (compteur, cœurs, Valider) ; écrans `/projects/[clientId]/selection` (liste de noms + lien, mode Synology) et `/projects/[clientId]/music` ; admin `AdminDeliverablesPanel` dans `/admin/projects/[clientId]` (lien Synology, import ZIP FTP/upload, sélection reçue + ZIP, musique reçue, lien livraison).
+- Tests : `backend/tests/deliverables_e2e.py` (TOUT OK) ; testing agent `iteration_17` 8/8 frontend PASSED.
+- **⚠️ Non déployé en production** (pas d'accès VPS dans cette session) : à déployer (sync ciblé backend `project_deliverables.py`, `auto_import.py`, `photos.py`, `server.py` + frontend `src/`, `app/` → build web + swap). Nouveau build natif conseillé (v1.6.5).
+
 ### 🚨 Fix 2026-09-13 — App native (iOS/Android) figée sur une vieille base
 - **Symptôme** : nouveaux mariages visibles sur cinemaries.fr mais jamais dans l'app installée (qui affichait encore « Sarahaline »).
 - **Root cause** : l'app native était compilée avec `EXPO_PUBLIC_BACKEND_URL` = URL de prévisualisation Emergent (`mariagevideo.preview…`), pas cinemaries.fr → base de données différente/figée.

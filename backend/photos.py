@@ -34,11 +34,11 @@ except ImportError:
     PILLOW_AVAILABLE = False
 
 # ---- Configuration ----
-PHOTOS_PER_WEDDING_MAX = 100  # marge de sécurité (utilisateur a dit 50)
+PHOTOS_PER_WEDDING_MAX = 3000  # galeries alimentées par ZIP (plusieurs centaines de photos)
 THUMB_SIZE = (400, 400)
 ALLOWED_PHOTO_EXTS = {'.jpg', '.jpeg', '.png', '.webp'}
 ALLOWED_MUSIC_EXTS = {'.mp3', '.m4a', '.aac', '.wav'}
-ZIP_MAX_PHOTOS = 100
+ZIP_MAX_PHOTOS = 200
 
 
 def utcnow() -> datetime:
@@ -127,21 +127,25 @@ async def _user_can_view_photos(db, user: Optional[dict], wedding_id: str) -> tu
         return False, "not_authenticated"
     if user.get("is_admin"):
         return True, "admin"
-    # Vérifier que le mariage existe (au moins une vidéo avec ce client_id)
-    has_wedding = await db.videos.find_one({"client_id": wedding_id})
-    if not has_wedding:
+    if not await _wedding_exists(db, wedding_id):
         return False, "wedding_not_found"
-    # Vérifier que l'utilisateur EST le couple marié de ce mariage
-    user_client_id = user.get("client_id")
-    if user_client_id and user_client_id == wedding_id:
+    # Vérifier que l'utilisateur EST le couple marié de ce mariage (lien direct, revendication ou suivi de projet)
+    if wedding_id in (user.get("client_id"), user.get("claimed_client_id")):
+        return True, "ok"
+    project = await db.project_tracking.find_one({"client_id": wedding_id, "owner_user_id": user.get("id")}, {"_id": 0, "id": 1})
+    if project:
         return True, "ok"
     # Tout autre cas → refusé (même Premium Stripe externe, même code unlocké)
     return False, "couple_only"
 
 
 async def _wedding_exists(db, wedding_id: str) -> bool:
-    """Check if a wedding exists by looking for at least one video with this client_id."""
-    return bool(await db.videos.find_one({"client_id": wedding_id}))
+    """Un mariage existe s'il a une vidéo, une couverture ou un suivi de projet (photos avant le film)."""
+    if await db.videos.find_one({"client_id": wedding_id}, {"_id": 0, "id": 1}):
+        return True
+    if await db.project_tracking.find_one({"client_id": wedding_id}, {"_id": 0, "id": 1}):
+        return True
+    return bool(await db.wedding_meta.find_one({"client_id": wedding_id}, {"_id": 0, "client_id": 1}))
 
 
 async def _get_wedding_settings(db, wedding_id: str) -> dict:

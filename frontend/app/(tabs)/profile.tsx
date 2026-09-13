@@ -13,6 +13,7 @@ import {
   ProjectTrackingView,
   type ProjectTracking,
 } from "@/src/features/project-tracking/ProjectTrackingView";
+import { buildCoupleStepActions } from "@/src/features/project-tracking/coupleStepActions";
 
 export default function ProfileScreen() {
   const router = useRouter();
@@ -192,7 +193,7 @@ export default function ProfileScreen() {
         <Section title="Mon compte">
           {project ? (
             <View style={styles.trackingCard} testID="profile-project-tracking">
-              <ProjectTrackingView project={project} />
+              <ProjectTrackingView project={project} stepActions={buildCoupleStepActions(project, router)} />
             </View>
           ) : coupleWithoutProject ? (
             <View style={styles.trackingCard} testID="profile-project-waiting">

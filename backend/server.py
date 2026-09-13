@@ -5224,6 +5224,19 @@ auto_importer = register_auto_import_routes(
     slugify=slugify,
     require_admin=require_admin,
 )
+# Livrables du suivi (photos ZIP/lien Synology, sélection des 40 photos, musique, livraison)
+from project_deliverables import register_project_deliverables_routes
+register_project_deliverables_routes(
+    api_router=api_router,
+    db=db,
+    UPLOAD_DIR=UPLOAD_DIR,
+    FTP_DROP_DIR=FTP_DROP_DIR,
+    APP_PUBLIC_URL=APP_PUBLIC_URL,
+    get_current_user=get_current_user,
+    require_admin=require_admin,
+    decode_jwt=decode_jwt,
+    auto_importer=auto_importer,
+)
 app.include_router(api_router)
 app.add_middleware(
     CORSMiddleware,

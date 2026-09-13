@@ -397,6 +397,8 @@ class AutoImporter:
         self._task: Optional[asyncio.Task] = None
         self._lock_fd: Optional[int] = None
         self.last_scan_at: Optional[datetime] = None
+        # Hook facultatif pour les archives .zip (photos → galerie), fourni par project_deliverables
+        self.zip_handler = None
         for d in (self.drop_dir, self.errors_dir, self.duplicates_dir):
             d.mkdir(parents=True, exist_ok=True)
 
@@ -652,6 +654,11 @@ class AutoImporter:
         job_id = job["id"]
         log.info("[auto-import] Traitement de « %s » (%d octets)", path.name, size)
         try:
+            if path.suffix.lower() == ".zip" and self.zip_handler is not None:
+                sha = job.get("sha256") or await asyncio.to_thread(sha256_file, path)
+                await self._job_set(job_id, sha256=sha)
+                await self.zip_handler(self, job_id, path)
+                return
             parser = MarriageFilenameParser(cfg.get("services") or [])
             try:
                 parsed = parser.parse(path.name)

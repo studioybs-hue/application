@@ -45,6 +45,16 @@ export type ProjectTracking = {
   steps: ProjectStep[];
   current_step_index: number;
   progress_percent: number;
+  deliverables?: import("./deliverables").Deliverables;
+};
+
+export type StepAction = {
+  label: string;
+  icon: string;
+  onPress: () => void;
+  hint?: string;      // texte d'état sous le bouton (ex. « Sélection envoyée le 12 sept. »)
+  secondary?: boolean; // style discret (déjà fait)
+  testID?: string;
 };
 
 type Props = {
@@ -52,6 +62,8 @@ type Props = {
   onStepPress?: (step: ProjectStep) => void;
   compact?: boolean;
   showHeader?: boolean;
+  /** Actions concrètes proposées aux mariés sous certaines étapes (clé d'étape → action). */
+  stepActions?: Record<string, StepAction | undefined>;
 };
 
 const STATUS_COLORS: Record<StepStatus, { border: string; bg: string; icon: string; iconColor: string; title: string; badge: string; badgeBg: string; badgeText: string; }> = {
@@ -103,7 +115,7 @@ const STATUS_LABELS: Record<StepStatus, string> = {
   pending: "À venir",
 };
 
-export function ProjectTrackingView({ project, onStepPress, compact = false, showHeader = true }: Props) {
+export function ProjectTrackingView({ project, onStepPress, compact = false, showHeader = true, stepActions }: Props) {
   const isDone = project.progress_percent >= 100;
 
   return (
@@ -152,28 +164,45 @@ export function ProjectTrackingView({ project, onStepPress, compact = false, sho
         ) : null}
         {project.steps.map((step, index) => {
           const s = STATUS_COLORS[step.status];
+          const action = stepActions?.[step.key];
           const body = (
             <View style={[styles.stepCard, { borderColor: s.border, backgroundColor: s.bg }]}>
-              <View style={[styles.stepIcon, { backgroundColor: step.status === "pending" ? "transparent" : (step.status === "done" ? "#4ADE80" : "#D4AF37") }]}>
-                <Ionicons name={s.icon as any} size={20} color={s.iconColor} />
+              <View style={styles.stepRow}>
+                <View style={[styles.stepIcon, { backgroundColor: step.status === "pending" ? "transparent" : (step.status === "done" ? "#4ADE80" : "#D4AF37") }]}>
+                  <Ionicons name={s.icon as any} size={20} color={s.iconColor} />
+                </View>
+                <View style={{ flex: 1, marginLeft: spacing.md }}>
+                  <Text style={[styles.stepTitle, { color: s.title }]}>{step.title}</Text>
+                  <Text style={styles.stepDesc} numberOfLines={compact ? 1 : 3}>
+                    {step.description}
+                  </Text>
+                  {step.completed_at && step.status === "done" ? (
+                    <Text style={styles.stepDate}>Terminée le {fmtDate(step.completed_at)}</Text>
+                  ) : null}
+                </View>
+                <View style={[styles.badge, { backgroundColor: s.badgeBg, borderColor: s.badge }]}>
+                  <Text style={[styles.badgeText, { color: s.badgeText }]}>
+                    {STATUS_LABELS[step.status]}
+                  </Text>
+                </View>
+                {onStepPress && (
+                  <Ionicons name="chevron-forward" size={18} color={s.badgeText} style={{ marginLeft: 6 }} />
+                )}
               </View>
-              <View style={{ flex: 1, marginLeft: spacing.md }}>
-                <Text style={[styles.stepTitle, { color: s.title }]}>{step.title}</Text>
-                <Text style={styles.stepDesc} numberOfLines={compact ? 1 : 3}>
-                  {step.description}
-                </Text>
-                {step.completed_at && step.status === "done" ? (
-                  <Text style={styles.stepDate}>Terminée le {fmtDate(step.completed_at)}</Text>
-                ) : null}
-              </View>
-              <View style={[styles.badge, { backgroundColor: s.badgeBg, borderColor: s.badge }]}>
-                <Text style={[styles.badgeText, { color: s.badgeText }]}>
-                  {STATUS_LABELS[step.status]}
-                </Text>
-              </View>
-              {onStepPress && (
-                <Ionicons name="chevron-forward" size={18} color={s.badgeText} style={{ marginLeft: 6 }} />
-              )}
+              {action ? (
+                <View style={styles.actionWrap}>
+                  <TouchableOpacity
+                    style={[styles.actionBtn, action.secondary && styles.actionBtnSecondary]}
+                    onPress={action.onPress}
+                    activeOpacity={0.8}
+                    testID={action.testID || `project-step-action-${step.key}`}
+                  >
+                    <Ionicons name={action.icon as any} size={16} color={action.secondary ? colors.gold : "#0A0A0A"} />
+                    <Text style={[styles.actionTxt, action.secondary && { color: colors.gold }]}>{action.label}</Text>
+                  </TouchableOpacity>
+                  {action.hint ? <Text style={styles.actionHint}>{action.hint}</Text> : null}
+                </View>
+              ) : null}
             </View>
           );
           return onStepPress ? (
@@ -244,13 +273,27 @@ const styles = StyleSheet.create({
   helpText: { color: colors.textSecondary, fontSize: 12, marginBottom: spacing.sm },
 
   stepCard: {
-    flexDirection: "row",
-    alignItems: "center",
     padding: spacing.md,
     borderRadius: radii.md,
     borderWidth: 1,
     marginBottom: spacing.sm,
   },
+  stepRow: { flexDirection: "row", alignItems: "center" },
+  actionWrap: { marginTop: spacing.sm, marginLeft: 40 + spacing.md },
+  actionBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    alignSelf: "flex-start",
+    minHeight: 44,
+    paddingHorizontal: spacing.md,
+    borderRadius: radii.sm,
+    backgroundColor: colors.gold,
+  },
+  actionBtnSecondary: { backgroundColor: "rgba(212,175,55,0.10)", borderWidth: 1, borderColor: "rgba(212,175,55,0.45)" },
+  actionTxt: { color: "#0A0A0A", fontWeight: "800", fontSize: 13 },
+  actionHint: { color: colors.textSecondary, fontSize: 11, marginTop: 6, fontStyle: "italic" },
   stepIcon: {
     width: 40,
     height: 40,
