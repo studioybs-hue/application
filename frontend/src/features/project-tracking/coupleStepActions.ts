@@ -45,26 +45,31 @@ export function buildCoupleStepActions(project: ProjectTracking, router: Router)
   });
   if (photoActions.length) actions.photos_delivery = photoActions;
 
-  // 6. Sélection des 40 photos
+  // 6. Sélection des 40 photos : cœurs dans la galerie ET/OU envoi direct de leurs photos (parcourir)
   const sel = d.selection || {};
   const sent = sel.submitted_at ? `Sélection envoyée le ${fmtDateTime(sel.submitted_at)} (${sel.count || 0} photos)` : undefined;
+  const uploadAction: StepAction = {
+    label: sent && sel.uploads?.length ? "Modifier mes photos envoyées" : "Envoyer mes photos (parcourir)",
+    icon: sent && sel.uploads?.length ? "checkmark-done-outline" : "cloud-upload-outline",
+    secondary: hasGallery || !!sent,
+    onPress: () => router.push({ pathname: "/projects/[clientId]/selection", params: { clientId: cid } }),
+    hint: hasGallery ? undefined : sent,
+    testID: "project-step-action-photo_selection-upload",
+  };
   if (hasGallery) {
-    actions.photo_selection = {
-      label: sent ? "Modifier ma sélection" : `Choisir mes ${SELECTION_MAX} photos`,
-      icon: sent ? "checkmark-done-outline" : "heart-outline",
-      secondary: !!sent,
-      onPress: () => router.push({ pathname: "/photos/[clientId]", params: { clientId: cid, select: "1" } }),
-      hint: sent,
-    };
+    actions.photo_selection = [
+      {
+        label: sent ? "Modifier ma sélection" : `Choisir mes ${SELECTION_MAX} photos`,
+        icon: sent ? "checkmark-done-outline" : "heart-outline",
+        secondary: !!sent,
+        onPress: () => router.push({ pathname: "/photos/[clientId]", params: { clientId: cid, select: "1" } }),
+        hint: sent,
+      },
+      uploadAction,
+    ];
   } else if (photoLinks.length || project.steps.find((s) => s.key === "photos_delivery")?.status === "done") {
     // Photos sur le serveur du studio → les mariés nous envoient directement leurs photos choisies
-    actions.photo_selection = {
-      label: sent ? "Modifier mes photos envoyées" : "Envoyer mes photos choisies",
-      icon: sent ? "checkmark-done-outline" : "cloud-upload-outline",
-      secondary: !!sent,
-      onPress: () => router.push({ pathname: "/projects/[clientId]/selection", params: { clientId: cid } }),
-      hint: sent,
-    };
+    actions.photo_selection = uploadAction;
   }
 
   // 7. Musique

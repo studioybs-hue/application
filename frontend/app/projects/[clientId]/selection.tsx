@@ -120,7 +120,7 @@ export default function SelectionScreen() {
     }
     setSaving(true);
     try {
-      await api(`/projects/${clientId}/selection`, { method: "POST", body: { photo_ids: [], note: note.trim() || null } });
+      await api(`/projects/${clientId}/selection`, { method: "POST", body: { note: note.trim() || null } });
       showAlert("✅ Sélection envoyée", `Vos ${uploads.length} photos ont été transmises au studio. Vous pouvez encore la modifier depuis votre suivi.`, () =>
         router.canGoBack() ? router.back() : router.replace("/(tabs)/profile")
       );

@@ -55,6 +55,9 @@ log = logging.getLogger("project_deliverables")
 SELECTION_MAX = 40            # cases cochées dans la galerie
 SELECTION_UPLOAD_MAX = 50     # photos envoyées directement par les mariés (tolérance)
 SELECTION_UPLOAD_FILE_MAX = 60 * 1024 * 1024
+REMINDER_EVERY_DAYS = 7       # 1re relance 7 j après la mise à dispo des photos, puis tous les 7 j
+REMINDER_MAX = 3
+REMINDER_CHECK_SECONDS = 6 * 3600
 MUSIC_FILE_MAX_BYTES = 40 * 1024 * 1024
 ZIP_SKIP_PARTS = {"__MACOSX"}
 ARCHIVE_EXTS = {".zip", ".rar", ".7z"}
@@ -158,7 +161,7 @@ def extract_archive(archive: Path, tmp_dir: Path) -> list[tuple[str, Path]]:
 # API MODELS
 # ---------------------------------------------------------------------------
 class SelectionBody(BaseModel):
-    photo_ids: list[str] = Field(default_factory=list)
+    photo_ids: Optional[list[str]] = None   # None → conserver les photos déjà cochées dans la galerie
     filenames_text: Optional[str] = Field(default=None, max_length=8000)
     link: Optional[str] = None
     note: Optional[str] = Field(default=None, max_length=2000)
@@ -443,7 +446,9 @@ def register_project_deliverables_routes(
     async def submit_selection(client_id: str, body: SelectionBody, current: dict = Depends(get_current_user)):
         p = await _get_project(client_id)
         await _assert_owner(current, client_id, p)
-        ids = list(dict.fromkeys(i.strip() for i in body.photo_ids if i and i.strip()))
+        prev_sel = (p.get("deliverables") or {}).get("selection") or {}
+        raw_ids = body.photo_ids if body.photo_ids is not None else (prev_sel.get("photo_ids") or [])
+        ids = list(dict.fromkeys(i.strip() for i in raw_ids if i and i.strip()))
         if len(ids) > SELECTION_MAX:
             raise HTTPException(400, f"Maximum {SELECTION_MAX} photos")
         names: list[str] = []
@@ -455,11 +460,11 @@ def register_project_deliverables_routes(
             names = [by_id[i].get("original_name") or by_id[i]["filename"] for i in ids]
         text = (body.filenames_text or "").strip()
         link = _clean_link(body.link)
-        uploads = ((p.get("deliverables") or {}).get("selection") or {}).get("uploads") or []
+        uploads = prev_sel.get("uploads") or []
         if not ids and not uploads and not text and not link:
             raise HTTPException(400, "Cochez vos photos dans la galerie ou envoyez-nous vos photos choisies")
-        count = len(ids) if ids else (len(uploads) if uploads else len([t for t in re.split(r"[,\n;]+", text) if t.strip()]))
-        data = {"photo_ids": ids, "filenames": names, "filenames_text": text or None, "link": link, "uploads": uploads,
+        count = (len(ids) + len(uploads)) or len([t for t in re.split(r"[,\n;]+", text) if t.strip()])
+        data = {**prev_sel, "photo_ids": ids, "filenames": names, "filenames_text": text or None, "link": link, "uploads": uploads,
                 "note": (body.note or "").strip() or None, "count": count, "submitted_at": _utcnow(),
                 "user_id": current.get("id"), "user_email": current.get("email")}
         await _set_deliverable(client_id, "selection", data)
@@ -699,5 +704,86 @@ def register_project_deliverables_routes(
         return StreamingResponse(_iter(), media_type="application/zip",
                                  headers={"Content-Disposition": f'attachment; filename="SELECTION_{safe}_{len(files)}photos.zip"'})
 
+    # =====================================================================
+    # RELANCE AUTOMATIQUE — sélection des photos non validée
+    # =====================================================================
+    async def send_selection_reminders(now: Optional[datetime] = None) -> int:
+        """SMS (+ email) aux mariés dont les photos sont disponibles depuis ≥ 7 jours sans sélection validée.
+        Relance tous les 7 jours, 3 relances maximum. Renvoie le nombre de relances envoyées."""
+        now = now or _utcnow()
+        sent = 0
+        cursor = db.project_tracking.find(
+            {"steps": {"$elemMatch": {"key": "photos_delivery", "status": STATUS_DONE}}},
+            {"_id": 0, "client_id": 1, "wedding_name": 1, "owner_phone": 1, "owner_email": 1, "steps": 1, "deliverables": 1},
+        )
+        async for p in cursor:
+            steps = {s["key"]: s for s in p.get("steps", [])}
+            if steps.get("photo_selection", {}).get("status") == STATUS_DONE:
+                continue
+            done_at = steps["photos_delivery"].get("completed_at")
+            if not done_at:
+                continue
+            if done_at.tzinfo is None:
+                done_at = done_at.replace(tzinfo=timezone.utc)
+            sel = (p.get("deliverables") or {}).get("selection") or {}
+            reminders = sel.get("reminders") or []
+            if len(reminders) >= REMINDER_MAX:
+                continue
+            last = reminders[-1] if reminders else done_at
+            if last.tzinfo is None:
+                last = last.replace(tzinfo=timezone.utc)
+            if (now - last).days < REMINDER_EVERY_DAYS:
+                continue
+            phone = normalize_fr_phone(p.get("owner_phone"))
+            email = p.get("owner_email")
+            if not phone and not email:
+                continue
+            wedding = p.get("wedding_name") or p["client_id"]
+            n = len(reminders) + 1
+            sms = (f"CINEMARIES : {wedding} - vos photos vous attendent ! Choisissez vos {SELECTION_MAX} photos preferees "
+                   f"pour le montage de votre film : {public_url or 'https://cinemaries.fr'}/profile (rappel {n}/{REMINDER_MAX})")
+            ok_any = False
+            if phone:
+                ok, _ = await send_brevo_sms(phone, sms[:160], tag="selection_reminder")
+                ok_any = ok_any or ok
+            if email and smtp_configured():
+                try:
+                    html = render_email(
+                        "📸 Vos photos vous attendent",
+                        f"<p>Bonjour,</p><p>Les photos de <b>{wedding}</b> sont disponibles dans votre espace depuis quelques jours. "
+                        f"Pour lancer le montage de votre film, choisissez vos <b>{SELECTION_MAX} photos préférées</b> depuis votre suivi.</p>"
+                        f"<p>Rappel {n}/{REMINDER_MAX}.</p>",
+                        cta_label="Choisir mes photos", cta_url=f"{public_url or 'https://cinemaries.fr'}/profile",
+                    )
+                    await send_email(email, f"CINÉMARIÉS — {wedding} — choisissez vos {SELECTION_MAX} photos", html)
+                    ok_any = True
+                except Exception as e:
+                    log.warning("[deliverables] email relance impossible %s: %s", email, e)
+            if not ok_any:
+                log.warning("[deliverables] relance non envoyée (SMS/email indisponibles) → %s, nouvel essai plus tard", p["client_id"])
+                continue
+            reminders.append(now)
+            await db.project_tracking.update_one({"client_id": p["client_id"]}, {"$set": {"deliverables.selection.reminders": reminders}})
+            log.info("[deliverables] relance sélection %d/%d → %s (sms=%s, email=%s)", n, REMINDER_MAX, p["client_id"], bool(phone), bool(email))
+            sent += 1
+        return sent
+
+    async def _reminder_loop():
+        await asyncio.sleep(60)  # laisser le serveur démarrer
+        while True:
+            try:
+                await send_selection_reminders()
+            except Exception as e:
+                log.error("[deliverables] boucle relances: %s", e)
+            await asyncio.sleep(REMINDER_CHECK_SECONDS)
+
+    asyncio.get_event_loop().create_task(_reminder_loop())
+
+    @api_router.post("/admin/projects/selection-reminders/run")
+    async def admin_run_reminders(admin: dict = Depends(require_admin)):
+        """Déclenche manuellement le passage des relances (test / contrôle)."""
+        n = await send_selection_reminders()
+        return {"ok": True, "sent": n}
+
     log.info("[project_deliverables] routes registered")
-    return {"import_zip_to_gallery": import_zip_to_gallery}
+    return {"import_zip_to_gallery": import_zip_to_gallery, "send_selection_reminders": send_selection_reminders}

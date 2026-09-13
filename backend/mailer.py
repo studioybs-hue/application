@@ -40,14 +40,18 @@ async def _get_cfg_async() -> dict:
 
 
 def _get_cfg_env() -> dict:
+    port = int(os.environ.get("SMTP_PORT", "465") or 465)
+    explicit_ssl = os.environ.get("SMTP_USE_SSL")
+    # Par défaut : SSL implicite sur 465, STARTTLS sur 587/25 (IONOS : smtp.ionos.fr 587 → STARTTLS)
+    use_ssl = (explicit_ssl.lower() in ("1", "true", "yes")) if explicit_ssl not in (None, "") else port == 465
     return {
         "host": os.environ.get("SMTP_HOST", ""),
-        "port": int(os.environ.get("SMTP_PORT", "465") or 465),
+        "port": port,
         "user": os.environ.get("SMTP_USER", ""),
         "password": os.environ.get("SMTP_PASSWORD", ""),
         "from_email": os.environ.get("SMTP_FROM_EMAIL", "") or os.environ.get("SMTP_USER", ""),
         "from_name": os.environ.get("SMTP_FROM_NAME", "CINÉMARIÉS"),
-        "use_ssl": (os.environ.get("SMTP_USE_SSL", "true").lower() in ("1", "true", "yes")),
+        "use_ssl": use_ssl,
     }
 
 
