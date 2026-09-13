@@ -87,7 +87,7 @@ export function AdminDeliverablesPanel({ project, onChanged, reload }: { project
 
   const uploadZip = async () => {
     try {
-      const res = await DocumentPicker.getDocumentAsync({ type: ["application/zip", "application/x-zip-compressed"], multiple: false });
+      const res = await DocumentPicker.getDocumentAsync({ type: ["application/zip", "application/x-zip-compressed", "application/vnd.rar", "application/x-rar-compressed", "application/x-7z-compressed"], multiple: false });
       if (res.canceled || !res.assets?.length) return;
       const asset = res.assets[0];
       setUploading(true);
@@ -134,7 +134,7 @@ export function AdminDeliverablesPanel({ project, onChanged, reload }: { project
       <View style={styles.btnRow}>
         <TouchableOpacity style={styles.btn} onPress={openZipModal} disabled={importing} testID="deliv-import-zip">
           <Ionicons name="archive-outline" size={16} color="#0A0A0A" />
-          <Text style={styles.btnTxt}>Importer un ZIP</Text>
+          <Text style={styles.btnTxt}>Importer ZIP / RAR</Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={styles.btnGhost}
@@ -227,15 +227,15 @@ export function AdminDeliverablesPanel({ project, onChanged, reload }: { project
       <Modal visible={zipModal} transparent animationType="fade" onRequestClose={() => setZipModal(false)}>
         <View style={styles.backdrop}>
           <View style={styles.modal}>
-            <Text style={styles.modalTitle}>Importer les photos (ZIP)</Text>
+            <Text style={styles.modalTitle}>Importer les photos (ZIP / RAR / 7z)</Text>
             <Text style={styles.muted}>
-              Déposez « {project.wedding_name} photos.zip » dans le dossier FTP : il est importé automatiquement. Sinon choisissez un ZIP déjà déposé ci-dessous.
+              Déposez « {project.wedding_name} photos.zip » (ou .rar / .7z) dans le dossier FTP : l&apos;archive est importée automatiquement. Sinon choisissez une archive déjà déposée ci-dessous.
             </Text>
             <ScrollView style={{ maxHeight: 260, marginTop: spacing.sm }}>
               {zips === null ? (
                 <ActivityIndicator color={colors.gold} style={{ margin: spacing.md }} />
               ) : zips.length === 0 ? (
-                <Text style={[styles.muted, { textAlign: "center", padding: spacing.md }]}>Aucun fichier .zip dans le dossier FTP</Text>
+                <Text style={[styles.muted, { textAlign: "center", padding: spacing.md }]}>Aucune archive (.zip / .rar / .7z) dans le dossier FTP</Text>
               ) : (
                 zips.map((z) => (
                   <TouchableOpacity key={z.name} style={styles.zipRow} onPress={() => importZip(z.name)} testID={`zip-${z.name}`}>
@@ -251,7 +251,7 @@ export function AdminDeliverablesPanel({ project, onChanged, reload }: { project
             </ScrollView>
             <TouchableOpacity style={[styles.btnGhost, { marginTop: spacing.sm, justifyContent: "center" }]} onPress={uploadZip} disabled={uploading} testID="zip-upload">
               {uploading ? <ActivityIndicator color={colors.gold} size="small" /> : <Ionicons name="cloud-upload-outline" size={16} color={colors.gold} />}
-              <Text style={styles.btnGhostTxt}>Envoyer un petit ZIP depuis cet appareil</Text>
+              <Text style={styles.btnGhostTxt}>Envoyer une petite archive depuis cet appareil</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.cancel} onPress={() => setZipModal(false)} testID="zip-cancel">
               <Text style={{ color: colors.textSecondary }}>Fermer</Text>

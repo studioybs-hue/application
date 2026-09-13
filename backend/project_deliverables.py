@@ -31,6 +31,7 @@ import asyncio
 import logging
 import re
 import shutil
+import subprocess
 import unicodedata
 import uuid
 import zipfile
@@ -54,6 +55,7 @@ log = logging.getLogger("project_deliverables")
 SELECTION_MAX = 40
 MUSIC_FILE_MAX_BYTES = 40 * 1024 * 1024
 ZIP_SKIP_PARTS = {"__MACOSX"}
+ARCHIVE_EXTS = {".zip", ".rar", ".7z"}
 ZIP_KEYWORDS = ("photos", "photo", "selection", "sélection", "galerie")
 
 
@@ -96,6 +98,58 @@ def zip_couple_name(filename: str) -> str:
     kept = [w for w in words if unicodedata.normalize("NFKD", w).encode("ascii", "ignore").decode().lower() not in
             {unicodedata.normalize("NFKD", k).encode("ascii", "ignore").decode() for k in ZIP_KEYWORDS}]
     return " ".join(kept).strip(" -_:") or stem
+
+
+def _which(*names: str) -> Optional[str]:
+    """Binaire système (le service systemd a un PATH réduit → chemins usuels en repli)."""
+    for n in names:
+        found = shutil.which(n)
+        if found:
+            return found
+        for d in ("/usr/bin", "/usr/local/bin", "/bin", "/snap/bin"):
+            if Path(d, n).exists():
+                return str(Path(d, n))
+    return None
+
+
+def _is_wanted_image(rel: Path) -> bool:
+    return rel.suffix.lower() in ALLOWED_PHOTO_EXTS and not any(
+        part in ZIP_SKIP_PARTS or part.startswith(".") for part in rel.parts
+    )
+
+
+def extract_archive(archive: Path, tmp_dir: Path) -> list[tuple[str, Path]]:
+    """Extrait une archive ZIP / RAR / 7z dans tmp_dir et renvoie [(nom relatif, chemin extrait)] des images.
+    RAR/7z : outils système `unrar` / `7z` (installés sur le VPS). Bloquant → à appeler via asyncio.to_thread."""
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    ext = archive.suffix.lower()
+    if ext == ".zip":
+        with zipfile.ZipFile(archive) as zf:
+            wanted = [m for m in zf.infolist() if not m.is_dir() and _is_wanted_image(Path(m.filename))]
+            zf.extractall(tmp_dir, members=wanted)  # zipfile neutralise les chemins ../ et absolus
+    elif ext == ".rar":
+        exe = _which("unrar")
+        if not exe:
+            raise RuntimeError("Archive RAR : l'outil « unrar » n'est pas installé sur le serveur")
+        r = subprocess.run([exe, "x", "-o+", "-y", "-inul", str(archive), str(tmp_dir) + "/"], capture_output=True, text=True, timeout=3600)
+        if r.returncode not in (0, 1):  # 1 = avertissement non bloquant
+            raise RuntimeError(f"unrar a échoué (code {r.returncode}) : {(r.stderr or r.stdout)[:200]}")
+    elif ext == ".7z":
+        exe = _which("7z", "7za", "7zz")
+        if not exe:
+            raise RuntimeError("Archive 7z : l'outil « 7z » n'est pas installé sur le serveur")
+        r = subprocess.run([exe, "x", "-y", f"-o{tmp_dir}", str(archive)], capture_output=True, text=True, timeout=3600)
+        if r.returncode not in (0, 1):
+            raise RuntimeError(f"7z a échoué (code {r.returncode}) : {(r.stderr or r.stdout)[:200]}")
+    else:
+        raise ValueError(f"Format d'archive non pris en charge ({ext}). Acceptés : {', '.join(sorted(ARCHIVE_EXTS))}")
+    found = []
+    for f in sorted(tmp_dir.rglob("*")):
+        if f.is_file():
+            rel = f.relative_to(tmp_dir)
+            if _is_wanted_image(rel):
+                found.append((str(rel), f))
+    return found
 
 
 # ---------------------------------------------------------------------------
@@ -225,9 +279,9 @@ def register_project_deliverables_routes(
         p["current_step_index"] = next((i for i, s in enumerate(p.get("steps", [])) if s.get("status") != STATUS_DONE), total - 1)
         return p
 
-    # ---------------- ZIP → galerie ----------------
+    # ---------------- Archive (ZIP / RAR / 7z) → galerie ----------------
     async def import_zip_to_gallery(client_id: str, zip_path: Path, *, delete_zip: bool, notify_couple: bool = True) -> dict:
-        """Extrait les images du ZIP dans la galerie privée du mariage. Tourne en tâche de fond."""
+        """Extrait les images de l'archive (ZIP, RAR, 7z) dans la galerie privée du mariage. Tourne en tâche de fond."""
         p = await db.project_tracking.find_one({"client_id": client_id}, {"_id": 0, "wedding_name": 1, "deliverables": 1})
         wedding_name = (p or {}).get("wedding_name") or client_id
         await _set_deliverable(client_id, "photos", {
@@ -237,44 +291,38 @@ def register_project_deliverables_routes(
         dirs = ensure_photos_dirs(UPLOAD_DIR, client_id)
         used = {f.name.lower() for f in dirs["originals"].iterdir() if f.is_file()}
         existing_order = await db.wedding_photos.count_documents({"wedding_id": client_id})
-        added, errors = 0, []
+        added, errors, total = 0, [], 0
+        tmp_dir = UPLOAD_DIR / "tmp_zips" / f"extract_{uuid.uuid4().hex}"
         try:
-            with zipfile.ZipFile(zip_path) as zf:
-                members = [
-                    m for m in zf.infolist()
-                    if not m.is_dir()
-                    and Path(m.filename).suffix.lower() in ALLOWED_PHOTO_EXTS
-                    and not any(part in ZIP_SKIP_PARTS or part.startswith(".") for part in Path(m.filename).parts)
-                ]
-                if not members:
-                    raise ValueError("Aucune image (.jpg/.jpeg/.png/.webp) dans ce ZIP")
-                total = len(members)
-                await db.project_tracking.update_one({"client_id": client_id}, {"$set": {"deliverables.photos.import.total": total}})
-                for idx, m in enumerate(sorted(members, key=lambda x: x.filename.lower())):
-                    fname = _safe_filename(m.filename, used)
-                    dst = dirs["originals"] / fname
-                    try:
-                        with zf.open(m) as src, open(dst, "wb") as out:
-                            shutil.copyfileobj(src, out)
-                        info = await asyncio.to_thread(generate_thumbnail, dst, dirs["thumbs"] / fname)
-                    except Exception as exc:
-                        dst.unlink(missing_ok=True)
-                        errors.append(f"{m.filename}: {exc}")
-                        continue
-                    await db.wedding_photos.insert_one({
-                        "id": str(uuid.uuid4()),
-                        "wedding_id": client_id,
-                        "filename": fname,
-                        "original_name": Path(m.filename).name,
-                        "order": existing_order + idx,
-                        "size_bytes": dst.stat().st_size,
-                        "width": info["width"],
-                        "height": info["height"],
-                        "created_at": _utcnow(),
-                    })
-                    added += 1
-                    if added % 10 == 0:
-                        await db.project_tracking.update_one({"client_id": client_id}, {"$set": {"deliverables.photos.import.done": added}})
+            members = await asyncio.to_thread(extract_archive, zip_path, tmp_dir)
+            if not members:
+                raise ValueError("Aucune image (.jpg/.jpeg/.png/.webp) dans cette archive")
+            total = len(members)
+            await db.project_tracking.update_one({"client_id": client_id}, {"$set": {"deliverables.photos.import.total": total}})
+            for idx, (rel_name, src_path) in enumerate(members):
+                fname = _safe_filename(rel_name, used)
+                dst = dirs["originals"] / fname
+                try:
+                    shutil.move(str(src_path), str(dst))
+                    info = await asyncio.to_thread(generate_thumbnail, dst, dirs["thumbs"] / fname)
+                except Exception as exc:
+                    dst.unlink(missing_ok=True)
+                    errors.append(f"{rel_name}: {exc}")
+                    continue
+                await db.wedding_photos.insert_one({
+                    "id": str(uuid.uuid4()),
+                    "wedding_id": client_id,
+                    "filename": fname,
+                    "original_name": Path(rel_name).name,
+                    "order": existing_order + idx,
+                    "size_bytes": dst.stat().st_size,
+                    "width": info["width"],
+                    "height": info["height"],
+                    "created_at": _utcnow(),
+                })
+                added += 1
+                if added % 10 == 0:
+                    await db.project_tracking.update_one({"client_id": client_id}, {"$set": {"deliverables.photos.import.done": added}})
             count = await db.wedding_photos.count_documents({"wedding_id": client_id})
             await _set_deliverable(client_id, "photos", {
                 **(((await _get_project(client_id)).get("deliverables") or {}).get("photos") or {}),
@@ -302,6 +350,8 @@ def register_project_deliverables_routes(
             await _alert_admin("❌ Import ZIP photos — ERREUR", [f"<b>Mariage :</b> {wedding_name}", f"<b>ZIP :</b> {zip_path.name}", f"{exc}"],
                                f"CINEMARIES: ERREUR import ZIP {zip_path.name[:50]}")
             return {"ok": False, "error": str(exc), "added": added}
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
     async def _match_project_for_zip(name: str):
         """Mariage cible d'un ZIP déposé par FTP : suivis de projet d'abord, puis mariages (vidéos)."""
@@ -487,7 +537,7 @@ def register_project_deliverables_routes(
         items = []
         if FTP_DROP_DIR.exists():
             for f in FTP_DROP_DIR.iterdir():
-                if f.is_file() and f.suffix.lower() == ".zip" and not f.name.startswith("."):
+                if f.is_file() and f.suffix.lower() in ARCHIVE_EXTS and not f.name.startswith("."):
                     st = f.stat()
                     items.append({"name": f.name, "size": st.st_size, "modified": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat()})
         items.sort(key=lambda x: x["modified"], reverse=True)
@@ -500,8 +550,8 @@ def register_project_deliverables_routes(
         if "/" in body.filename or ".." in body.filename:
             raise HTTPException(400, "Nom de fichier invalide")
         path = FTP_DROP_DIR / body.filename
-        if not path.exists() or path.suffix.lower() != ".zip":
-            raise HTTPException(404, "ZIP introuvable dans le dossier FTP")
+        if not path.exists() or path.suffix.lower() not in ARCHIVE_EXTS:
+            raise HTTPException(404, "Archive (ZIP/RAR/7z) introuvable dans le dossier FTP")
         running = ((p.get("deliverables") or {}).get("photos") or {}).get("import", {}).get("status") == "running"
         if running:
             raise HTTPException(409, "Un import est déjà en cours pour ce mariage")
@@ -512,14 +562,15 @@ def register_project_deliverables_routes(
     async def admin_upload_zip(client_id: str, file: UploadFile = File(...), admin: dict = Depends(require_admin)):
         """Upload direct d'un petit ZIP depuis l'admin (sinon passer par le FTP)."""
         p = await _get_project(client_id)
-        if Path(file.filename or "").suffix.lower() != ".zip":
-            raise HTTPException(400, "Un fichier .zip est attendu")
+        ext = Path(file.filename or "").suffix.lower()
+        if ext not in ARCHIVE_EXTS:
+            raise HTTPException(400, "Une archive .zip, .rar ou .7z est attendue")
         running = ((p.get("deliverables") or {}).get("photos") or {}).get("import", {}).get("status") == "running"
         if running:
             raise HTTPException(409, "Un import est déjà en cours pour ce mariage")
         tmp_dir = UPLOAD_DIR / "tmp_zips"
         tmp_dir.mkdir(parents=True, exist_ok=True)
-        tmp = tmp_dir / f"{uuid.uuid4().hex}.zip"
+        tmp = tmp_dir / f"{uuid.uuid4().hex}{ext}"
         with open(tmp, "wb") as out:
             while True:
                 chunk = await file.read(1024 * 1024)

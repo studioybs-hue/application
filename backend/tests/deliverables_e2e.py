@@ -22,6 +22,7 @@ assert st == 200, r
 admin = r["token"] if "token" in r else r["access_token"]
 cid = "test-livrables"
 call("DELETE", f"/admin/projects/{cid}", token=admin)
+call("DELETE", f"/admin/weddings/{cid}/photos", token=admin)
 st, r = call("POST", "/admin/projects", {"client_id": cid, "wedding_name": "Test & Livrables", "owner_email": "livrables@test.fr"}, token=admin)
 assert st == 200, r
 

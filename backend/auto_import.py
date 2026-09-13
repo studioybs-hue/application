@@ -654,7 +654,7 @@ class AutoImporter:
         job_id = job["id"]
         log.info("[auto-import] Traitement de « %s » (%d octets)", path.name, size)
         try:
-            if path.suffix.lower() == ".zip" and self.zip_handler is not None:
+            if path.suffix.lower() in (".zip", ".rar", ".7z") and self.zip_handler is not None:
                 sha = job.get("sha256") or await asyncio.to_thread(sha256_file, path)
                 await self._job_set(job_id, sha256=sha)
                 await self.zip_handler(self, job_id, path)
