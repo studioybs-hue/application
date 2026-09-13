@@ -56,7 +56,7 @@ MAX_DEVICES_PER_CODE = int(os.environ.get('MAX_DEVICES_PER_CODE', '3'))
 HOSTING_FEE_AMOUNT = int(os.environ.get('HOSTING_FEE_AMOUNT', '9000'))
 APP_PUBLIC_URL = (os.environ.get('APP_PUBLIC_URL') or os.environ.get('PUBLIC_BASE_URL') or os.environ.get('FRONTEND_URL') or '').rstrip('/')
 ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', 'admin@wedding.fr')
-ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'Admin13!')
+ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', '')  # requis pour créer le compte admin initial (aucun mot de passe par défaut)
 UPLOAD_DIR = ROOT_DIR / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
 
@@ -4300,6 +4300,9 @@ async def _seed_admin():
         # ensure is_admin flag
         if not existing.get("is_admin"):
             await db.users.update_one({"_id": existing["_id"]}, {"$set": {"is_admin": True}})
+        return
+    if not ADMIN_PASSWORD:
+        logging.warning("[startup] ADMIN_PASSWORD absent : compte admin initial non créé")
         return
     await db.users.insert_one({
         "id": str(uuid.uuid4()),
