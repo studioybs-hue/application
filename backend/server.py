@@ -54,7 +54,7 @@ BASIC_MAX_CODES = int(os.environ.get('BASIC_MAX_CODES', '3'))
 MAX_DEVICES_PER_CODE = int(os.environ.get('MAX_DEVICES_PER_CODE', '3'))
 # One-time hosting fee for couples wanting to host their wedding (in cents)
 HOSTING_FEE_AMOUNT = int(os.environ.get('HOSTING_FEE_AMOUNT', '9000'))
-APP_PUBLIC_URL = os.environ.get('APP_PUBLIC_URL', '')
+APP_PUBLIC_URL = (os.environ.get('APP_PUBLIC_URL') or os.environ.get('PUBLIC_BASE_URL') or os.environ.get('FRONTEND_URL') or '').rstrip('/')
 ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', 'admin@wedding.fr')
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'Admin13!')
 UPLOAD_DIR = ROOT_DIR / "uploads"
@@ -2967,6 +2967,9 @@ async def stripe_webhook(request: Request, stripe_signature: Optional[str] = Hea
 
     event_type = event["type"] if isinstance(event, dict) else event.type
     obj = event["data"]["object"] if isinstance(event, dict) else event.data.object
+    # stripe-python récent interdit .get() sur les ressources → on travaille sur un dict
+    if not isinstance(obj, dict):
+        obj = obj.to_dict() if hasattr(obj, "to_dict") else dict(obj)
 
     logging.info(f"[Stripe webhook] {event_type}")
 

@@ -140,3 +140,7 @@ User's primary language: **French** — always respond in French.
 - VPS `.env` : `STRIPE_API_KEY=sk_live_…` (fourni par l'utilisateur), `STRIPE_WEBHOOK_SECRET` (endpoint `we_1UFFA12RzyH118YnXq09MCTh` → https://cinemaries.fr/api/billing/webhook, créé via API), `STRIPE_PRICE_ID_ANNUAL_COMMIT=price_1Tc7I62RzyH118Yn4SAyg5jk`, `STRIPE_PRICE_ID_ANNUAL_FREE=price_1Tc7I72RzyH118Yn74TwpPf9`, `STRIPE_PRICE_ID_MONTHLY_FREE=price_1Tc7I82RzyH118YnHdfLJPKa`. Anciennes variables erronées (STRIPE_SECRET_KEY, STRIPE_PRICE_MONTHLY) supprimées. Sauvegarde .env dans /root/backups/.
 - `STRIPE_PUBLISHABLE_KEY` non renseignée (non utilisée : Checkout hébergé). Session Checkout live testée OK.
 - Fix `scripts/create_stripe_products.py` (`p.recurring["interval"]`).
+
+### Test paiement réel Stripe LIVE (2026-09-13) ✅
+- Compte test `youssouf.ali09@gmail.com` (claim `yassina` inséré manuellement). Paiement 2,30 € OK → Premium activé → webhook corrigé (`obj.to_dict()` : stripe-python 15.x interdit `.get()` sur les ressources) → événements rejoués → remboursement `re_3UFFSL2RzyH118Yn1JhExRNn` (230 cts) → abonnement annulé → webhook `customer.subscription.deleted` a repassé `is_subscribed=false`.
+- Fix : `APP_PUBLIC_URL` manquait sur le VPS (success_url invalide → 502) ; ajouté dans `.env` + fallback PUBLIC_BASE_URL dans server.py.
