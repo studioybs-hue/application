@@ -53,6 +53,11 @@ type Settings = {
   enabled: boolean;
   default_featured: boolean;
   default_showcase: boolean;
+  notify_email: boolean;
+  notify_email_to: string;
+  notify_sms: boolean;
+  notify_phone: string;
+  notify_on: "all" | "errors";
   services: Service[];
   categories: string[];
 };
@@ -92,6 +97,20 @@ export default function AdminAutoImport() {
   const [newKey, setNewKey] = useState("");
   const [newCat, setNewCat] = useState("Soirées");
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [testingNotify, setTestingNotify] = useState(false);
+
+  const testNotify = async () => {
+    setTestingNotify(true);
+    try {
+      const r = await api<{ email: boolean; sms: boolean; smtp_configured: boolean }>("/admin/auto-import/test-notify", { method: "POST" });
+      const parts = [r.email ? "email envoyé" : r.smtp_configured ? "email désactivé" : "email impossible (SMTP non configuré)", r.sms ? "SMS envoyé" : "SMS désactivé"];
+      showAlert("Test d'alerte", parts.join(" · "));
+    } catch (e: any) {
+      showAlert("Erreur", e?.message || "Test impossible");
+    } finally {
+      setTestingNotify(false);
+    }
+  };
 
   const load = useCallback(async () => {
     try {
@@ -173,6 +192,11 @@ export default function AdminAutoImport() {
           enabled: next.enabled,
           default_featured: next.default_featured,
           default_showcase: next.default_showcase,
+          notify_email: next.notify_email,
+          notify_email_to: next.notify_email_to,
+          notify_sms: next.notify_sms,
+          notify_phone: next.notify_phone,
+          notify_on: next.notify_on,
           services: next.services.map((s) => ({ key: s.key, label: s.label, category: s.category })),
         },
       });
@@ -310,6 +334,53 @@ export default function AdminAutoImport() {
                   <Text style={styles.hint}>Visible dans « Découvrir », regardable avec un compte gratuit sans code</Text>
                 </View>
                 <Switch value={settings.default_showcase} onValueChange={(v) => saveSettings({ default_showcase: v })} trackColor={{ true: colors.gold }} testID="ai-switch-showcase" />
+              </View>
+
+              <Text style={[styles.label, { marginTop: spacing.md, marginBottom: 2 }]}>Alertes à chaque import</Text>
+              <Text style={[styles.hint, { marginBottom: 6 }]}>Prévenez-moi quand un fichier est publié ou tombe en erreur</Text>
+              <View style={styles.switchRow}>
+                <Text style={styles.label}>Par email</Text>
+                <Switch value={settings.notify_email} onValueChange={(v) => saveSettings({ notify_email: v })} trackColor={{ true: colors.gold }} testID="ai-switch-notify-email" />
+              </View>
+              {settings.notify_email && (
+                <TextInput
+                  style={[styles.input, { marginBottom: spacing.sm }]}
+                  value={settings.notify_email_to}
+                  onChangeText={(t) => setSettings({ ...settings, notify_email_to: t })}
+                  onBlur={() => saveSettings({ notify_email_to: settings.notify_email_to })}
+                  placeholder="contact@cinemaries.fr"
+                  placeholderTextColor={colors.textDisabled}
+                  autoCapitalize="none"
+                  keyboardType="email-address"
+                  testID="ai-notify-email-input"
+                />
+              )}
+              <View style={styles.switchRow}>
+                <Text style={styles.label}>Par SMS (Brevo)</Text>
+                <Switch value={settings.notify_sms} onValueChange={(v) => saveSettings({ notify_sms: v })} trackColor={{ true: colors.gold }} testID="ai-switch-notify-sms" />
+              </View>
+              {settings.notify_sms && (
+                <TextInput
+                  style={[styles.input, { marginBottom: spacing.sm }]}
+                  value={settings.notify_phone}
+                  onChangeText={(t) => setSettings({ ...settings, notify_phone: t })}
+                  onBlur={() => saveSettings({ notify_phone: settings.notify_phone })}
+                  placeholder="06 XX XX XX XX"
+                  placeholderTextColor={colors.textDisabled}
+                  keyboardType="phone-pad"
+                  testID="ai-notify-phone-input"
+                />
+              )}
+              <View style={styles.chips}>
+                {([["all", "Tous les fichiers"], ["errors", "Erreurs seulement"]] as const).map(([k, l]) => (
+                  <TouchableOpacity key={k} style={[styles.catChip, settings.notify_on === k && styles.catChipActive]} onPress={() => saveSettings({ notify_on: k })} testID={`ai-notify-on-${k}`}>
+                    <Text style={[styles.catChipTxt, settings.notify_on === k && { color: "#0A0A0A", fontWeight: "700" }]}>{l}</Text>
+                  </TouchableOpacity>
+                ))}
+                <TouchableOpacity style={styles.smallBtn} onPress={testNotify} disabled={testingNotify} testID="ai-notify-test">
+                  {testingNotify ? <ActivityIndicator color={colors.gold} size="small" /> : <Ionicons name="paper-plane-outline" size={14} color={colors.gold} />}
+                  <Text style={styles.smallBtnTxt}>Envoyer un test</Text>
+                </TouchableOpacity>
               </View>
 
               <Text style={[styles.label, { marginTop: spacing.md, marginBottom: 6 }]}>Prestations reconnues (fin du nom de fichier)</Text>

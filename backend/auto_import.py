@@ -36,6 +36,9 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from mailer import send_email, render_email, is_configured as smtp_configured
+from project_tracking import send_brevo_sms, normalize_fr_phone
+
 log = logging.getLogger("auto_import")
 
 # ----------------------------------------------------------------------------
@@ -75,6 +78,12 @@ DEFAULT_SETTINGS = {
     "enabled": True,
     "default_featured": True,
     "default_showcase": True,
+    # Alertes admin à chaque fichier publié / en erreur
+    "notify_email": True,
+    "notify_email_to": os.environ.get("ADMIN_NOTIFY_EMAIL", ""),
+    "notify_sms": False,
+    "notify_phone": "",
+    "notify_on": "all",  # "all" | "errors"
     "services": [
         {"key": "soiree", "label": "Soirée", "category": "Soirées"},
         {"key": "reception", "label": "Réception", "category": "Soirées"},
@@ -365,9 +374,14 @@ class AutoImporter:
         cfg["services"] = [dict(s) for s in DEFAULT_SETTINGS["services"]]
         if doc and isinstance(doc.get("value"), dict):
             v = doc["value"]
-            for k in ("enabled", "default_featured", "default_showcase"):
+            for k in ("enabled", "default_featured", "default_showcase", "notify_email", "notify_sms"):
                 if k in v:
                     cfg[k] = bool(v[k])
+            for k in ("notify_email_to", "notify_phone"):
+                if k in v and v[k] is not None:
+                    cfg[k] = str(v[k]).strip()
+            if v.get("notify_on") in ("all", "errors"):
+                cfg["notify_on"] = v["notify_on"]
             if isinstance(v.get("services"), list) and v["services"]:
                 cfg["services"] = [
                     {
@@ -521,6 +535,51 @@ class AutoImporter:
     async def _job_set(self, job_id: str, **fields):
         fields["updated_at"] = utcnow()
         await self.db.import_jobs.update_one({"id": job_id}, {"$set": fields})
+        if fields.get("status") in (STATUS_PROCESSED, STATUS_ERROR) and fields.get("result") != "duplicate":
+            job = await self.db.import_jobs.find_one({"id": job_id}, {"_id": 0})
+            if job:
+                asyncio.create_task(self._notify(job))
+
+    async def _notify(self, job: dict):
+        """Alerte admin (email et/ou SMS Brevo) : fichier publié ou en erreur. Ne bloque jamais le pipeline."""
+        try:
+            cfg = await self.get_settings()
+            is_error = job.get("status") == STATUS_ERROR
+            if cfg.get("notify_on") == "errors" and not is_error:
+                return
+            wedding = job.get("client_name") or job.get("couple") or "—"
+            what = job.get("type_label") or "Fichier"
+            if job.get("service_label"):
+                what += f" « {job['service_label']} »"
+            if is_error:
+                title = "❌ Import automatique — ERREUR"
+                line = f"{job['filename']} → {job.get('error_message') or 'erreur'}"
+                sms = f"CINEMARIES: ERREUR import {job['filename'][:60]} - {(job.get('error_message') or '')[:70]}"
+            else:
+                title = "✅ Import automatique — publié"
+                line = f"{job['filename']} → {what} · Mariage : {wedding} · {job.get('message') or ''}"
+                sms = f"CINEMARIES: publie {what} - {wedding} ({job['filename'][:50]})"
+            if cfg.get("notify_email") and cfg.get("notify_email_to") and smtp_configured():
+                html = render_email(
+                    title,
+                    f"<p><b>Fichier :</b> {job['filename']}</p><p><b>Type :</b> {what}</p><p><b>Mariage :</b> {wedding}</p>"
+                    f"<p><b>Statut :</b> {job.get('status')}</p><p>{job.get('error_message') or job.get('message') or ''}</p>",
+                    cta_label="Ouvrir le journal d'importation",
+                    cta_url=f"{self.public_url or 'https://cinemaries.fr'}/admin/auto-import",
+                )
+                try:
+                    await send_email(cfg["notify_email_to"], f"CINÉMARIÉS — {title}", html)
+                except Exception as e:
+                    log.warning("[auto-import] Email d'alerte impossible: %s", e)
+            if cfg.get("notify_sms") and cfg.get("notify_phone"):
+                phone = normalize_fr_phone(cfg["notify_phone"])
+                if phone:
+                    ok, info = await send_brevo_sms(phone, sms[:160], tag="auto_import")
+                    if not ok:
+                        log.warning("[auto-import] SMS d'alerte impossible: %s", info)
+            log.info("[auto-import] Alerte envoyée: %s", line)
+        except Exception as e:
+            log.warning("[auto-import] Notification ignorée: %s", e)
 
     async def _new_job(self, path: Path, size: int) -> dict:
         job = {
@@ -949,6 +1008,11 @@ class SettingsBody(BaseModel):
     enabled: Optional[bool] = None
     default_featured: Optional[bool] = None
     default_showcase: Optional[bool] = None
+    notify_email: Optional[bool] = None
+    notify_email_to: Optional[str] = None
+    notify_sms: Optional[bool] = None
+    notify_phone: Optional[str] = None
+    notify_on: Optional[str] = None
     services: Optional[list[ServiceBody]] = None
 
 
@@ -1002,10 +1066,18 @@ def register_auto_import_routes(app, api_router: APIRouter, db, UPLOAD_DIR: Path
     @api_router.put("/admin/auto-import/settings")
     async def auto_import_put_settings(body: SettingsBody, _: dict = Depends(require_admin)):
         cfg = await importer.get_settings()
-        for k in ("enabled", "default_featured", "default_showcase"):
+        for k in ("enabled", "default_featured", "default_showcase", "notify_email", "notify_sms"):
             v = getattr(body, k)
             if v is not None:
                 cfg[k] = bool(v)
+        for k in ("notify_email_to", "notify_phone"):
+            v = getattr(body, k)
+            if v is not None:
+                cfg[k] = v.strip()
+        if body.notify_phone and not normalize_fr_phone(body.notify_phone):
+            raise HTTPException(status_code=400, detail="Numéro de téléphone FR invalide (06XXXXXXXX ou +336XXXXXXXX)")
+        if body.notify_on in ("all", "errors"):
+            cfg["notify_on"] = body.notify_on
         if body.services is not None:
             services = []
             seen = set()
@@ -1025,6 +1097,16 @@ def register_auto_import_routes(app, api_router: APIRouter, db, UPLOAD_DIR: Path
         saved = await importer.save_settings(cfg)
         saved["categories"] = CATEGORIES
         return saved
+
+    @api_router.post("/admin/auto-import/test-notify")
+    async def auto_import_test_notify(_: dict = Depends(require_admin)):
+        """Envoie une alerte de test (email/SMS selon les réglages)."""
+        cfg = await importer.get_settings()
+        fake = {"filename": "Test & Alerte video complet soiree.mp4", "status": STATUS_PROCESSED, "type_label": "Prestation",
+                "service_label": "Soirée", "client_name": "Test & Alerte", "message": "Ceci est un test d'alerte."}
+        await importer._notify(fake)
+        return {"ok": True, "email": bool(cfg.get("notify_email") and cfg.get("notify_email_to") and smtp_configured()),
+                "sms": bool(cfg.get("notify_sms") and cfg.get("notify_phone")), "smtp_configured": smtp_configured()}
 
     @api_router.post("/admin/auto-import/parse-test")
     async def auto_import_parse_test(body: dict, _: dict = Depends(require_admin)):

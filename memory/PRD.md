@@ -127,3 +127,7 @@ User's primary language: **French** — always respond in French.
 - ⚠️ Le watcher est **désactivé** en prod (`app_settings.auto_import.enabled=false`) : le dossier ftp_drop contient déjà ~90 Go de fichiers manuels (« soiree Yassina.mp4 », « HALAL Yassina.mp4 », « Mazaraka Hanifa.mp4 », « oukoumbi Sarhaline.mp4 », « Oukopumbi att.mp4 », « soiree.mp4 », « Extrat 1.png »). L'utilisateur doit l'activer depuis Admin → Importation automatique quand il est prêt. Les fichiers au nom invalide restent désormais EN PLACE (jamais déplacés) avec statut ERROR ; seuls les doublons vont dans `duplicates/`.
 - Parser : ordre `{prestation} {nom}` aussi accepté (« soiree Yassina.mp4 »). Prestations par défaut ajoutées : halal, mazaraka, madjilis.
 - Incident lors du déploiement : l'ancienne version a déplacé 8 fichiers dans errors/ avant la désactivation → tous remis dans ftp_drop, journal purgé.
+
+### Alertes import (2026-09-13) ✅ déployé
+- `auto_import._notify` : à chaque job PROCESSED (hors doublon) ou ERROR → email (mailer IONOS, si SMTP configuré) et/ou SMS Brevo. Réglages `app_settings.auto_import` : notify_email (défaut true), notify_email_to (défaut ADMIN_NOTIFY_EMAIL), notify_sms (false), notify_phone, notify_on ("all"|"errors"). Route POST `/admin/auto-import/test-notify`. UI dans Admin → Importation automatique → Prestations & publication → « Alertes à chaque import ».
+- Rappel : l'email ne partira réellement que lorsque IONOS autorisera le SMTP externe (blocage connu) ; le SMS Brevo fonctionne indépendamment.
