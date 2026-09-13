@@ -26,8 +26,9 @@ export default function ProfileScreen() {
   // Suivi de projet « temps réel » : rechargé à l'ouverture, au retour sur l'onglet et toutes les 10 s.
   const loadProject = useCallback(async () => {
     try {
-      const r = await api<{ project: ProjectTracking | null; account_type?: string }>("/projects/me");
-      setProject(r.project);
+      const r = await api<{ project: ProjectTracking | null; account_type?: string; admin_preview?: boolean }>("/projects/me");
+      // L'admin gère les suivis depuis l'administration : pas d'aperçu d'un suivi client dans son propre profil
+      setProject(r.admin_preview ? null : r.project);
       setCoupleWithoutProject(!r.project && (r.account_type === "couple" || (user as any)?.account_type === "couple"));
     } catch {
       setProject(null);
@@ -169,7 +170,7 @@ export default function ProfileScreen() {
 
   return (
     <SafeAreaView style={styles.root} edges={["top"]}>
-      <ScrollView contentContainerStyle={{ padding: spacing.md }}>
+      <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.avatarWrap}>
           <View style={styles.avatar}>
             <Text style={styles.avatarTxt}>
@@ -451,6 +452,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
   },
   section: { backgroundColor: colors.surface, borderRadius: radii.md, overflow: "hidden", borderWidth: 1, borderColor: "rgba(255,255,255,0.05)" },
+  content: { padding: spacing.md, width: "100%", maxWidth: 720, alignSelf: "center" },
   trackingCard: {
     padding: spacing.md,
     backgroundColor: colors.bg,
