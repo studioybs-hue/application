@@ -5,14 +5,14 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  TextInput,
   ActivityIndicator,
   Alert,
   Platform,
   Animated,
   Easing,
 } from "react-native";
-import { useLocalSearchParams } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import { useAuth } from "@/src/auth/AuthContext";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { api } from "@/src/api/client";
@@ -35,8 +35,8 @@ type Entry = {
  */
 export default function GuestbookRevealPage() {
   const { clientId } = useLocalSearchParams<{ clientId: string }>();
-  const [code, setCode] = useState("");
-  const [loading, setLoading] = useState(false);
+  const router = useRouter();
+  const { user, loading: authLoading } = useAuth();
   const [autoLoading, setAutoLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<{ wedding_name: string; count: number; items: Entry[] } | null>(null);
@@ -59,24 +59,30 @@ export default function GuestbookRevealPage() {
     }, 700);
   };
 
-  // Try authenticated access first — logged-in couple doesn't need a code
+  // Accès réservé aux mariés connectés : le compte Mariés relié au mariage voit ses messages sans code.
   useEffect(() => {
+    if (authLoading) return;
+    if (!user) {
+      setAutoLoading(false);
+      return;
+    }
     (async () => {
       try {
-        const r = await api<any>(`/guestbook/mine`);
-        // If user's client_id matches the URL, we can auto-reveal
+        const r = await api<any>(`/guestbook/mine?client_id=${encodeURIComponent(clientId || "")}`);
         if (r && r.client_id === clientId) {
           setData(r);
           revealItems(r.items || []);
+        } else {
+          setError("Votre compte est relié à un autre mariage.");
         }
-      } catch {
-        // Not logged in or client mismatch — fall back to code entry
+      } catch (e: any) {
+        setError(e?.message || "Votre compte n'est pas encore relié à ce mariage.");
       } finally {
         setAutoLoading(false);
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clientId]);
+  }, [clientId, user?.id, authLoading]);
 
   if (IS_IOS_NATIVE) {
     return (
@@ -92,24 +98,6 @@ export default function GuestbookRevealPage() {
     );
   }
 
-  const submit = async () => {
-    if (!code.trim()) {
-      setError("Entrez votre code d'accès");
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    try {
-      const r = await api<any>(`/guestbook/${clientId}/reveal?code=${encodeURIComponent(code.trim())}`);
-      setData(r);
-      revealItems(r.items || []);
-    } catch (e: any) {
-      setError(e?.message || "Code invalide");
-    } finally {
-      setLoading(false);
-    }
-  };
-
   // Show a loader while we check the authenticated fast-path
   if (autoLoading) {
     return (
@@ -123,42 +111,34 @@ export default function GuestbookRevealPage() {
   }
 
   if (!data) {
+    const loginHref = { pathname: "/auth/login", params: { redirect: `/guestbook/${clientId}/reveal` } } as any;
     return (
       <SafeAreaView style={styles.root}>
         <View style={styles.center}>
           <Text style={styles.emoji}>💌</Text>
           <Text style={styles.brand}>CINÉMARIÉS</Text>
-          <Text style={styles.title}>Votre livre d'or</Text>
-          <Text style={styles.subtle}>Entrez votre code d'accès pour découvrir les vœux de vos invités.</Text>
-
-          <TextInput
-            style={styles.codeInput}
-            value={code}
-            onChangeText={(t) => setCode(t.toUpperCase())}
-            placeholder="XXXXXXXX"
-            placeholderTextColor={colors.textDisabled}
-            autoCapitalize="characters"
-            autoCorrect={false}
-            maxLength={12}
-            testID="reveal-code-input"
-          />
-          {error ? <Text style={styles.errText}>{error}</Text> : null}
-
-          <TouchableOpacity
-            style={[styles.revealBtn, (loading || !code.trim()) && { opacity: 0.5 }]}
-            onPress={submit}
-            disabled={loading || !code.trim()}
-            testID="reveal-submit"
-          >
-            {loading ? (
-              <ActivityIndicator color="#0A0A0A" />
-            ) : (
-              <>
-                <Ionicons name="sparkles" size={18} color="#0A0A0A" />
-                <Text style={styles.revealBtnText}>Révéler nos messages</Text>
-              </>
-            )}
-          </TouchableOpacity>
+          <Text style={styles.title}>Votre livre d&apos;or</Text>
+          {!user ? (
+            <>
+              <Text style={styles.subtle}>Connectez-vous à votre espace Mariés pour découvrir les vœux de vos invités. Aucun code n&apos;est nécessaire.</Text>
+              <TouchableOpacity style={styles.revealBtn} onPress={() => router.push(loginHref)} testID="reveal-login">
+                <Ionicons name="log-in-outline" size={18} color="#0A0A0A" />
+                <Text style={styles.revealBtnText}>Se connecter à mon espace</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => router.push({ pathname: "/auth/register", params: { redirect: `/guestbook/${clientId}/reveal` } } as any)} style={{ marginTop: 14 }} testID="reveal-register">
+                <Text style={{ color: colors.gold, fontSize: 13 }}>Pas encore de compte ? Créer mon compte Mariés</Text>
+              </TouchableOpacity>
+            </>
+          ) : (
+            <>
+              <Text style={styles.subtle}>{error || "Votre compte n'est pas encore relié à ce mariage."}</Text>
+              <Text style={[styles.subtle, { fontSize: 12 }]}>Connecté en tant que {user.email}. Demandez à CINÉMARIÉS de relier votre compte à votre mariage.</Text>
+              <TouchableOpacity style={styles.revealBtn} onPress={() => router.replace("/(tabs)/profile")} testID="reveal-go-profile">
+                <Ionicons name="person-outline" size={18} color="#0A0A0A" />
+                <Text style={styles.revealBtnText}>Aller à mon espace</Text>
+              </TouchableOpacity>
+            </>
+          )}
         </View>
       </SafeAreaView>
     );
@@ -271,21 +251,6 @@ const styles = StyleSheet.create({
     fontStyle: "italic",
   },
 
-  codeInput: {
-    marginTop: spacing.xl,
-    backgroundColor: "rgba(212,175,55,0.10)",
-    borderWidth: 2,
-    borderColor: colors.gold,
-    borderRadius: radii.md,
-    padding: 18,
-    color: colors.gold,
-    fontSize: 24,
-    fontWeight: "800",
-    letterSpacing: 4,
-    textAlign: "center",
-    minWidth: 240,
-  },
-  errText: { color: colors.error, fontSize: 13, marginTop: 12 },
   revealBtn: {
     marginTop: spacing.lg,
     backgroundColor: colors.gold,

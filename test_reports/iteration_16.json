@@ -1,0 +1,33 @@
+{
+  "summary": "Frontend-only validation of 4 user-reported fixes on Expo web preview (390x844). ALL 5 scenarios PASSED. (1) /auth/register: both account-type cards (register-type-user + register-type-couple) render; selecting 'Mariés' reveals the auto-link note; registering couple-<rand>@test.fr / test1234 with 'Test Couple' + consent redirects to /profile and shows profile-project-waiting card. (2) Admin flow on Yassina & Bensaid: /admin/projects/yassina-bensaid header shows 'Compte Mariés relié — suivi visible en temps réel' (linked to maries3046@test.fr); step 'Vidage des cartes mémoire' modal opens, set-in-progress saves without error; 'Supprimer le suivi' opens branded ConfirmDialog with Annuler/Supprimer — Annuler leaves the project intact; Supprimer navigates back to /admin/projects and Yassina & Bensaid is gone from the list and stays gone after reload; candidate 'project-candidate-yassina-bensaid' re-appears in 'Mariages sans suivi actif'; recreating via new-project modal with owner email maries3046@test.fr auto-relinks the account (Compte Mariés relié shown on the recreated project). (3) Real-time couple polling: couple login → /profile shows profile-project-tracking; PATCH /api/admin/projects/yassina-bensaid/steps/card_offload → done via admin token; within ~13s the couple's profile updates to show 'Terminé' step + 11% progress WITHOUT manual reload (polling every 10s + on focus works). Step reset to pending afterwards. (4) Guestbook reveal: logged-out /guestbook/yassina-bensaid/reveal shows 'Se connecter à mon espace' (reveal-login), no code input; clicking navigates to /auth/login?redirect=%2Fguestbook%2Fyassina-bensaid%2Freveal; after login redirected back to reveal and shows 'Aucun message pour le moment' WITHOUT code input; public /guestbook/yassina-bensaid still loads for anonymous with text form + Audio/Vidéo buttons. (5) Regression /admin/auto-import loads with 'IMPORTATION AUTOMATIQUE' header and 4 stat cards. Environment restored (project renamed back to 'Yassina & Bensaid' after recreation was created with candidate-derived short name 'Yassina'; step reset to pending).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/admin/projects/[clientId] (recreation via candidate)", "issues": ["Cosmetic: when re-creating a suivi from the 'Mariages sans suivi actif' candidate, wedding_name defaults to the candidate short label (e.g. 'Yassina') instead of the fuller previously-known name ('Yassina & Bensaid'). Auto-link and all functionality are unaffected. Admin can rename via project-edit-btn. Non-blocking, informational only."]}
+    ],
+    "react_native_issues": [
+      {"component": "expo-av (project-wide, pre-existing)", "issue": "Console warning: 'Expo AV has been deprecated and will be removed in SDK 54. Use expo-audio / expo-video packages.' Not related to the fixes under test. Already flagged in iterations 14/15."}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [
+    "None blocking. All 4 fixes verified working end-to-end on web preview.",
+    "OPTIONAL cosmetic: when recreating a suivi from a candidate, prefill wedding_name from a lookup of past deletions or from any historical alias so users don't have to re-type the full couple name. Currently the admin can edit it via project-edit-btn (verified working)."
+  ],
+  "critical_code_review_comments": [
+    "reveal.tsx correctly uses router.push loginHref with redirect param; after login the redirect brings the user back to /guestbook/{clientId}/reveal, then linked-couple branch reveals messages without a code — good.",
+    "profile.tsx polling (10s + on focus) is working and reflects admin step changes without manual reload — verified visually with Terminé + 11% progress after 13s.",
+    "project detail correctly shows the 'project-link-account' Relier button only when owner_user_id is missing (not shown in linked state — verified).",
+    "Branded ConfirmDialog (from src/ui) is used on Supprimer le suivi — Alert.alert web-incompat bug is fixed.",
+    "Delete guard works: after Supprimer, project stays deleted after page reload (no auto-recreation from the candidate list) — the project_tracking_deleted guard is effective."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "not tested (out of scope)", "frontend": "100% (5/5 scenarios)"},
+  "seed_data_creation": "Created 1 test couple account (couple-ruq1ag@test.fr / test1234, 'Test Couple') during registration test — kept as-is (harmless, no project attached). Also: deleted and recreated yassina-bensaid; step card_offload was flipped done→pending during polling test then reset; wedding_name restored to 'Yassina & Bensaid' via edit form. Environment left in original state.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "All 4 fixes green on web preview. Admin: admin@wedding.fr / Admin13!. Linked couple: maries3046@test.fr / test1234 → client_id yassina-bensaid. Registration testID for couple type = register-type-couple. Consent checkbox testID = register-consent-checkbox but the CGU/Confidentialité text-links inside are tappable and can hijack full-row clicks — use bounding_box() + mouse.click(box.x+12, y+h/2) to tap the checkbox icon safely (verified pattern). Real-time couple polling ~10s (verified in ~13s wait). Reveal page login redirect: /auth/login?redirect=%2Fguestbook%2F{cid}%2Freveal.",
+  "rca_of_issue": "N/A — all reported fixes verified working. No new bug found. Only 1 cosmetic remark about wedding_name prefill on candidate-based recreation."
+}

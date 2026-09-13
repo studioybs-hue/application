@@ -7,7 +7,6 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   RefreshControl,
-  Alert,
   Modal,
   TextInput,
 } from "react-native";
@@ -16,6 +15,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { api } from "@/src/api/client";
+import { showAlert } from "@/src/utils/dialog";
 import { colors, spacing, radii } from "@/src/theme";
 import type { ProjectTracking } from "@/src/features/project-tracking/ProjectTrackingView";
 
@@ -45,7 +45,7 @@ export default function AdminProjectsList() {
       setProjects(p.items);
       setCandidates(c.items || []);
     } catch (e: any) {
-      Alert.alert("Erreur", e?.message || "Impossible de charger");
+      showAlert("Erreur", e?.message || "Impossible de charger");
     } finally {
       setRefreshing(false);
     }
@@ -80,7 +80,7 @@ export default function AdminProjectsList() {
       setCreating(null);
       await load();
     } catch (e: any) {
-      Alert.alert("Erreur", e?.message || "Création impossible");
+      showAlert("Erreur", e?.message || "Création impossible");
     } finally {
       setSaving(false);
     }
@@ -110,7 +110,7 @@ export default function AdminProjectsList() {
           }
         >
           <Text style={styles.sub}>
-            Gérez l'avancement des projets de vos clients (9 étapes)
+            Gérez l&apos;avancement des projets de vos clients (9 étapes)
           </Text>
 
           {/* Existing projects */}

@@ -24,6 +24,7 @@ from photos import register_photo_routes
 from project_tracking import register_project_tracking_routes, send_brevo_sms, bind_db as bind_pt_db
 from app_settings import register_settings_routes
 from guestbook import register_guestbook_routes
+from auto_import import register_auto_import_routes
 import httpx
 
 ROOT_DIR = Path(__file__).parent
@@ -84,6 +85,7 @@ class UserPublic(BaseModel):
     client_id: Optional[str] = None
     claimed_client_id: Optional[str] = None
     claimed_client_name: Optional[str] = None
+    account_type: Optional[str] = "user"  # "user" | "couple"
     created_at: datetime
 
 
@@ -91,6 +93,7 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     password: str = Field(..., min_length=6)
     full_name: str = Field(..., min_length=1)
+    account_type: Optional[str] = "user"  # "user" (invité) | "couple" (mariés → suivi de projet automatique)
 
 
 class LoginRequest(BaseModel):
@@ -276,6 +279,7 @@ def user_to_public(u: dict) -> UserPublic:
         client_id=u.get("client_id"),
         claimed_client_id=u.get("claimed_client_id"),
         claimed_client_name=u.get("claimed_client_name"),
+        account_type=u.get("account_type") or "user",
         created_at=u.get("created_at", utcnow()),
     )
 
@@ -353,17 +357,26 @@ async def register(body: RegisterRequest):
     if existing:
         raise HTTPException(status_code=409, detail="Email déjà utilisé")
     user_id = str(uuid.uuid4())
+    account_type = "couple" if (body.account_type or "").lower() == "couple" else "user"
     doc = {
         "id": user_id,
         "email": body.email.lower(),
         "password_hash": hash_password(body.password),
         "full_name": body.full_name,
+        "account_type": account_type,
         "is_subscribed": False,
         "is_admin": False,
         "stripe_customer_id": None,
         "created_at": utcnow(),
     }
+    # Compte « Mariés » : liaison automatique au suivi de projet créé par l'admin avec cet email
+    if account_type == "couple":
+        project = await db.project_tracking.find_one({"owner_email": body.email.lower()}, {"_id": 0, "client_id": 1})
+        if project:
+            doc["client_id"] = project["client_id"]
     await db.users.insert_one(doc)
+    if doc.get("client_id"):
+        await db.project_tracking.update_one({"client_id": doc["client_id"]}, {"$set": {"owner_user_id": user_id}})
     token = create_jwt(user_id)
     doc.pop("password_hash", None)
     return TokenResponse(access_token=token, user=user_to_public(doc))
@@ -4176,8 +4189,11 @@ async def on_start():
         [("user_id", 1), ("client_id", 1)],
         name="user_unlocks_wedding_lookup",
     )
-    await _seed()
-    await _seed_admin()
+    try:
+        await _seed()
+    except Exception as e:
+        logging.warning(f"[startup] seed ignoré: {e}")
+    await _seed_admin_safe()
 
 
 async def _seed_admin():
@@ -4198,6 +4214,14 @@ async def _seed_admin():
         "created_at": utcnow(),
     })
     logging.info(f"Admin seeded: {ADMIN_EMAIL}")
+
+
+async def _seed_admin_safe():
+    """Plusieurs workers uvicorn démarrent en parallèle : ignorer la collision sur l'index email unique."""
+    try:
+        await _seed_admin()
+    except Exception as e:  # DuplicateKeyError → un autre worker a déjà créé l'admin
+        logging.warning(f"[startup] seed admin ignoré: {e}")
 
 
 # ==========================================================================
@@ -5091,6 +5115,17 @@ register_guestbook_routes(
 # Bind DB into helper modules so they can read admin-configured settings
 bind_mailer_db(db)
 bind_pt_db(db)
+# Importation automatique (FileZilla → ftp_drop/ → publication)
+auto_importer = register_auto_import_routes(
+    app=app,
+    api_router=api_router,
+    db=db,
+    UPLOAD_DIR=UPLOAD_DIR,
+    FTP_DROP_DIR=FTP_DROP_DIR,
+    APP_PUBLIC_URL=APP_PUBLIC_URL,
+    slugify=slugify,
+    require_admin=require_admin,
+)
 app.include_router(api_router)
 app.add_middleware(
     CORSMiddleware,

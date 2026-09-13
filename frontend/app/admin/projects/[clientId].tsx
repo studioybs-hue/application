@@ -6,7 +6,6 @@ import {
   ScrollView,
   TouchableOpacity,
   ActivityIndicator,
-  Alert,
   Modal,
   TextInput,
   RefreshControl,
@@ -17,6 +16,7 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { api } from "@/src/api/client";
+import { showAlert, confirmAction } from "@/src/utils/dialog";
 import { colors, spacing, radii } from "@/src/theme";
 import {
   ProjectTrackingView,
@@ -50,7 +50,7 @@ export default function AdminProjectDetail() {
         eta_delivery: p.eta_delivery || "",
       });
     } catch (e: any) {
-      Alert.alert("Erreur", e?.message || "Projet introuvable");
+      showAlert("Erreur", e?.message || "Projet introuvable");
     } finally {
       setRefreshing(false);
     }
@@ -74,7 +74,7 @@ export default function AdminProjectDetail() {
       setProject(updated);
       setEditingStep(null);
     } catch (e: any) {
-      Alert.alert("Erreur", e?.message || "Mise à jour impossible");
+      showAlert("Erreur", e?.message || "Mise à jour impossible");
     } finally {
       setSavingStep(false);
     }
@@ -96,32 +96,41 @@ export default function AdminProjectDetail() {
       setProject(updated);
       setEditProject(false);
     } catch (e: any) {
-      Alert.alert("Erreur", e?.message || "Enregistrement impossible");
+      showAlert("Erreur", e?.message || "Enregistrement impossible");
     } finally {
       setSavingProject(false);
     }
   };
 
   const deleteProject = () => {
-    Alert.alert(
+    confirmAction(
       "Supprimer le suivi ?",
       "Cette action est définitive. Le suivi de projet sera supprimé mais les autres données du mariage restent intactes.",
-      [
-        { text: "Annuler", style: "cancel" },
-        {
-          text: "Supprimer",
-          style: "destructive",
-          onPress: async () => {
-            try {
-              await api(`/admin/projects/${clientId}`, { method: "DELETE" });
-              (router.canGoBack() ? router.back() : router.replace("/"));
-            } catch (e: any) {
-              Alert.alert("Erreur", e?.message || "Suppression impossible");
-            }
-          },
-        },
-      ]
+      async () => {
+        try {
+          await api(`/admin/projects/${clientId}`, { method: "DELETE" });
+          router.replace("/admin/projects");
+        } catch (e: any) {
+          showAlert("Erreur", e?.message || "Suppression impossible");
+        }
+      },
+      { confirmText: "Supprimer", destructive: true }
     );
+  };
+
+  const linkAccount = async () => {
+    const email = pForm.owner_email.trim();
+    if (!email) {
+      showAlert("Email manquant", "Renseignez d'abord l'email des mariés dans « Modifier ».");
+      return;
+    }
+    try {
+      const p = await api<ProjectTracking>(`/admin/projects/${clientId}/link-user`, { method: "POST", body: { email } });
+      setProject(p);
+      showAlert("✅ Compte relié", `Le compte ${email} voit maintenant ce suivi dans son espace.`);
+    } catch (e: any) {
+      showAlert("Erreur", e?.message || "Liaison impossible");
+    }
   };
 
   return (
@@ -159,6 +168,17 @@ export default function AdminProjectDetail() {
               <Ionicons name="call-outline" size={14} color={colors.textSecondary} />
               <Text style={styles.contactText}>{project.owner_phone || "Aucun téléphone"}</Text>
             </View>
+            <View style={styles.contactRow}>
+              <Ionicons name={(project as any).owner_user_id ? "link" : "unlink"} size={14} color={(project as any).owner_user_id ? "#4ADE80" : colors.gold} />
+              <Text style={[styles.contactText, { flex: 1 }]}>
+                {(project as any).owner_user_id ? "Compte Mariés relié — suivi visible en temps réel" : "Aucun compte relié (les mariés verront le suivi après inscription avec cet email)"}
+              </Text>
+              {!(project as any).owner_user_id && (
+                <TouchableOpacity onPress={linkAccount} testID="project-link-account">
+                  <Text style={{ color: colors.gold, fontSize: 12, fontWeight: "700" }}>Relier</Text>
+                </TouchableOpacity>
+              )}
+            </View>
           </View>
 
           {/* Guestbook activation toggle */}
@@ -175,7 +195,7 @@ export default function AdminProjectDetail() {
                 );
                 setProject({ ...project, ...(r as any) } as any);
               } catch (e: any) {
-                Alert.alert("Erreur", e?.message);
+                showAlert("Erreur", e?.message || "Erreur");
               }
             }}
             testID="guestbook-toggle"

@@ -26,6 +26,7 @@ export default function RegisterScreen() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [acceptedTerms, setAcceptedTerms] = useState(false);
+  const [accountType, setAccountType] = useState<"user" | "couple">("user");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -62,8 +63,8 @@ export default function RegisterScreen() {
     }
     setLoading(true);
     try {
-      await register(email.trim().toLowerCase(), password, name.trim());
-      const target = params.redirect && typeof params.redirect === "string" ? params.redirect : "/(tabs)/home";
+      await register(email.trim().toLowerCase(), password, name.trim(), accountType);
+      const target = params.redirect && typeof params.redirect === "string" ? params.redirect : accountType === "couple" ? "/(tabs)/profile" : "/(tabs)/home";
       router.replace(target as any);
     } catch (e: any) {
       setError(e.message || "Erreur lors de l'inscription");
@@ -83,6 +84,32 @@ export default function RegisterScreen() {
           <Text style={styles.tagline}>Le cinéma de votre plus beau jour</Text>
           <Text style={styles.title}>Créer un compte</Text>
           <Text style={styles.sub}>Rejoignez la plateforme de streaming dédiée aux mariages</Text>
+
+          {/* Type de compte : Utilisateur (invité) ou Mariés (suivi de projet automatique) */}
+          <Text style={styles.typeLabel}>Vous êtes…</Text>
+          <View style={styles.typeRow}>
+            <TouchableOpacity
+              style={[styles.typeCard, accountType === "user" && styles.typeCardActive]}
+              onPress={() => setAccountType("user")}
+              testID="register-type-user"
+            >
+              <Ionicons name="people-outline" size={22} color={accountType === "user" ? "#0A0A0A" : colors.gold} />
+              <Text style={[styles.typeTitle, accountType === "user" && styles.typeTxtActive]}>Utilisateur</Text>
+              <Text style={[styles.typeHint, accountType === "user" && styles.typeTxtActive]}>Invité, famille : regarder les films</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.typeCard, accountType === "couple" && styles.typeCardActive]}
+              onPress={() => setAccountType("couple")}
+              testID="register-type-couple"
+            >
+              <Ionicons name="heart-outline" size={22} color={accountType === "couple" ? "#0A0A0A" : colors.gold} />
+              <Text style={[styles.typeTitle, accountType === "couple" && styles.typeTxtActive]}>Mariés</Text>
+              <Text style={[styles.typeHint, accountType === "couple" && styles.typeTxtActive]}>Suivi de votre film en temps réel</Text>
+            </TouchableOpacity>
+          </View>
+          {accountType === "couple" && (
+            <Text style={styles.typeNote}>Utilisez l&apos;email communiqué à CINÉMARIÉS : votre suivi de projet sera relié automatiquement.</Text>
+          )}
 
           <View style={styles.field}>
             <Ionicons name="person-outline" size={18} color={colors.textSecondary} />
@@ -159,6 +186,14 @@ export default function RegisterScreen() {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
+  typeLabel: { color: colors.textSecondary, fontSize: 12, textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 },
+  typeRow: { flexDirection: "row", gap: spacing.sm, marginBottom: spacing.sm },
+  typeCard: { flex: 1, backgroundColor: colors.surface, borderRadius: radii.md, borderWidth: 1, borderColor: colors.border, padding: spacing.md, alignItems: "center", gap: 4, minHeight: 96 },
+  typeCardActive: { backgroundColor: colors.gold, borderColor: colors.gold },
+  typeTitle: { color: colors.ivory, fontSize: 15, fontWeight: "700", marginTop: 4 },
+  typeHint: { color: colors.textSecondary, fontSize: 11, textAlign: "center" },
+  typeTxtActive: { color: "#0A0A0A" },
+  typeNote: { color: colors.gold, fontSize: 12, marginBottom: spacing.md, lineHeight: 17 },
   scroll: { padding: spacing.md, paddingTop: spacing.lg },
   back: { width: 40, height: 40, alignItems: "flex-start", justifyContent: "center" },
   brand: { color: colors.gold, fontSize: 24, letterSpacing: 6, fontWeight: "700", marginTop: spacing.lg },

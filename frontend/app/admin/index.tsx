@@ -130,6 +130,13 @@ export default function AdminDashboard() {
               testID="admin-videos-btn"
             />
             <ActionRow
+              icon="cloud-download-outline"
+              label="Importation automatique"
+              hint="Dépôt FileZilla → mariages, vidéos & médias publiés automatiquement"
+              onPress={() => router.push("/admin/auto-import")}
+              testID="admin-autoimport-btn"
+            />
+            <ActionRow
               icon="key-outline"
               label="Codes de déblocage"
               hint="Générer & gérer les codes clients"

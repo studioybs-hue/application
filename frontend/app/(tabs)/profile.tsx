@@ -1,6 +1,6 @@
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Platform } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
+import { useRouter, useFocusEffect } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { colors, spacing, radii } from "@/src/theme";
 import { useAuth } from "@/src/auth/AuthContext";
@@ -8,7 +8,7 @@ import { useConfirm } from "@/src/ui/ConfirmDialog";
 import { api } from "@/src/api/client";
 import { showAlert } from "@/src/utils/dialog";
 import { IS_IOS_NATIVE } from "@/src/utils/platform";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   ProjectTrackingView,
   type ProjectTracking,
@@ -20,23 +20,33 @@ export default function ProfileScreen() {
   const confirm = useConfirm();
   const [project, setProject] = useState<ProjectTracking | null>(null);
   const [loadingProject, setLoadingProject] = useState(true);
+  const [coupleWithoutProject, setCoupleWithoutProject] = useState(false);
+
+  // Suivi de projet « temps réel » : rechargé à l'ouverture, au retour sur l'onglet et toutes les 10 s.
+  const loadProject = useCallback(async () => {
+    try {
+      const r = await api<{ project: ProjectTracking | null; account_type?: string }>("/projects/me");
+      setProject(r.project);
+      setCoupleWithoutProject(!r.project && (r.account_type === "couple" || (user as any)?.account_type === "couple"));
+    } catch {
+      setProject(null);
+    } finally {
+      setLoadingProject(false);
+    }
+  }, [user]);
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await api<{ project: ProjectTracking | null }>("/projects/me");
-        if (!cancelled) setProject(r.project);
-      } catch {
-        if (!cancelled) setProject(null);
-      } finally {
-        if (!cancelled) setLoadingProject(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [user?.id]);
+    if (!user?.id) return;
+    loadProject();
+    const t = setInterval(loadProject, 10000);
+    return () => clearInterval(t);
+  }, [user?.id, loadProject]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (user?.id) loadProject();
+    }, [user?.id, loadProject])
+  );
 
   const exportData = async () => {
     try {
@@ -183,6 +193,13 @@ export default function ProfileScreen() {
           {project ? (
             <View style={styles.trackingCard} testID="profile-project-tracking">
               <ProjectTrackingView project={project} />
+            </View>
+          ) : coupleWithoutProject ? (
+            <View style={styles.trackingCard} testID="profile-project-waiting">
+              <Text style={{ color: colors.gold, fontWeight: "700", fontSize: 14 }}>💍 Suivi de votre film</Text>
+              <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 6, lineHeight: 17 }}>
+                Votre compte Mariés est prêt. Le suivi apparaîtra ici automatiquement dès que CINÉMARIÉS aura ouvert votre projet avec l&apos;email {user.email}.
+              </Text>
             </View>
           ) : null}
           {/* Direct link to the couple's wedding space + guestbook — shows for

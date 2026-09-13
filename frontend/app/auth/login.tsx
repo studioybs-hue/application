@@ -10,7 +10,7 @@ import {
   ScrollView,
   ActivityIndicator,
 } from "react-native";
-import { useRouter } from "expo-router";
+import { useRouter, useLocalSearchParams } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { colors, spacing, radii } from "@/src/theme";
@@ -20,6 +20,7 @@ import { IS_IOS_NATIVE } from "@/src/utils/platform";
 export default function LoginScreen() {
   const router = useRouter();
   const { login } = useAuth();
+  const params = useLocalSearchParams<{ redirect?: string }>();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [show, setShow] = useState(false);
@@ -47,7 +48,8 @@ export default function LoginScreen() {
         });
         return;
       }
-      router.replace("/(tabs)/home");
+      const target = params.redirect && typeof params.redirect === "string" && params.redirect.startsWith("/") ? params.redirect : "/(tabs)/home";
+      router.replace(target as any);
     } catch (e: any) {
       setError(e.message || "Erreur de connexion");
     } finally {

@@ -457,13 +457,17 @@ def register_guestbook_routes(
     # -------------------------------------------------------------------
     if get_current_user is not None:
         @api_router.get("/guestbook/mine")
-        async def my_guestbook(current_user: dict = Depends(get_current_user)):
+        async def my_guestbook(client_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
             """
             Authenticated couple's view.
             Returns guestbook entries for the wedding owned by the logged-in user.
             No unlock code needed — auth via Bearer token is sufficient.
+            Admins may pass ?client_id= to preview any wedding.
             """
-            client_id = current_user.get("client_id")
+            own = current_user.get("client_id") or current_user.get("claimed_client_id")
+            if current_user.get("is_admin") and client_id:
+                own = client_id
+            client_id = own
             if not client_id:
                 raise HTTPException(
                     403,

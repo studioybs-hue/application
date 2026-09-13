@@ -1,0 +1,43 @@
+{
+  "summary": "Full backend + frontend test of the new AUTO-IMPORT feature (admin-facing surface only; heavy pipeline already validated by main agent's auto_import_e2e.py). BACKEND: created /app/backend/tests/test_auto_import_admin_light.py — 17/17 PASSED covering /admin/auto-import/stats, /jobs (filters all|PROCESSED|ERROR|PENDING), /settings GET+PUT (add 'brunch' → normalized+persisted, empty services → 400, restore original at end), /parse-test (valid Sofie & Mohamed soiree → prestation_video/couple/service=soiree; invalid 'Mariage Sofie Mohamed.mp4' → ok:false+error), /scan → 200 ok:true, non-admin free user → 403 on every route, no-auth → 401/403. FRONTEND (web preview, mobile viewport 390x844): admin login → /admin → new ActionRow 'Importation automatique' (admin-autoimport-btn) navigates to /admin/auto-import; header 'IMPORTATION AUTOMATIQUE' + 'Surveillance active · /app/backend/uploads/ftp_drop' visible; 4 stat cards present (ai-stat-pending=0, ai-stat-processed=17, ai-stat-errors=1, ai-stat-dups=1); ai-toggle-help expands with all 5 nomenclature examples; ai-toggle-settings shows 3 switches (enabled/featured/showcase) + service chips (soiree/reception/ceremonie/mairie/eglise/maoulid/henne/fiancailles/best of); ai-service-input + ai-service-add adds 'brunchqa' chip, PERSISTS after full page reload; ai-service-remove-brunchqa with 'Retirer' confirm removes it; journal filters ai-filter-all=18, ai-filter-PROCESSED=17, ai-filter-ERROR=1 (red badge + 'Nomenclature non reconnue' + Relancer button), ai-filter-PENDING=0; ai-delete-<id> shows confirm dialog and 'Annuler' correctly cancels (job preserved). Dark/gold theme consistent with the rest of admin. NO backend or frontend blocker found.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "expo-av (project-wide, not this feature)", "issue": "Console warning: '[expo-av]: Expo AV has been deprecated and will be removed in SDK 54. Use expo-audio / expo-video packages to replace the required functionality.' — pre-existing, not related to auto-import screen."}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_auto_import_admin_light.py",
+    "/app/test_reports/pytest/auto_import_admin_light.xml"
+  ],
+  "action_items": [
+    "None blocking for this feature. All 17 backend admin tests + full frontend flow pass end-to-end.",
+    "Optional (not part of this feature): plan migration of expo-av to expo-audio / expo-video before SDK 54 upgrade — already flagged in prior iterations."
+  ],
+  "critical_code_review_comments": [
+    "auto_import.py routes correctly gated by require_admin — 403 verified for a free user on every endpoint.",
+    "PUT /settings with empty services correctly returns HTTP 400 with a clear French error.",
+    "'BRUNCH' input is normalized to lowercase 'brunch' before persistence, and duplicates within the payload are de-duplicated by key (loop check in auto_import.py).",
+    "GET/settings response includes categories list so the frontend chip picker can render without a second call — good.",
+    "auto-import.tsx correctly uses api client with EXPO_PUBLIC_BACKEND_URL and 401 → router.replace('/auth/login'). Dark/gold theme uses shared /src/theme tokens (colors.gold, colors.surface, radii, spacing) — consistent with rest of admin.",
+    "All interactive elements on /admin/auto-import expose testID as expected (admin-autoimport-btn, ai-toggle-*, ai-stat-*, ai-switch-*, ai-service-*, ai-service-remove-*, ai-service-add, ai-service-input, ai-filter-*, ai-retry-*, ai-delete-*, ai-job-*)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_auto_import_admin_light.py (new)"
+  ],
+  "success_rate": {
+    "backend": "100% (17/17)",
+    "frontend": "100% (all requested checks passed)"
+  },
+  "seed_data_creation": "Temporary added 'brunchqa' service via frontend and 'brunch' via backend PUT — both were removed/restored to the original services list at the end of the tests. No file dropped in ftp_drop/. DB state unchanged after run.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "AUTO-IMPORT admin surface fully validated. Regression suite: /app/backend/tests/test_auto_import_admin_light.py (17 tests, ~4s). Run with `pytest /app/backend/tests/test_auto_import_admin_light.py -v`. Heavy pipeline (12 e2e scenarios) covered by /app/backend/tests/auto_import_e2e.py (already run by main agent). Frontend screen at /admin/auto-import fully covered with testIDs. Admin creds: admin@wedding.fr / Admin13!.",
+  "rca_of_issue": "N/A — no bug found. Feature works as specified."
+}

@@ -305,6 +305,11 @@ class UpdateStepBody(BaseModel):
     notify: bool = True  # send email + SMS if transitioning to done or in_progress
 
 
+class LinkUserBody(BaseModel):
+    user_id: Optional[str] = None
+    email: Optional[str] = None
+
+
 class TestNotifyBody(BaseModel):
     channel: str = "sms"  # sms | email
     phone: Optional[str] = None
@@ -340,7 +345,7 @@ def register_project_tracking_routes(
             "client_id": client_id,
             "wedding_name": fields.get("wedding_name") or client_id.replace("-", " ").title(),
             "owner_user_id": fields.get("owner_user_id"),
-            "owner_email": fields.get("owner_email"),
+            "owner_email": (fields.get("owner_email") or "").lower().strip() or None,
             "owner_phone": fields.get("owner_phone"),
             "admin_note": fields.get("admin_note", ""),
             "eta_delivery": fields.get("eta_delivery"),
@@ -349,8 +354,25 @@ def register_project_tracking_routes(
             "updated_at": _utcnow(),
         }
         await db.project_tracking.insert_one(doc)
+        # Un suivi recréé ne doit plus être considéré comme supprimé
+        await db.project_tracking_deleted.delete_one({"client_id": client_id})
+        await _link_owner_user(client_id, doc.get("owner_email"))
         log.info("[project_tracking] created for client_id=%s", client_id)
         return doc
+
+    async def _link_owner_user(client_id: str, owner_email: Optional[str]) -> Optional[dict]:
+        """Relie automatiquement le compte « Mariés » dont l'email correspond à owner_email :
+        users.client_id ← client_id et project.owner_user_id ← user.id (temps réel côté client)."""
+        if not owner_email:
+            return None
+        u = await db.users.find_one({"email": owner_email.lower().strip()}, {"_id": 0, "id": 1, "client_id": 1, "is_admin": 1})
+        if not u or u.get("is_admin"):
+            return None
+        if not u.get("client_id"):
+            await db.users.update_one({"id": u["id"]}, {"$set": {"client_id": client_id}})
+        await db.project_tracking.update_one({"client_id": client_id}, {"$set": {"owner_user_id": u["id"]}})
+        log.info("[project_tracking] user %s linked to %s", owner_email, client_id)
+        return u
 
     # -----------------------------
     # CLIENT SIDE
@@ -375,13 +397,19 @@ def register_project_tracking_routes(
                 wedding_id = claim.get("client_id")
 
         if not wedding_id:
+            # Compte « Mariés » : tenter la liaison automatique par email (suivi créé par l'admin)
+            if current.get("account_type") == "couple":
+                p = await db.project_tracking.find_one({"owner_email": (current.get("email") or "").lower()}, {"_id": 0})
+                if p:
+                    await _link_owner_user(p["client_id"], current.get("email"))
+                    return {"project": await _project_to_public(p)}
             # Admin preview: return the first project so admins can inspect the UI
             if current.get("is_admin"):
                 p = await db.project_tracking.find_one({}, {"_id": 0})
                 if not p:
                     return {"project": None, "hint": "Aucun projet en base. Créez-en un depuis l'admin."}
                 return {"project": await _project_to_public(p), "admin_preview": True}
-            return {"project": None}
+            return {"project": None, "account_type": current.get("account_type") or "user"}
 
         p = await db.project_tracking.find_one({"client_id": wedding_id})
         if not p:
@@ -393,9 +421,12 @@ def register_project_tracking_routes(
     # -----------------------------
     @api_router.get("/admin/projects")
     async def admin_list_projects(admin: dict = Depends(require_admin)):
-        # Ensure a project exists for each claimed wedding
+        # Ensure a project exists for each claimed wedding (sauf suivis supprimés volontairement)
+        deleted = {d["client_id"] async for d in db.project_tracking_deleted.find({}, {"client_id": 1})}
         claims = await db.wedding_claims.find({}, {"_id": 0, "client_id": 1, "client_name": 1, "user_id": 1}).to_list(500)
         for c in claims:
+            if c["client_id"] in deleted:
+                continue
             existing = await db.project_tracking.find_one({"client_id": c["client_id"]})
             if not existing:
                 user = await db.users.find_one({"id": c["user_id"]}, {"email": 1, "phone": 1})
@@ -445,8 +476,10 @@ def register_project_tracking_routes(
         for k in ("wedding_name", "owner_email", "owner_phone", "admin_note", "eta_delivery"):
             v = getattr(body, k)
             if v is not None:
-                update[k] = v
+                update[k] = v.lower().strip() if k == "owner_email" else v
         await db.project_tracking.update_one({"client_id": client_id}, {"$set": update})
+        if update.get("owner_email"):
+            await _link_owner_user(client_id, update["owner_email"])
         p2 = await db.project_tracking.find_one({"client_id": client_id})
         return await _project_to_public(p2)
 
@@ -537,7 +570,28 @@ def register_project_tracking_routes(
         r = await db.project_tracking.delete_one({"client_id": client_id})
         if r.deleted_count == 0:
             raise HTTPException(404, "Projet introuvable")
+        # Mémoriser la suppression pour que la liste ne recrée pas le suivi automatiquement
+        await db.project_tracking_deleted.update_one(
+            {"client_id": client_id}, {"$set": {"client_id": client_id, "deleted_at": _utcnow()}}, upsert=True
+        )
         return {"deleted": True}
+
+    @api_router.post("/admin/projects/{client_id}/link-user")
+    async def admin_link_user(client_id: str, body: LinkUserBody, admin: dict = Depends(require_admin)):
+        """Relie manuellement un compte (par id ou email) au suivi : le client voit alors son suivi en se connectant."""
+        p = await db.project_tracking.find_one({"client_id": client_id})
+        if not p:
+            raise HTTPException(404, "Projet introuvable")
+        q = {"id": body.user_id} if body.user_id else {"email": (body.email or "").lower().strip()}
+        u = await db.users.find_one(q, {"_id": 0, "id": 1, "email": 1})
+        if not u:
+            raise HTTPException(404, "Aucun compte trouvé avec cet email / identifiant")
+        await db.users.update_one({"id": u["id"]}, {"$set": {"client_id": client_id, "account_type": "couple"}})
+        await db.project_tracking.update_one(
+            {"client_id": client_id}, {"$set": {"owner_user_id": u["id"], "owner_email": u["email"], "updated_at": _utcnow()}}
+        )
+        p2 = await db.project_tracking.find_one({"client_id": client_id})
+        return await _project_to_public(p2)
 
     # -----------------------------
     # Helper for admin: list wedding client_ids that could be tracked
@@ -573,12 +627,12 @@ def register_project_tracking_routes(
                     "wedding_name": cid.replace("-", " ").title(),
                     "source": "unlock_code",
                 }
-        async for v in db.videos.find({"client_id": {"$exists": True, "$ne": None}}, {"client_id": 1, "title": 1}):
+        async for v in db.videos.find({"client_id": {"$exists": True, "$ne": None}}, {"client_id": 1, "title": 1, "client_name": 1}):
             cid = v.get("client_id")
             if cid and cid not in existing and cid not in candidates:
                 candidates[cid] = {
                     "client_id": cid,
-                    "wedding_name": v.get("title") or cid.replace("-", " ").title(),
+                    "wedding_name": v.get("client_name") or v.get("title") or cid.replace("-", " ").title(),
                     "source": "video",
                 }
 
@@ -597,7 +651,8 @@ def register_project_tracking_routes(
             if not cid or cid in existing:
                 continue
             # Prefer nicer name : claimed_client_name > full_name > from client_id
-            name = u.get("claimed_client_name") or u.get("full_name") or cid.replace("-", " ").title()
+            prev = candidates.get(cid) or {}
+            name = u.get("claimed_client_name") or prev.get("wedding_name") or u.get("full_name") or cid.replace("-", " ").title()
             entry = {
                 "client_id": cid,
                 "wedding_name": name,

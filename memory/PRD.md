@@ -104,3 +104,26 @@ User's primary language: **French** — always respond in French.
 - Admin: `admin@wedding.fr` / `Admin13!`
 - VPS: `root@31.70.142.150` / `Xp9dnmy91rRO`
 - Brevo API key: stored in `.env` + DB (`app_settings.brevo_sms`) — user shared it in chat, should rotate after go-live
+
+## 2026-09-13 — Importation automatique FTP + corrections Suivi de projet / Livre d'or
+
+### Importation automatique (`backend/auto_import.py`, `frontend/app/admin/auto-import.tsx`)
+- Watcher asyncio sur `uploads/ftp_drop` (= `/srv/cinemaries/uploads/ftp_drop` sur le VPS) : scan 5 s, fichier traité 10 s après stabilité (taille/mtime), file d'attente séquentielle, reprise après redémarrage (jobs PROCESSING → PENDING).
+- `MarriageFilenameParser` : nomenclature « {Mariés} {mot-clé} [{prestation}] » (`Yassina & Bensaid video complet Oukoumbi.mp4`, `… video complet.mp4`, `… Poster.jpg`, `… Grand format.jpg`, `… bande annonce.mp4`, forme courte `yassina Maoulid.mp4`) + ancienne forme (`Mariage de … soiree.mp4`, `Poster : …`, `Video complete : …`, `Hero grand format : …`, `Bande-annonce : …`). Casse/accents insensibles, fautes de frappe tolérées (SequenceMatcher ≥ 0.85), « & » = « et », correspondance partielle par prénom (inclusion de tokens), prestations inconnues ajoutées automatiquement (catégorie Cérémonies).
+- Réutilise `videos` (vidéo principale « À l'affiche » : poster_url/hero_url/trailer_url/full_url ; prestations = vidéos séparées même client_id, champ `import_service`), `wedding_meta` (couverture), stockage `uploads/{uuid}.ext`. Dédoublonnage SHA-256 (→ `ftp_drop/duplicates`), erreurs → `ftp_drop/errors`. Journal `import_jobs` (PENDING/PROCESSING/PROCESSED/ERROR). Réglages `app_settings.auto_import` (services, default_featured=true, default_showcase=true, enabled).
+- API admin : `/admin/auto-import/{stats,jobs,settings,scan,parse-test}`, `/admin/auto-import/jobs/{id}/retry`, DELETE `/admin/auto-import/jobs/{id}`.
+- Tests : `backend/tests/auto_import_e2e.py` (12 scénarios), `auto_import_suffix_e2e.py`, `test_auto_import_admin_light.py` — tous OK. Frontend validé (iteration_15).
+
+### Suivi de projet / Livre d'or
+- Inscription : `account_type` « user » | « couple » (sélecteur sur /auth/register). Compte « couple » relié automatiquement au suivi dont `owner_email` = email (à l'inscription, via /projects/me, ou quand l'admin saisit l'email). Route manuelle POST `/admin/projects/{client_id}/link-user`.
+- Suppression d'un suivi : garde `project_tracking_deleted` (plus de recréation auto par la liste) ; dialogues web (`confirmAction`/`showAlert`) à la place de `Alert.alert`.
+- Profil : suivi rechargé toutes les 10 s + au focus (temps réel) ; carte d'attente pour les mariés sans suivi.
+- Livre d'or « révélation » : plus de code — connexion au compte Mariés (`/auth/login?redirect=`), `/guestbook/mine?client_id=` (claimed_client_id + admin).
+- Validé frontend iteration_16.
+
+### Déploiement VPS 2026-09-13 ✅
+- Backend (server.py, auto_import.py, project_tracking.py, guestbook.py) rsync → `/var/www/cinemaries/backend`, `systemctl restart cinemaries-backend` (2 workers uvicorn : le watcher tourne dans UN seul worker via flock `.watcher.lock`). Frontend : `app/` + `src/` rsync → `npx expo export --platform web --output-dir dist.new` → swap `dist` (ancien dans `dist.bak.previous`). Sauvegardes dans `/root/backups/`.
+- Nouveau mot de passe root VPS : `x4Ys$7yU#HVwA6I@jr!WInL%uMQ#SdrSRs1KE0W4wi`. Mot de passe admin prod `contact@cinemaries.fr` changé par l'utilisateur (Reset2026! ne fonctionne plus).
+- ⚠️ Le watcher est **désactivé** en prod (`app_settings.auto_import.enabled=false`) : le dossier ftp_drop contient déjà ~90 Go de fichiers manuels (« soiree Yassina.mp4 », « HALAL Yassina.mp4 », « Mazaraka Hanifa.mp4 », « oukoumbi Sarhaline.mp4 », « Oukopumbi att.mp4 », « soiree.mp4 », « Extrat 1.png »). L'utilisateur doit l'activer depuis Admin → Importation automatique quand il est prêt. Les fichiers au nom invalide restent désormais EN PLACE (jamais déplacés) avec statut ERROR ; seuls les doublons vont dans `duplicates/`.
+- Parser : ordre `{prestation} {nom}` aussi accepté (« soiree Yassina.mp4 »). Prestations par défaut ajoutées : halal, mazaraka, madjilis.
+- Incident lors du déploiement : l'ancienne version a déplacé 8 fichiers dans errors/ avant la désactivation → tous remis dans ftp_drop, journal purgé.
