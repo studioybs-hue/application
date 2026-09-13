@@ -15,8 +15,9 @@ import { api } from "@/src/api/client";
 import { colors, spacing, radii } from "@/src/theme";
 import { useAuth } from "@/src/auth/AuthContext";
 import { showAlert } from "@/src/utils/dialog";
+import { BACKEND_URL } from "@/src/api/baseUrl";
 
-const BASE_URL = process.env.EXPO_PUBLIC_BACKEND_URL || "";
+const BASE_URL = BACKEND_URL || "";
 const { width: SCREEN_W } = Dimensions.get("window");
 const NUM_COLS = 3;
 const ITEM_SIZE = (SCREEN_W - spacing.sm * 4) / NUM_COLS;

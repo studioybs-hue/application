@@ -17,8 +17,9 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { api } from "@/src/api/client";
 import { colors, spacing, radii } from "@/src/theme";
+import { BACKEND_URL } from "@/src/api/baseUrl";
 
-const BASE = process.env.EXPO_PUBLIC_BACKEND_URL || "";
+const BASE = BACKEND_URL || "";
 
 type W = {
   client_id: string;

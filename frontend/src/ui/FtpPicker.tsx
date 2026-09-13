@@ -7,6 +7,7 @@ import { colors, spacing, radii } from "@/src/theme";
 import { api } from "@/src/api/client";
 import { showAlert, confirmAction } from "@/src/utils/dialog";
 import { storage } from "@/src/utils/storage";
+import { BACKEND_URL } from "@/src/api/baseUrl";
 
 type FtpFile = { name: string; size: number; size_human: string; modified: string; ext: string };
 
@@ -23,7 +24,7 @@ const VIDEO_EXTS = ["mp4", "mov", "m4v", "webm", "mkv"];
 const IMAGE_EXTS = ["jpg", "jpeg", "png", "webp", "gif"];
 
 function buildBackendUrl(path: string): string {
-  const base = (process.env.EXPO_PUBLIC_BACKEND_URL || "").replace(/\/$/, "");
+  const base = (BACKEND_URL || "").replace(/\/$/, "");
   return base ? `${base}${path}` : path;
 }
 

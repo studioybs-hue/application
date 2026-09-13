@@ -16,8 +16,9 @@ import * as MediaLibrary from "expo-media-library";
 import { api } from "@/src/api/client";
 import { colors, spacing } from "@/src/theme";
 import { showAlert } from "@/src/utils/dialog";
+import { BACKEND_URL } from "@/src/api/baseUrl";
 
-const BASE_URL = process.env.EXPO_PUBLIC_BACKEND_URL || "";
+const BASE_URL = BACKEND_URL || "";
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get("window");
 
 type PhotoOut = {

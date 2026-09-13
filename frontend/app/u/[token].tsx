@@ -9,8 +9,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { colors, spacing, radii } from "@/src/theme";
 import { showAlert, confirmAction } from "@/src/utils/dialog";
+import { BACKEND_URL } from "@/src/api/baseUrl";
 
-const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || "";
 
 type UploadedFile = {
   name: string;

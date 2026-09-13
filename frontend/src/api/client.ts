@@ -1,6 +1,7 @@
 import { storage } from "@/src/utils/storage";
+import { BACKEND_URL } from "@/src/api/baseUrl";
 
-const BASE = process.env.EXPO_PUBLIC_BACKEND_URL || "";
+const BASE = BACKEND_URL || "";
 
 export const TOKEN_KEY = "ws_token";
 

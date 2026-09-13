@@ -23,8 +23,9 @@ import { showAlert } from "@/src/utils/dialog";
 import { colors, spacing, radii } from "@/src/theme";
 import { FtpPicker } from "@/src/ui/FtpPicker";
 import { NotifyPanel } from "@/src/admin/NotifyPanel";
+import { BACKEND_URL } from "@/src/api/baseUrl";
 
-const BASE = process.env.EXPO_PUBLIC_BACKEND_URL || "";
+const BASE = BACKEND_URL || "";
 const CATEGORIES = ["À l'affiche", "Cérémonies", "Soirées", "Best Of"];
 
 type Form = {

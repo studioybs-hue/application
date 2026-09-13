@@ -26,8 +26,9 @@ import { storage } from "@/src/utils/storage";
 import { showAlert } from "@/src/utils/dialog";
 import { colors, spacing, radii } from "@/src/theme";
 import { FtpPicker } from "@/src/ui/FtpPicker";
+import { BACKEND_URL } from "@/src/api/baseUrl";
 
-const BASE = process.env.EXPO_PUBLIC_BACKEND_URL || "";
+const BASE = BACKEND_URL || "";
 
 type Cover = {
   client_id: string;

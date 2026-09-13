@@ -17,6 +17,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { api } from "@/src/api/client";
 import { colors, spacing, radii } from "@/src/theme";
 import { IS_IOS_NATIVE } from "@/src/utils/platform";
+import { BACKEND_URL } from "@/src/api/baseUrl";
 
 type WeddingInfo = {
   client_id: string;
@@ -133,7 +134,7 @@ export default function GuestbookPage() {
           const fd = new FormData();
           fd.append("file", file);
           fd.append("media_type", type);
-          const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL || "";
+          const backendUrl = BACKEND_URL || "";
           const resp = await fetch(`${backendUrl}/api/guestbook/${clientId}/upload`, {
             method: "POST",
             body: fd,

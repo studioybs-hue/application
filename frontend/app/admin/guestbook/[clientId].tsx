@@ -18,6 +18,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { api } from "@/src/api/client";
 import { storage } from "@/src/utils/storage";
 import { colors, spacing, radii } from "@/src/theme";
+import { BACKEND_URL } from "@/src/api/baseUrl";
 
 type Entry = {
   id: string;
@@ -145,7 +146,7 @@ function AdminGuestbookDetail({ clientId }: { clientId: string }) {
   const loadQr = async () => {
     setQrLoading(true);
     try {
-      const backendUrl = process.env.EXPO_PUBLIC_BACKEND_URL || "";
+      const backendUrl = BACKEND_URL || "";
       const token = await storage.secureGet<string>("ws_token", "");
       const resp = await fetch(`${backendUrl}/api/admin/guestbook/${clientId}/qr`, {
         headers: { Authorization: `Bearer ${token || ""}` },

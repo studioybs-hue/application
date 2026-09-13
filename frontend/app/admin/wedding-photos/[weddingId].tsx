@@ -15,8 +15,9 @@ import * as ImagePicker from "expo-image-picker";
 import { api } from "@/src/api/client";
 import { colors, spacing, radii } from "@/src/theme";
 import { showAlert } from "@/src/utils/dialog";
+import { BACKEND_URL } from "@/src/api/baseUrl";
 
-const BASE_URL = process.env.EXPO_PUBLIC_BACKEND_URL || "";
+const BASE_URL = BACKEND_URL || "";
 const TOKEN_KEY_NAME = "ws_token";
 const { width: SCREEN_W } = Dimensions.get("window");
 const ITEM_SIZE = (SCREEN_W - 48) / 3;

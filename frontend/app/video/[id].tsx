@@ -22,6 +22,7 @@ import { useAuth } from "@/src/auth/AuthContext";
 import { useCast, NativeCastButton } from "@/src/cast";
 import { showAlert } from "@/src/utils/dialog";
 import { IS_IOS_NATIVE } from "@/src/utils/platform";
+import { BACKEND_URL } from "@/src/api/baseUrl";
 
 type Video = {
   id: string;
@@ -172,7 +173,7 @@ export default function VideoScreen() {
 
   // --- "Partager" — native share sheet ---
   const onShare = async () => {
-    const shareUrl = `${process.env.EXPO_PUBLIC_BACKEND_URL || "https://cinemaries.fr"}/wedding/${video.client_id || video.id}`;
+    const shareUrl = `${BACKEND_URL || "https://cinemaries.fr"}/wedding/${video.client_id || video.id}`;
     const shareMessage = `Découvrez le film de mariage "${video.title}" sur CINÉMARIÉS 🎬\n\n${shareUrl}`;
     try {
       if (Platform.OS === "web") {

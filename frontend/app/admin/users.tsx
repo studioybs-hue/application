@@ -11,6 +11,7 @@ import { api } from "@/src/api/client";
 import { colors, spacing, radii } from "@/src/theme";
 import { showAlert, showConfirm } from "@/src/utils/dialog";
 import { useAuth } from "@/src/auth/AuthContext";
+import { BACKEND_URL } from "@/src/api/baseUrl";
 
 type U = {
   id: string;
@@ -155,7 +156,7 @@ export default function AdminUsers() {
   };
 
   const exportCsv = async () => {
-    const url = `${process.env.EXPO_PUBLIC_BACKEND_URL}/api/admin/users/export.csv`;
+    const url = `${BACKEND_URL}/api/admin/users/export.csv`;
     try {
       await Linking.openURL(url);
     } catch {

@@ -10,7 +10,16 @@ User's primary language: **French** — always respond in French.
 - **Apple Reader App compliance (Guideline 3.1.3a)**: NEVER add subscription purchase, access code entry, or account registration UI on iOS native app. Enforced via `IS_IOS_NATIVE` from `frontend/src/utils/platform.ts`.
 - **Emergency VPS recovery**: old IONOS VPS deleted, new VPS is `31.70.142.150`.
 
-## Current Status (2026-09-11)
+## Current Status (2026-09-13)
+
+### 🚨 Fix 2026-09-13 — App native (iOS/Android) figée sur une vieille base
+- **Symptôme** : nouveaux mariages visibles sur cinemaries.fr mais jamais dans l'app installée (qui affichait encore « Sarahaline »).
+- **Root cause** : l'app native était compilée avec `EXPO_PUBLIC_BACKEND_URL` = URL de prévisualisation Emergent (`mariagevideo.preview…`), pas cinemaries.fr → base de données différente/figée.
+- **Fix** : nouveau `frontend/src/api/baseUrl.ts` exportant `BACKEND_URL` : sur iOS/Android en build de production → **toujours `https://cinemaries.fr`** ; sur web ou en `__DEV__` → variable d'env. Tous les `process.env.EXPO_PUBLIC_BACKEND_URL` du frontend (16 fichiers) passent par cet export.
+- Version bump `1.6.3` → `1.6.5` (iOS buildNumber 15, Android versionCode 7).
+- **Action utilisateur** : relancer un build via **Publish** puis soumettre App Store / Play Store. Le web n'est pas impacté (pas de redéploiement VPS nécessaire, mais synchroniser `frontend/src/api/baseUrl.ts` + fichiers modifiés au prochain déploiement).
+
+## Previous Status (2026-09-11)
 
 ### 🚨 Hotfix 2026-09-11 (soir) — Home page en loader infini
 - **Root cause** : Le dossier VPS `/var/www/cinemaries/frontend/app/` avait été corrompu lors d'un rsync précédent. `app/index.tsx` contenait le code de `admin/index.tsx` (dashboard admin) au lieu du splash. Plusieurs fichiers admin (`videos.tsx`, `codes.tsx`, `users.tsx`, `hosting.tsx`, `settings.tsx`, `contact.tsx`, `devis.tsx`, `deletion-requests.tsx`, `wedding-covers.tsx`, `wedding-photos/*.tsx`, `video-edit/*.tsx`, `support/*.tsx`, `guestbook/*.tsx`) étaient DUPLIQUÉS à la racine de `app/`, court-circuitant les routes normales.

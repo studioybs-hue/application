@@ -24,8 +24,9 @@ import { storage } from "@/src/utils/storage";
 import { showAlert } from "@/src/utils/dialog";
 import { colors, spacing, radii } from "@/src/theme";
 import { Ticket, Message, STATUS_LABEL, STATUS_COLOR } from "./types";
+import { BACKEND_URL } from "@/src/api/baseUrl";
 
-const BASE = process.env.EXPO_PUBLIC_BACKEND_URL || "";
+const BASE = BACKEND_URL || "";
 
 export function ChatScreen({
   ticketId,

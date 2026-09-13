@@ -13,8 +13,9 @@ import { Ionicons } from "@expo/vector-icons";
 import { api } from "@/src/api/client";
 import { colors, spacing, radii } from "@/src/theme";
 import { showAlert } from "@/src/utils/dialog";
+import { BACKEND_URL } from "@/src/api/baseUrl";
 
-const BASE_URL = process.env.EXPO_PUBLIC_BACKEND_URL || "";
+const BASE_URL = BACKEND_URL || "";
 
 type Wedding = {
   client_id: string;
