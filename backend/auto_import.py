@@ -77,7 +77,7 @@ CATEGORIES = ["À l'affiche", "Cérémonies", "Soirées", "Best Of"]
 DEFAULT_SETTINGS = {
     "enabled": True,
     "default_featured": True,
-    "default_showcase": True,
+    "default_showcase": False,
     # Alertes admin à chaque fichier publié / en erreur
     "notify_email": True,
     "notify_email_to": os.environ.get("ADMIN_NOTIFY_EMAIL", ""),
@@ -171,13 +171,19 @@ class MarriageFilenameParser:
         (TYPE_COMPLETE, re.compile(r"^video complete\s*:\s*(.+)$")),
         (TYPE_POSTER, re.compile(r"^poster\s*:\s*(.+)$")),
         (TYPE_HERO, re.compile(r"^hero grand format\s*:\s*(.+)$")),
-        (TYPE_TRAILER, re.compile(r"^bande[\s\-_]*annonce\s*:\s*(.+)$")),
+        (TYPE_TRAILER, re.compile(r"^bande[\s\-_]*an+once\s*:\s*(.+)$")),
     ]
     PRESTATION_RE = re.compile(r"^mariage de\s+(.+)$")
     # Forme « {Mariés} {mot-clé} [{prestation}] » (ex: "Yassina & Bensaid video complet Oukoumbi")
     SUFFIX_RE = re.compile(
-        r"^(?P<couple>.+?)[\s\-_:]+(?P<kw>bande[\s\-_]*annonce|trailer|(?:hero\s+)?grand\s+format|hero|poster|affiche|"
+        r"^(?P<couple>.+?)[\s\-_:]+(?P<kw>bande[\s\-_]*an+once|trailer|(?:hero\s+)?grand\s+format|hero|poster|affiche|"
         r"video\s+complete?|film\s+complet)(?:[\s\-_:]+(?P<rest>.+))?$"
+    )
+
+    # Forme « {mot-clé} {Mariés} » (ex: "Bande annonce hanifa", "Poster Yassina & Bensaid")
+    PREFIX_KW_RE = re.compile(
+        r"^(?P<kw>bande[\s\-_]*an+once|trailer|(?:hero\s+)?grand\s+format|hero|poster|affiche|"
+        r"video\s+complete?|film\s+complet)[\s\-_:]+(?P<couple>.+)$"
     )
 
     def __init__(self, services: list[dict]):
@@ -257,6 +263,21 @@ class MarriageFilenameParser:
                 }
             result = {"type": ftype, "couple": couple, "name": couple, "filename": filename, "ext": ext}
             return result
+
+        m = self.PREFIX_KW_RE.match(norm)
+        if m and m.group("couple").strip():
+            kw = m.group("kw")
+            couple = original[m.start("couple"):m.end("couple")].strip(" -_:")
+            if kw.startswith("bande") or kw == "trailer":
+                ftype = TYPE_TRAILER
+            elif "grand" in kw or kw == "hero":
+                ftype = TYPE_HERO
+            elif kw in ("poster", "affiche"):
+                ftype = TYPE_POSTER
+            else:
+                ftype = TYPE_COMPLETE
+            self._check_ext(ftype, ext)
+            return {"type": ftype, "couple": couple, "name": couple, "filename": filename, "ext": ext}
 
         # Forme courte « {nom(s)} {prestation} » (ex: "yassina Maoulid.mp4")
         if ext in VIDEO_EXTS:
@@ -632,7 +653,12 @@ class AutoImporter:
         log.info("[auto-import] Traitement de « %s » (%d octets)", path.name, size)
         try:
             parser = MarriageFilenameParser(cfg.get("services") or [])
-            parsed = parser.parse(path.name)
+            try:
+                parsed = parser.parse(path.name)
+            except ParseError as pe:
+                parsed = await self._guess_new_prestation(path.name, cfg)
+                if parsed is None:
+                    raise pe
             await self._job_set(
                 job_id, type=parsed["type"], type_label=TYPE_LABELS[parsed["type"]],
                 couple=parsed.get("couple") or parsed.get("name"),
@@ -809,12 +835,38 @@ class AutoImporter:
             log.info("[auto-import] Mariage renommé « %s » → « %s »", client_name, winner)
         return winner
 
-    async def _main_video(self, client_id: str) -> Optional[dict]:
-        """Vidéo principale du mariage : catégorie « À l'affiche » sinon la plus ancienne."""
+    async def _main_video(self, client_id: str, client_name: Optional[str] = None, cfg: Optional[dict] = None) -> dict:
+        """Vidéo principale du mariage (catégorie « À l'affiche », porte poster/hero/bande-annonce/film).
+        Si elle a été supprimée dans l'admin, elle est recréée à partir de la couverture du mariage."""
         v = await self.db.videos.find_one({"client_id": client_id, "category": MAIN_CATEGORY}, {"_id": 0}, sort=[("created_at", 1)])
         if v:
             return v
-        return await self.db.videos.find_one({"client_id": client_id}, {"_id": 0}, sort=[("created_at", 1)])
+        cfg = cfg or await self.get_settings()
+        meta = await self.db.wedding_meta.find_one({"client_id": client_id}, {"_id": 0}) or {}
+        any_v = await self.db.videos.find_one({"client_id": client_id}, {"_id": 0}, sort=[("created_at", 1)]) or {}
+        name = client_name or any_v.get("client_name") or client_id.replace("-", " ").title()
+        doc = {
+            "id": str(uuid.uuid4()),
+            "title": name,
+            "description": "",
+            "category": MAIN_CATEGORY,
+            "poster_url": meta.get("poster_url") or any_v.get("poster_url") or "",
+            "hero_url": meta.get("hero_url") or any_v.get("hero_url") or "",
+            "trailer_url": "",
+            "full_url": "",
+            "duration_minutes": 0,
+            "is_featured": bool(cfg.get("default_featured", True)),
+            "is_top_france": False,
+            "is_showcase": bool(cfg.get("default_showcase", False)),
+            "is_private": True,
+            "client_id": client_id,
+            "client_name": name,
+            "auto_imported": True,
+            "created_at": utcnow(),
+        }
+        await self.db.videos.insert_one(doc)
+        log.info("[auto-import] Fiche principale recréée pour « %s »", name)
+        return doc
 
     async def _candidates_for_name(self, name: str) -> list[dict]:
         """Mariages dont le nom contient tous les prénoms du fichier (ou inversement).
@@ -854,7 +906,7 @@ class AutoImporter:
 
     # ---------------- application des médias ----------------
     async def _apply_complete_video(self, job_id: str, path: Path, client_id: str, client_name: str, created: bool):
-        main = await self._main_video(client_id)
+        main = await self._main_video(client_id, client_name)
         duration = await asyncio.to_thread(probe_duration_minutes, path)
         stored_as, url = self._store(path)
         update = {"full_url": url, "updated_at": utcnow()}
@@ -869,7 +921,7 @@ class AutoImporter:
         log.info("[auto-import] Vidéo complète → %s", client_name)
 
     async def _apply_prestation(self, job_id: str, path: Path, parsed: dict, client_id: str, client_name: str, cfg: dict, created: bool):
-        main = await self._main_video(client_id)
+        main = await self._main_video(client_id, client_name, cfg)
         duration = await asyncio.to_thread(probe_duration_minutes, path)
         stored_as, url = self._store(path)
         label = parsed["service_label"]
@@ -914,7 +966,7 @@ class AutoImporter:
         log.info("[auto-import] Prestation %s → %s", label, client_name)
 
     async def _apply_media(self, job_id: str, path: Path, ftype: str, client_id: str, client_name: str, created: bool = False):
-        main = await self._main_video(client_id)
+        main = await self._main_video(client_id, client_name)
         stored_as, url = self._store(path)
         now = utcnow()
         if ftype == TYPE_POSTER:
@@ -936,6 +988,31 @@ class AutoImporter:
         await self._job_set(job_id, status=STATUS_PROCESSED, result="created_wedding" if created else "updated", video_id=main["id"], stored_as=stored_as,
                             url=url, file_location="uploads", message=msg, processed_at=now)
         log.info("[auto-import] %s → %s", TYPE_LABELS[ftype], client_name)
+
+    async def _guess_new_prestation(self, filename: str, cfg: dict) -> Optional[dict]:
+        """« Sarahline Kandou.mp4 » : le début correspond à un mariage existant → le dernier mot
+        est une NOUVELLE prestation (ajoutée automatiquement à la liste)."""
+        stem, ext = os.path.splitext(filename)
+        ext = ext.lower()
+        if ext not in VIDEO_EXTS:
+            return None
+        words = re.sub(r"\s+", " ", stem).strip().split(" ")
+        if len(words) < 2:
+            return None
+        service_word = words[-1].strip(" -_:")
+        couple = " ".join(words[:-1]).strip(" -_:")
+        if not service_word or not couple or normalize(service_word) in GENERIC_WORDS:
+            return None
+        match = await self._match_wedding_for_media(couple)
+        if not isinstance(match, tuple):
+            return None
+        key = normalize(service_word)
+        svc = {"key": key, "label": service_word[:1].upper() + service_word[1:], "category": "Cérémonies", "auto_created": True}
+        log.info("[auto-import] Nouvelle prestation déduite « %s » pour le mariage « %s »", service_word, match[1])
+        return {
+            "type": TYPE_PRESTATION, "couple": couple, "service": key, "service_label": svc["label"],
+            "category": svc["category"], "new_service": svc, "filename": filename, "ext": ext,
+        }
 
     async def _register_service(self, cfg: dict, svc: dict):
         """Ajoute automatiquement une prestation inconnue (ex: « Oukoumbi ») à la liste configurable."""

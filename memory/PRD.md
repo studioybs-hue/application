@@ -144,3 +144,9 @@ User's primary language: **French** — always respond in French.
 ### Test paiement réel Stripe LIVE (2026-09-13) ✅
 - Compte test `youssouf.ali09@gmail.com` (claim `yassina` inséré manuellement). Paiement 2,30 € OK → Premium activé → webhook corrigé (`obj.to_dict()` : stripe-python 15.x interdit `.get()` sur les ressources) → événements rejoués → remboursement `re_3UFFSL2RzyH118Yn1JhExRNn` (230 cts) → abonnement annulé → webhook `customer.subscription.deleted` a repassé `is_subscribed=false`.
 - Fix : `APP_PUBLIC_URL` manquait sur le VPS (success_url invalide → 502) ; ajouté dans `.env` + fallback PUBLIC_BASE_URL dans server.py.
+
+### 2026-09-13 — Confidentialité Premium + robustesse import (déployé)
+- **Accès** : Premium ne débloque QUE le mariage du client (`_owns_wedding` : client_id ou claimed_client_id) dans `/weddings/{cid}` et `/videos/{id}` ; codes invités et admin inchangés ; `/client/codes` accepte le mariage revendiqué (`_my_cid`). Auto-assignation d'un mariage par code désactivée si l'utilisateur a déjà revendiqué. Catalogue (affiches/bandes-annonces) reste visible par tous (choix utilisateur).
+- **Import** : `default_showcase=false` (prod aussi) ; forme « {mot-clé} {Mariés} » (« Bande anonce hanifa.mp4 », « Poster Yassina.jpg ») ; faute « anonce » tolérée ; prestation inconnue déduite si le début du nom correspond à un mariage existant (`_guess_new_prestation` : « Sarahline Kandou.mp4 » → Kandou) ; `_main_video` recrée la fiche principale « À l'affiche » si l'admin l'a supprimée.
+- Prod : fiche principale « Yassina & Bensaid » recréée (l'utilisateur l'avait supprimée) avec poster/hero/bande-annonce ; Kandou + Djaliko ajoutés à Sarhaline & Elarif ; bande-annonce Hanifa relancée.
+- ⚠️ L'utilisateur a supprimé/recréé des mariages dans l'admin (sarahaline-elarif → sarhaline). Ne pas supprimer la vidéo « À l'affiche » : c'est elle qui porte poster/hero/bande-annonce/film complet.
