@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import os
 import re
+import unicodedata
 import uuid
 import logging
 import asyncio
@@ -346,7 +347,7 @@ def register_project_tracking_routes(
             "wedding_name": fields.get("wedding_name") or client_id.replace("-", " ").title(),
             "owner_user_id": fields.get("owner_user_id"),
             "owner_email": (fields.get("owner_email") or "").lower().strip() or None,
-            "owner_phone": fields.get("owner_phone"),
+            "owner_phone": normalize_fr_phone(fields.get("owner_phone")) or fields.get("owner_phone"),
             "admin_note": fields.get("admin_note", ""),
             "eta_delivery": fields.get("eta_delivery"),
             "steps": _build_default_steps(),
@@ -356,18 +357,25 @@ def register_project_tracking_routes(
         await db.project_tracking.insert_one(doc)
         # Un suivi recréé ne doit plus être considéré comme supprimé
         await db.project_tracking_deleted.delete_one({"client_id": client_id})
-        await _link_owner_user(client_id, doc.get("owner_email"))
+        await _link_owner_user(client_id, doc.get("owner_email"), doc.get("owner_phone"))
         log.info("[project_tracking] created for client_id=%s", client_id)
         return doc
 
-    async def _link_owner_user(client_id: str, owner_email: Optional[str]) -> Optional[dict]:
-        """Relie automatiquement le compte « Mariés » dont l'email correspond à owner_email :
+    async def _link_owner_user(client_id: str, owner_email: Optional[str], owner_phone: Optional[str] = None) -> Optional[dict]:
+        """Relie automatiquement le compte « Mariés » dont l'email OU le téléphone correspond :
         users.client_id ← client_id et project.owner_user_id ← user.id (temps réel côté client)."""
-        if not owner_email:
+        ors = []
+        if owner_email:
+            ors.append({"email": owner_email.lower().strip()})
+        phone = normalize_fr_phone(owner_phone)
+        if phone:
+            ors.append({"phone": phone})
+        if not ors:
             return None
-        u = await db.users.find_one({"email": owner_email.lower().strip()}, {"_id": 0, "id": 1, "client_id": 1, "is_admin": 1})
+        u = await db.users.find_one({"$or": ors}, {"_id": 0, "id": 1, "client_id": 1, "is_admin": 1, "email": 1})
         if not u or u.get("is_admin"):
             return None
+        owner_email = u.get("email")
         if not u.get("client_id"):
             await db.users.update_one({"id": u["id"]}, {"$set": {"client_id": client_id}})
         await db.project_tracking.update_one({"client_id": client_id}, {"$set": {"owner_user_id": u["id"]}})
@@ -399,9 +407,12 @@ def register_project_tracking_routes(
         if not wedding_id:
             # Compte « Mariés » : tenter la liaison automatique par email (suivi créé par l'admin)
             if current.get("account_type") == "couple":
-                p = await db.project_tracking.find_one({"owner_email": (current.get("email") or "").lower()}, {"_id": 0})
+                ors = [{"owner_email": (current.get("email") or "").lower()}]
+                if normalize_fr_phone(current.get("phone")):
+                    ors.append({"owner_phone": normalize_fr_phone(current.get("phone"))})
+                p = await db.project_tracking.find_one({"$or": ors}, {"_id": 0})
                 if p:
-                    await _link_owner_user(p["client_id"], current.get("email"))
+                    await _link_owner_user(p["client_id"], current.get("email"), current.get("phone"))
                     return {"project": await _project_to_public(p)}
             # Admin preview: return the first project so admins can inspect the UI
             if current.get("is_admin"):
@@ -478,8 +489,11 @@ def register_project_tracking_routes(
             if v is not None:
                 update[k] = v.lower().strip() if k == "owner_email" else v
         await db.project_tracking.update_one({"client_id": client_id}, {"$set": update})
-        if update.get("owner_email"):
-            await _link_owner_user(client_id, update["owner_email"])
+        if "owner_phone" in update:
+            update["owner_phone"] = normalize_fr_phone(update["owner_phone"]) or update["owner_phone"]
+            await db.project_tracking.update_one({"client_id": client_id}, {"$set": {"owner_phone": update["owner_phone"]}})
+        if update.get("owner_email") or update.get("owner_phone"):
+            await _link_owner_user(client_id, update.get("owner_email"), update.get("owner_phone"))
         p2 = await db.project_tracking.find_one({"client_id": client_id})
         return await _project_to_public(p2)
 
@@ -663,6 +677,29 @@ def register_project_tracking_routes(
             }
             # Registered users take priority over anonymous sources (codes/videos)
             candidates[cid] = entry
+
+        # 5) Nouveaux comptes « Mariés » sans aucun mariage encore rattaché : proposés tels quels,
+        #    l'admin choisit le mariage (nom) et le compte est relié automatiquement via l'email.
+        linked_emails = {(p.get("owner_email") or "").lower() async for p in db.project_tracking.find({}, {"owner_email": 1})}
+        async for u in db.users.find(
+            {"account_type": "couple", "is_admin": {"$ne": True},
+             "$and": [{"$or": [{"client_id": {"$in": [None, ""]}}, {"client_id": {"$exists": False}}]},
+                      {"$or": [{"claimed_client_id": {"$in": [None, ""]}}, {"claimed_client_id": {"$exists": False}}]}]},
+            {"email": 1, "phone": 1, "full_name": 1, "id": 1, "created_at": 1},
+        ):
+            if (u.get("email") or "").lower() in linked_emails:
+                continue
+            base = re.sub(r"[^a-z0-9]+", "-", unicodedata.normalize("NFKD", (u.get("full_name") or u["email"].split("@")[0]).lower()).encode("ascii", "ignore").decode()).strip("-") or "maries"
+            cid = base if base not in existing and base not in candidates else f"{base}-{u['id'][:4]}"
+            candidates[cid] = {
+                "client_id": cid,
+                "wedding_name": u.get("full_name") or u["email"],
+                "owner_user_id": u.get("id"),
+                "owner_email": u.get("email"),
+                "owner_phone": u.get("phone"),
+                "source": "nouveau compte Mariés",
+                "is_new_account": True,
+            }
 
         return {"items": list(candidates.values())}
 

@@ -21,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 
 from mailer import send_email, render_email, is_configured as smtp_configured, bind_db as bind_mailer_db
 from photos import register_photo_routes
-from project_tracking import register_project_tracking_routes, send_brevo_sms, bind_db as bind_pt_db
+from project_tracking import normalize_fr_phone, register_project_tracking_routes, send_brevo_sms, bind_db as bind_pt_db
 from app_settings import register_settings_routes
 from guestbook import register_guestbook_routes
 from auto_import import register_auto_import_routes
@@ -94,6 +94,7 @@ class RegisterRequest(BaseModel):
     password: str = Field(..., min_length=6)
     full_name: str = Field(..., min_length=1)
     account_type: Optional[str] = "user"  # "user" (invité) | "couple" (mariés → suivi de projet automatique)
+    phone: Optional[str] = None  # téléphone des mariés → liaison automatique au suivi de projet
 
 
 class LoginRequest(BaseModel):
@@ -376,12 +377,16 @@ async def register(body: RegisterRequest):
         raise HTTPException(status_code=409, detail="Email déjà utilisé")
     user_id = str(uuid.uuid4())
     account_type = "couple" if (body.account_type or "").lower() == "couple" else "user"
+    phone = normalize_fr_phone(body.phone) if body.phone else None
+    if body.phone and not phone:
+        raise HTTPException(status_code=400, detail="Numéro de téléphone invalide (format français attendu, ex. 06 12 34 56 78)")
     doc = {
         "id": user_id,
         "email": body.email.lower(),
         "password_hash": hash_password(body.password),
         "full_name": body.full_name,
         "account_type": account_type,
+        "phone": phone,
         "is_subscribed": False,
         "is_admin": False,
         "stripe_customer_id": None,
@@ -389,7 +394,10 @@ async def register(body: RegisterRequest):
     }
     # Compte « Mariés » : liaison automatique au suivi de projet créé par l'admin avec cet email
     if account_type == "couple":
-        project = await db.project_tracking.find_one({"owner_email": body.email.lower()}, {"_id": 0, "client_id": 1})
+        ors = [{"owner_email": body.email.lower()}]
+        if phone:
+            ors.append({"owner_phone": phone})
+        project = await db.project_tracking.find_one({"$or": ors}, {"_id": 0, "client_id": 1})
         if project:
             doc["client_id"] = project["client_id"]
     await db.users.insert_one(doc)

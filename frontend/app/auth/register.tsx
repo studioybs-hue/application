@@ -23,6 +23,7 @@ export default function RegisterScreen() {
   const { register } = useAuth();
   const params = useLocalSearchParams<{ redirect?: string }>();
   const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [acceptedTerms, setAcceptedTerms] = useState(false);
@@ -57,13 +58,20 @@ export default function RegisterScreen() {
       setError("Le mot de passe doit contenir au moins 6 caractères");
       return;
     }
+    if (accountType === "couple") {
+      const digits = phone.replace(/\D/g, "");
+      if (!(digits.length === 10 && digits.startsWith("0")) && !(digits.length === 11 && digits.startsWith("33"))) {
+        setError("Numéro de téléphone requis pour un compte Mariés (ex : 06 12 34 56 78)");
+        return;
+      }
+    }
     if (!acceptedTerms) {
       setError("Vous devez accepter les CGU et la Politique de confidentialité pour créer un compte.");
       return;
     }
     setLoading(true);
     try {
-      await register(email.trim().toLowerCase(), password, name.trim(), accountType);
+      await register(email.trim().toLowerCase(), password, name.trim(), accountType, phone.trim() || undefined);
       const target = params.redirect && typeof params.redirect === "string" ? params.redirect : accountType === "couple" ? "/(tabs)/profile" : "/(tabs)/home";
       router.replace(target as any);
     } catch (e: any) {
@@ -108,7 +116,7 @@ export default function RegisterScreen() {
             </TouchableOpacity>
           </View>
           {accountType === "couple" && (
-            <Text style={styles.typeNote}>Utilisez l&apos;email communiqué à CINÉMARIÉS : votre suivi de projet sera relié automatiquement.</Text>
+            <Text style={styles.typeNote}>Utilisez l&apos;email et le téléphone communiqués à CINÉMARIÉS : votre suivi de projet sera relié automatiquement.</Text>
           )}
 
           <View style={styles.field}>
@@ -133,6 +141,19 @@ export default function RegisterScreen() {
               value={email}
               onChangeText={setEmail}
               testID="register-email-input"
+            />
+          </View>
+          <View style={styles.field}>
+            <Ionicons name="call-outline" size={18} color={colors.textSecondary} />
+            <TextInput
+              style={styles.input}
+              placeholder={accountType === "couple" ? "Téléphone des mariés (obligatoire)" : "Téléphone (facultatif)"}
+              placeholderTextColor={colors.textDisabled}
+              keyboardType="phone-pad"
+              autoComplete="tel"
+              value={phone}
+              onChangeText={setPhone}
+              testID="register-phone-input"
             />
           </View>
           <View style={styles.field}>
@@ -161,7 +182,7 @@ export default function RegisterScreen() {
               {acceptedTerms ? <Ionicons name="checkmark" size={16} color="#0A0A0A" /> : null}
             </View>
             <Text style={styles.consentTxt}>
-              J'accepte les{" "}
+              J&apos;accepte les{" "}
               <Text style={styles.consentLink} onPress={() => router.push("/legal/cgu")}>CGU</Text>
               {" "}et la{" "}
               <Text style={styles.consentLink} onPress={() => router.push("/legal/privacy")}>Politique de confidentialité</Text>

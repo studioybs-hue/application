@@ -169,8 +169,10 @@ export default function AdminProjectsList() {
                   testID={`project-candidate-${c.client_id}`}
                 >
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.candTitle}>{c.wedding_name}</Text>
-                    <Text style={styles.candId}>{c.client_id} • source: {c.source || "?"}</Text>
+                    <Text style={styles.candTitle}>{c.wedding_name}{(c as any).is_new_account ? "  🆕" : ""}</Text>
+                    <Text style={styles.candId}>
+                      {(c as any).is_new_account ? `Nouveau compte Mariés • ${c.owner_email || ""}` : `${c.client_id} • source: ${c.source || "?"}`}
+                    </Text>
                   </View>
                   <View style={styles.addBadge}>
                     <Ionicons name="add" size={20} color={colors.gold} />

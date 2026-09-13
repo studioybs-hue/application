@@ -74,10 +74,10 @@ export type LoginResult =
   | { requires_2fa?: false; access_token: string; user: any };
 
 export const auth = {
-  async register(email: string, password: string, full_name: string, account_type: "user" | "couple" = "user") {
+  async register(email: string, password: string, full_name: string, account_type: "user" | "couple" = "user", phone?: string) {
     const r = await api<{ access_token: string; user: any }>("/auth/register", {
       method: "POST",
-      body: { email, password, full_name, account_type },
+      body: { email, password, full_name, account_type, phone },
       auth: false,
     });
     await setToken(r.access_token);
