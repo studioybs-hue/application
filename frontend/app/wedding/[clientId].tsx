@@ -320,7 +320,7 @@ export default function WeddingScreen() {
 
             <View style={styles.previewSection}>
               <Text style={styles.previewLabel}>APERÇU</Text>
-              {wedding.videos.slice(0, 3).map((v) => (
+              {wedding.videos.map((v) => (
                 <View key={v.id} style={styles.previewRow}>
                   <Image source={{ uri: v.poster_url }} style={styles.previewThumb} contentFit="cover" />
                   <View style={{ flex: 1, marginLeft: 12 }}>

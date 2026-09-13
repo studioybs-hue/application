@@ -1556,7 +1556,8 @@ def _group_by_wedding(videos: list[dict], metas: Optional[dict[str, dict]] = Non
                 "videos": [],
             }
         w = by_client[cid]
-        w["video_count"] += 1
+        if not _is_cover_record(v):
+            w["video_count"] += 1
         w["total_minutes"] += int(v.get("duration_minutes", 0) or 0)
         if v.get("is_featured"):
             w["is_featured"] = True
