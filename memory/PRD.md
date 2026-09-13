@@ -131,3 +131,7 @@ User's primary language: **French** — always respond in French.
 ### Alertes import (2026-09-13) ✅ déployé
 - `auto_import._notify` : à chaque job PROCESSED (hors doublon) ou ERROR → email (mailer IONOS, si SMTP configuré) et/ou SMS Brevo. Réglages `app_settings.auto_import` : notify_email (défaut true), notify_email_to (défaut ADMIN_NOTIFY_EMAIL), notify_sms (false), notify_phone, notify_on ("all"|"errors"). Route POST `/admin/auto-import/test-notify`. UI dans Admin → Importation automatique → Prestations & publication → « Alertes à chaque import ».
 - Rappel : l'email ne partira réellement que lorsque IONOS autorisera le SMTP externe (blocage connu) ; le SMS Brevo fonctionne indépendamment.
+
+### 2026-09-13 15:05 — Surveillance ACTIVÉE en prod, 1er import réel réussi
+- Mariage « Yassina & Bensaid » (client_id `yassina`) créé automatiquement : poster, hero, bande-annonce + prestations Halal, Mairie, Soirée. « Mazaraka Hanifa » → Hanifa et Dali ; « oukoumbi Sarhaline » → Sarahaline & Elarif (fuzzy tokens). Restent en ERROR (en place) : `Oukopumbi att.mp4`, `soiree.mp4`, `Extrat 1.png`.
+- Ajouts : `_tokens_included` (prénoms approchés), `_reconcile_name` (nom le plus complet + orthographe majoritaire → renomme le mariage), le job garde le `couple` brut du fichier.

@@ -141,6 +141,18 @@ def couple_key(name: str) -> str:
     return "-".join(sorted(toks))
 
 
+def _token_match(a: str, b: str) -> bool:
+    """Deux prénoms sont « égaux » s'ils sont identiques ou très proches (« sarhaline » ≈ « sarahaline »)."""
+    if a == b:
+        return True
+    return len(a) >= 5 and len(b) >= 5 and SequenceMatcher(None, a, b).ratio() >= FUZZY_THRESHOLD
+
+
+def _tokens_included(small: set, big: set) -> bool:
+    """Chaque token de `small` a un équivalent (exact ou approché) dans `big`."""
+    return bool(small) and all(any(_token_match(t, o) for o in big) for t in small)
+
+
 class ParseError(Exception):
     pass
 
@@ -650,7 +662,7 @@ class AutoImporter:
 
             if parsed["type"] in (TYPE_PRESTATION, TYPE_COMPLETE) or parsed.get("couple"):
                 client_id, client_name, created = await self._find_or_create_wedding(parsed["couple"], cfg)
-                await self._job_set(job_id, client_id=client_id, client_name=client_name, couple=client_name)
+                await self._job_set(job_id, client_id=client_id, client_name=client_name)
                 if parsed.get("new_service"):
                     await self._register_service(cfg, parsed["new_service"])
                 if parsed["type"] == TYPE_COMPLETE:
@@ -741,7 +753,9 @@ class AutoImporter:
     async def _find_or_create_wedding(self, couple: str, cfg: dict) -> tuple[str, str, bool]:
         match = await self._match_wedding_for_media(couple)
         if isinstance(match, tuple):
-            return match[0], match[1], False
+            client_id, client_name = match
+            client_name = await self._reconcile_name(client_id, client_name, couple)
+            return client_id, client_name, False
         if match == "ambiguous":
             names = ", ".join(w["client_name"] for w in await self._candidates_for_name(couple))
             raise ParseError(f"Plusieurs mariages correspondent à « {couple} » : {names}. Renommez le fichier avec le nom complet des mariés.")
@@ -770,6 +784,31 @@ class AutoImporter:
         log.info("[auto-import] Mariage créé: %s (%s)", couple, client_id)
         return client_id, couple, True
 
+    async def _reconcile_name(self, client_id: str, client_name: str, couple: str) -> str:
+        """Meilleur nom du mariage d'après tous les fichiers importés : le plus complet (plus de prénoms),
+        puis l'orthographe la plus fréquente (« Yassina & Bensaid » ×3 > « Yasinna & Bensaid » ×1)."""
+        def ntoks(x):
+            return len([t for t in tokens(x) if t not in {"et", "and"}])
+        names = [couple]
+        async for j in self.db.import_jobs.find({"client_id": client_id, "couple": {"$ne": None}, "status": {"$ne": STATUS_ERROR}}, {"_id": 0, "couple": 1}):
+            names.append(j["couple"])
+        best_len = max(ntoks(n) for n in names)
+        if ntoks(client_name) > best_len:
+            return client_name
+        candidates = [n for n in names if ntoks(n) == best_len and (" " in n.strip() or best_len == 1)]
+        if not candidates:
+            return client_name
+        counts = {n: candidates.count(n) for n in set(candidates)}
+        top = max(counts.values())
+        winners = [n for n, c in counts.items() if c == top]
+        winner = client_name if client_name in winners else sorted(winners)[0]
+        if winner != client_name:
+            await self.db.videos.update_many({"client_id": client_id}, {"$set": {"client_name": winner}})
+            await self.db.videos.update_many({"client_id": client_id, "title": client_name}, {"$set": {"title": winner}})
+            await self.db.import_jobs.update_many({"client_id": client_id}, {"$set": {"client_name": winner}})
+            log.info("[auto-import] Mariage renommé « %s » → « %s »", client_name, winner)
+        return winner
+
     async def _main_video(self, client_id: str) -> Optional[dict]:
         """Vidéo principale du mariage : catégorie « À l'affiche » sinon la plus ancienne."""
         v = await self.db.videos.find_one({"client_id": client_id, "category": MAIN_CATEGORY}, {"_id": 0}, sort=[("created_at", 1)])
@@ -787,7 +826,7 @@ class AutoImporter:
         out = []
         for w in await self._list_weddings():
             w_toks = {t for t in set(tokens(w["client_name"])) | set(tokens(w["client_id"])) if t not in {"et", "and"}}
-            if name_toks <= w_toks or (w_toks and w_toks <= name_toks):
+            if _tokens_included(name_toks, w_toks) or _tokens_included(w_toks, name_toks):
                 out.append(w)
         return out
 
