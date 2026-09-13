@@ -135,3 +135,8 @@ User's primary language: **French** — always respond in French.
 ### 2026-09-13 15:05 — Surveillance ACTIVÉE en prod, 1er import réel réussi
 - Mariage « Yassina & Bensaid » (client_id `yassina`) créé automatiquement : poster, hero, bande-annonce + prestations Halal, Mairie, Soirée. « Mazaraka Hanifa » → Hanifa et Dali ; « oukoumbi Sarhaline » → Sarahaline & Elarif (fuzzy tokens). Restent en ERROR (en place) : `Oukopumbi att.mp4`, `soiree.mp4`, `Extrat 1.png`.
 - Ajouts : `_tokens_included` (prénoms approchés), `_reconcile_name` (nom le plus complet + orthographe majoritaire → renomme le mariage), le job garde le `couple` brut du fichier.
+
+### Stripe LIVE configuré (2026-09-13) ✅
+- VPS `.env` : `STRIPE_API_KEY=sk_live_…` (fourni par l'utilisateur), `STRIPE_WEBHOOK_SECRET` (endpoint `we_1UFFA12RzyH118YnXq09MCTh` → https://cinemaries.fr/api/billing/webhook, créé via API), `STRIPE_PRICE_ID_ANNUAL_COMMIT=price_1Tc7I62RzyH118Yn4SAyg5jk`, `STRIPE_PRICE_ID_ANNUAL_FREE=price_1Tc7I72RzyH118Yn74TwpPf9`, `STRIPE_PRICE_ID_MONTHLY_FREE=price_1Tc7I82RzyH118YnHdfLJPKa`. Anciennes variables erronées (STRIPE_SECRET_KEY, STRIPE_PRICE_MONTHLY) supprimées. Sauvegarde .env dans /root/backups/.
+- `STRIPE_PUBLISHABLE_KEY` non renseignée (non utilisée : Checkout hébergé). Session Checkout live testée OK.
+- Fix `scripts/create_stripe_products.py` (`p.recurring["interval"]`).

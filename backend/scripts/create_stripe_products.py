@@ -107,7 +107,7 @@ def find_existing_price(product_id: str, amount: int, interval: str):
             p.unit_amount == amount
             and p.currency == CURRENCY
             and p.recurring
-            and p.recurring.get("interval") == interval
+            and p.recurring["interval"] == interval
         ):
             return p
     return None
