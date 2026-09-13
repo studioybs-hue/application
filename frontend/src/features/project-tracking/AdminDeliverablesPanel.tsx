@@ -12,7 +12,8 @@ import { BACKEND_URL } from "@/src/api/baseUrl";
 import { colors, spacing, radii } from "@/src/theme";
 import { showAlert } from "@/src/utils/dialog";
 import type { ProjectTracking } from "./ProjectTrackingView";
-import { fmtDateTime, openExternal, uploadFile } from "./deliverables";
+import { type LinkItem, fmtDateTime, linksOf, openExternal, uploadFile } from "./deliverables";
+import { Image } from "expo-image";
 
 type ZipItem = { name: string; size: number; modified: string };
 
@@ -28,17 +29,19 @@ export function AdminDeliverablesPanel({ project, onChanged, reload }: { project
   const d = project.deliverables || {};
   const photos = d.photos || {};
   const importing = photos.import?.status === "running";
-  const [photosLink, setPhotosLink] = useState(photos.link || "");
-  const [deliveryLink, setDeliveryLink] = useState(d.delivery?.link || "");
+  const [photosLinks, setPhotosLinks] = useState<LinkItem[]>(linksOf(photos, "Mes photos"));
+  const [deliveryLinks, setDeliveryLinks] = useState<LinkItem[]>(linksOf(d.delivery, "Mon film"));
   const [saving, setSaving] = useState<"" | "photos" | "delivery">("");
   const [zipModal, setZipModal] = useState(false);
   const [zips, setZips] = useState<ZipItem[] | null>(null);
   const [uploading, setUploading] = useState(false);
 
+  const photosKey = JSON.stringify(linksOf(photos, "Mes photos"));
+  const deliveryKey = JSON.stringify(linksOf(d.delivery, "Mon film"));
   useEffect(() => {
-    setPhotosLink(photos.link || "");
-    setDeliveryLink(d.delivery?.link || "");
-  }, [photos.link, d.delivery?.link]);
+    setPhotosLinks(JSON.parse(photosKey));
+    setDeliveryLinks(JSON.parse(deliveryKey));
+  }, [photosKey, deliveryKey]);
 
   // Import ZIP en cours → rafraîchir toutes les 3 s
   useEffect(() => {
@@ -50,11 +53,14 @@ export function AdminDeliverablesPanel({ project, onChanged, reload }: { project
   const saveLinks = async (which: "photos" | "delivery") => {
     setSaving(which);
     try {
-      const body = which === "photos" ? { photos_link: photosLink.trim() } : { delivery_link: deliveryLink.trim() };
+      const list = (which === "photos" ? photosLinks : deliveryLinks).filter((l) => l.url.trim());
+      const body = which === "photos" ? { photos_links: list } : { delivery_links: list };
       const p = await api<ProjectTracking>(`/admin/projects/${cid}/deliverables`, { method: "PATCH", body });
       onChanged(p);
-      const val = which === "photos" ? photosLink.trim() : deliveryLink.trim();
-      showAlert(val ? "✅ Lien enregistré" : "Lien supprimé", val ? "L'étape est passée en « Terminé » et les mariés ont été prévenus." : "Le lien n'est plus proposé aux mariés.");
+      showAlert(
+        list.length ? "✅ Liens enregistrés" : "Liens supprimés",
+        list.length ? `${list.length} lien(s) proposé(s) aux mariés. L'étape est passée en « Terminé » et les mariés ont été prévenus.` : "Plus aucun lien n'est proposé aux mariés."
+      );
     } catch (e: any) {
       showAlert("Erreur", e?.message || "Enregistrement impossible");
     } finally {
@@ -145,21 +151,16 @@ export function AdminDeliverablesPanel({ project, onChanged, reload }: { project
           <Text style={styles.btnGhostTxt}>Galerie</Text>
         </TouchableOpacity>
       </View>
-      <Text style={styles.label}>Lien de partage Synology (photos volumineuses)</Text>
-      <View style={styles.inputRow}>
-        <TextInput
-          style={styles.input}
-          value={photosLink}
-          onChangeText={setPhotosLink}
-          placeholder="https://gofile.me/… ou quickconnect.to/…"
-          placeholderTextColor={colors.textDisabled}
-          autoCapitalize="none"
-          testID="deliv-photos-link"
-        />
-        <TouchableOpacity style={styles.saveBtn} onPress={() => saveLinks("photos")} disabled={saving === "photos"} testID="deliv-photos-save">
-          {saving === "photos" ? <ActivityIndicator color="#0A0A0A" size="small" /> : <Ionicons name="checkmark" size={20} color="#0A0A0A" />}
-        </TouchableOpacity>
-      </View>
+      <Text style={styles.label}>Liens de partage Synology (photos volumineuses) — un libellé par lien</Text>
+      <LinksEditor
+        links={photosLinks}
+        onChange={setPhotosLinks}
+        onSave={() => saveLinks("photos")}
+        saving={saving === "photos"}
+        labelPlaceholder="Ex. Photos cérémonie"
+        urlPlaceholder="https://gofile.me/… ou quickconnect.to/…"
+        testID="deliv-photos"
+      />
 
       {/* ---- 6. Sélection ---- */}
       <Text style={styles.section}>6 · Sélection des 40 photos</Text>
@@ -173,8 +174,17 @@ export function AdminDeliverablesPanel({ project, onChanged, reload }: { project
               <Text style={styles.link}>🔗 {sel.link}</Text>
             </TouchableOpacity>
           ) : null}
+          {sel.uploads?.length ? (
+            <View style={styles.uploadGrid} testID="deliv-selection-uploads">
+              {sel.uploads.map((u) => (
+                <TouchableOpacity key={u.id} onPress={() => openExternal(`${BACKEND_URL}${u.url}`)}>
+                  <Image source={{ uri: `${BACKEND_URL}${u.thumb_url}` }} style={styles.uploadThumb} contentFit="cover" />
+                </TouchableOpacity>
+              ))}
+            </View>
+          ) : null}
           {sel.note ? <Text style={styles.note}>« {sel.note} »</Text> : null}
-          {sel.photo_ids?.length ? (
+          {sel.photo_ids?.length || sel.uploads?.length ? (
             <TouchableOpacity style={[styles.btn, { alignSelf: "flex-start", marginTop: 8 }]} onPress={downloadSelection} testID="deliv-selection-download">
               <Ionicons name="download-outline" size={16} color="#0A0A0A" />
               <Text style={styles.btnTxt}>Télécharger la sélection (ZIP)</Text>
@@ -182,7 +192,7 @@ export function AdminDeliverablesPanel({ project, onChanged, reload }: { project
           ) : null}
         </View>
       ) : (
-        <Text style={styles.muted}>En attente : les mariés cochent leurs photos dans la galerie (ou saisissent la liste des noms si lien Synology).</Text>
+        <Text style={styles.muted}>En attente : les mariés cochent leurs photos dans la galerie, ou nous envoient directement leurs photos choisies (cas lien Synology, jusqu&apos;à 50).</Text>
       )}
 
       {/* ---- 7. Musique ---- */}
@@ -207,21 +217,16 @@ export function AdminDeliverablesPanel({ project, onChanged, reload }: { project
       )}
 
       {/* ---- 9. Livraison ---- */}
-      <Text style={styles.section}>9 · Livraison (lien de téléchargement du film)</Text>
-      <View style={styles.inputRow}>
-        <TextInput
-          style={styles.input}
-          value={deliveryLink}
-          onChangeText={setDeliveryLink}
-          placeholder="Lien Synology du film final (> 40 Go)"
-          placeholderTextColor={colors.textDisabled}
-          autoCapitalize="none"
-          testID="deliv-delivery-link"
-        />
-        <TouchableOpacity style={styles.saveBtn} onPress={() => saveLinks("delivery")} disabled={saving === "delivery"} testID="deliv-delivery-save">
-          {saving === "delivery" ? <ActivityIndicator color="#0A0A0A" size="small" /> : <Ionicons name="checkmark" size={20} color="#0A0A0A" />}
-        </TouchableOpacity>
-      </View>
+      <Text style={styles.section}>9 · Livraison (liens de téléchargement du film)</Text>
+      <LinksEditor
+        links={deliveryLinks}
+        onChange={setDeliveryLinks}
+        onSave={() => saveLinks("delivery")}
+        saving={saving === "delivery"}
+        labelPlaceholder="Ex. Film complet, Bande-annonce 4K"
+        urlPlaceholder="Lien Synology du film (> 40 Go)"
+        testID="deliv-delivery"
+      />
 
       {/* ---- Modal ZIP ---- */}
       <Modal visible={zipModal} transparent animationType="fade" onRequestClose={() => setZipModal(false)}>
@@ -263,7 +268,59 @@ export function AdminDeliverablesPanel({ project, onChanged, reload }: { project
   );
 }
 
+function LinksEditor({ links, onChange, onSave, saving, labelPlaceholder, urlPlaceholder, testID }: {
+  links: LinkItem[]; onChange: (l: LinkItem[]) => void; onSave: () => void; saving: boolean;
+  labelPlaceholder: string; urlPlaceholder: string; testID: string;
+}) {
+  const update = (i: number, patch: Partial<LinkItem>) => onChange(links.map((l, j) => (j === i ? { ...l, ...patch } : l)));
+  return (
+    <View style={{ gap: 8 }}>
+      {links.map((l, i) => (
+        <View key={i} style={styles.linkRow} testID={`${testID}-row-${i}`}>
+          <View style={{ flex: 1, minWidth: 0, gap: 6 }}>
+            <TextInput
+              style={styles.input}
+              value={l.label}
+              onChangeText={(t) => update(i, { label: t })}
+              placeholder={labelPlaceholder}
+              placeholderTextColor={colors.textDisabled}
+              testID={`${testID}-label-${i}`}
+            />
+            <TextInput
+              style={styles.input}
+              value={l.url}
+              onChangeText={(t) => update(i, { url: t })}
+              placeholder={urlPlaceholder}
+              placeholderTextColor={colors.textDisabled}
+              autoCapitalize="none"
+              testID={`${testID}-url-${i}`}
+            />
+          </View>
+          <TouchableOpacity style={styles.removeBtn} onPress={() => onChange(links.filter((_, j) => j !== i))} testID={`${testID}-remove-${i}`}>
+            <Ionicons name="trash-outline" size={18} color={colors.error} />
+          </TouchableOpacity>
+        </View>
+      ))}
+      <View style={styles.linkActions}>
+        <TouchableOpacity style={styles.btnGhost} onPress={() => onChange([...links, { label: "", url: "" }])} testID={`${testID}-add`}>
+          <Ionicons name="add" size={16} color={colors.gold} />
+          <Text style={styles.btnGhostTxt}>Ajouter un lien</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[styles.btn, { flex: 1, justifyContent: "center" }]} onPress={onSave} disabled={saving} testID={`${testID}-save`}>
+          {saving ? <ActivityIndicator color="#0A0A0A" size="small" /> : <Ionicons name="checkmark" size={16} color="#0A0A0A" />}
+          <Text style={styles.btnTxt}>Enregistrer</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
+  linkRow: { flexDirection: "row", gap: 8, alignItems: "center", padding: 8, borderRadius: radii.sm, borderWidth: 1, borderColor: colors.border, backgroundColor: "rgba(255,255,255,0.02)" },
+  linkActions: { flexDirection: "row", gap: spacing.sm, alignItems: "center" },
+  removeBtn: { width: 44, height: 44, alignItems: "center", justifyContent: "center", borderRadius: radii.sm, borderWidth: 1, borderColor: "rgba(211,47,47,0.4)" },
+  uploadGrid: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 6 },
+  uploadThumb: { width: 56, height: 56, borderRadius: 6, backgroundColor: colors.bg },
   box: {
     padding: spacing.md, backgroundColor: colors.surface, borderWidth: 1, borderColor: "rgba(212,175,55,0.25)",
     borderRadius: radii.md, marginBottom: spacing.md,
@@ -287,7 +344,7 @@ const styles = StyleSheet.create({
   inputRow: { flexDirection: "row", gap: spacing.sm, alignItems: "center" },
   input: {
     flex: 1, backgroundColor: "rgba(255,255,255,0.03)", borderWidth: 1, borderColor: colors.border, borderRadius: radii.sm,
-    paddingHorizontal: 12, minHeight: 44, color: colors.ivory, fontSize: 13,
+    paddingHorizontal: 12, minHeight: 44, color: colors.ivory, fontSize: 13, minWidth: 0,
   },
   saveBtn: { width: 44, height: 44, borderRadius: radii.sm, backgroundColor: colors.gold, alignItems: "center", justifyContent: "center" },
   received: {

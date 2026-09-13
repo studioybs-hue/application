@@ -63,7 +63,7 @@ type Props = {
   compact?: boolean;
   showHeader?: boolean;
   /** Actions concrètes proposées aux mariés sous certaines étapes (clé d'étape → action). */
-  stepActions?: Record<string, StepAction | undefined>;
+  stepActions?: Record<string, StepAction | StepAction[] | undefined>;
 };
 
 const STATUS_COLORS: Record<StepStatus, { border: string; bg: string; icon: string; iconColor: string; title: string; badge: string; badgeBg: string; badgeText: string; }> = {
@@ -164,7 +164,8 @@ export function ProjectTrackingView({ project, onStepPress, compact = false, sho
         ) : null}
         {project.steps.map((step, index) => {
           const s = STATUS_COLORS[step.status];
-          const action = stepActions?.[step.key];
+          const raw = stepActions?.[step.key];
+          const actions: StepAction[] = raw ? (Array.isArray(raw) ? raw : [raw]) : [];
           const body = (
             <View style={[styles.stepCard, { borderColor: s.border, backgroundColor: s.bg }]}>
               <View style={styles.stepRow}>
@@ -189,18 +190,22 @@ export function ProjectTrackingView({ project, onStepPress, compact = false, sho
                   <Ionicons name="chevron-forward" size={18} color={s.badgeText} style={{ marginLeft: 6 }} />
                 )}
               </View>
-              {action ? (
+              {actions.length ? (
                 <View style={styles.actionWrap}>
-                  <TouchableOpacity
-                    style={[styles.actionBtn, action.secondary && styles.actionBtnSecondary]}
-                    onPress={action.onPress}
-                    activeOpacity={0.8}
-                    testID={action.testID || `project-step-action-${step.key}`}
-                  >
-                    <Ionicons name={action.icon as any} size={16} color={action.secondary ? colors.gold : "#0A0A0A"} />
-                    <Text style={[styles.actionTxt, action.secondary && { color: colors.gold }]}>{action.label}</Text>
-                  </TouchableOpacity>
-                  {action.hint ? <Text style={styles.actionHint}>{action.hint}</Text> : null}
+                  {actions.map((action, ai) => (
+                    <View key={ai} style={ai > 0 ? { marginTop: 8 } : undefined}>
+                      <TouchableOpacity
+                        style={[styles.actionBtn, action.secondary && styles.actionBtnSecondary]}
+                        onPress={action.onPress}
+                        activeOpacity={0.8}
+                        testID={action.testID || (ai === 0 ? `project-step-action-${step.key}` : `project-step-action-${step.key}-${ai}`)}
+                      >
+                        <Ionicons name={action.icon as any} size={16} color={action.secondary ? colors.gold : "#0A0A0A"} />
+                        <Text style={[styles.actionTxt, action.secondary && { color: colors.gold }]}>{action.label}</Text>
+                      </TouchableOpacity>
+                      {action.hint ? <Text style={styles.actionHint}>{action.hint}</Text> : null}
+                    </View>
+                  ))}
                 </View>
               ) : null}
             </View>

@@ -88,7 +88,7 @@ st, r = call("POST", f"/projects/{cid}/music", {"title": "Perfect", "artist": "E
 assert st == 200 and next(s for s in r["project"]["steps"] if s["key"] == "music")["status"] == "done", r
 
 # liens admin (Synology) + livraison
-st, r = call("PATCH", f"/admin/projects/{cid}/deliverables", {"photos_link": "https://gofile.me/abc", "delivery_link": "https://gofile.me/film", "notify": False}, token=admin)
+st, r = call("PATCH", f"/admin/projects/{cid}/deliverables", {"photos_links": [{"label": "Photos", "url": "https://gofile.me/abc"}], "delivery_links": [{"label": "Film", "url": "https://gofile.me/film"}], "notify": False}, token=admin)
 assert st == 200 and r["deliverables"]["photos"]["link"] and r["deliverables"]["delivery"]["link"], r
 assert next(s for s in r["steps"] if s["key"] == "delivery")["status"] == "done"
 assert r["deliverables"]["photos"]["mode"] == "gallery"  # galerie déjà importée → reste galerie

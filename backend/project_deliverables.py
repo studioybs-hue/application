@@ -52,7 +52,9 @@ from project_tracking import (
 
 log = logging.getLogger("project_deliverables")
 
-SELECTION_MAX = 40
+SELECTION_MAX = 40            # cases cochées dans la galerie
+SELECTION_UPLOAD_MAX = 50     # photos envoyées directement par les mariés (tolérance)
+SELECTION_UPLOAD_FILE_MAX = 60 * 1024 * 1024
 MUSIC_FILE_MAX_BYTES = 40 * 1024 * 1024
 ZIP_SKIP_PARTS = {"__MACOSX"}
 ARCHIVE_EXTS = {".zip", ".rar", ".7z"}
@@ -169,10 +171,27 @@ class MusicBody(BaseModel):
     note: Optional[str] = Field(default=None, max_length=2000)
 
 
+class LinkItem(BaseModel):
+    label: str = Field(default="", max_length=120)
+    url: str = Field(min_length=1, max_length=2000)
+
+
 class DeliverableLinksBody(BaseModel):
-    photos_link: Optional[str] = None      # "" → supprimer
-    delivery_link: Optional[str] = None    # "" → supprimer
+    # Plusieurs liens libellés (ex. « Photos cérémonie », « Film complet ») ; [] → tout supprimer
+    photos_links: Optional[list[LinkItem]] = None
+    delivery_links: Optional[list[LinkItem]] = None
     notify: bool = True
+
+
+def _clean_links(items: list[LinkItem], default_label: str) -> list[dict]:
+    out = []
+    for i, it in enumerate(items):
+        url = _clean_link(it.url)
+        if not url:
+            continue
+        label = (it.label or "").strip() or (default_label if len(items) == 1 else f"{default_label} {i + 1}")
+        out.append({"label": label, "url": url})
+    return out
 
 
 class ZipImportBody(BaseModel):
@@ -436,10 +455,11 @@ def register_project_deliverables_routes(
             names = [by_id[i].get("original_name") or by_id[i]["filename"] for i in ids]
         text = (body.filenames_text or "").strip()
         link = _clean_link(body.link)
-        if not ids and not text and not link:
-            raise HTTPException(400, "Cochez vos photos ou indiquez les noms de fichiers / un lien")
-        count = len(ids) if ids else len([t for t in re.split(r"[,\n;]+", text) if t.strip()])
-        data = {"photo_ids": ids, "filenames": names, "filenames_text": text or None, "link": link,
+        uploads = ((p.get("deliverables") or {}).get("selection") or {}).get("uploads") or []
+        if not ids and not uploads and not text and not link:
+            raise HTTPException(400, "Cochez vos photos dans la galerie ou envoyez-nous vos photos choisies")
+        count = len(ids) if ids else (len(uploads) if uploads else len([t for t in re.split(r"[,\n;]+", text) if t.strip()]))
+        data = {"photo_ids": ids, "filenames": names, "filenames_text": text or None, "link": link, "uploads": uploads,
                 "note": (body.note or "").strip() or None, "count": count, "submitted_at": _utcnow(),
                 "user_id": current.get("id"), "user_email": current.get("email")}
         await _set_deliverable(client_id, "selection", data)
@@ -448,12 +468,70 @@ def register_project_deliverables_routes(
         await _alert_admin(
             "✅ Sélection de photos reçue",
             [f"<b>Mariage :</b> {wedding}", f"<b>Photos :</b> {count}", f"<b>Par :</b> {current.get('email')}"]
+            + ([f"<b>Photos envoyées :</b> {len(uploads)} (ZIP téléchargeable dans l'admin)"] if uploads else [])
             + ([f"<b>Lien :</b> <a href='{link}'>{link}</a>"] if link else [])
             + ([f"<b>Fichiers :</b> {text[:1500]}"] if text else [])
             + ([f"<b>Note :</b> {data['note']}"] if data.get("note") else []),
             f"CINEMARIES: selection de {count} photos recue pour {wedding}",
         )
         return {"ok": True, "project": _public(await _get_project(client_id))}
+
+    @api_router.post("/projects/{client_id}/selection/upload")
+    async def upload_selection_photo(client_id: str, file: UploadFile = File(...), current: dict = Depends(get_current_user)):
+        """Les mariés envoient directement une photo choisie (cas lien Synology). Jusqu'à SELECTION_UPLOAD_MAX photos."""
+        p = await _get_project(client_id)
+        await _assert_owner(current, client_id, p)
+        sel = (p.get("deliverables") or {}).get("selection") or {}
+        uploads = list(sel.get("uploads") or [])
+        if len(uploads) >= SELECTION_UPLOAD_MAX:
+            raise HTTPException(400, f"Maximum {SELECTION_UPLOAD_MAX} photos. Supprimez-en une pour en ajouter.")
+        ext = Path(file.filename or "").suffix.lower()
+        if ext not in ALLOWED_PHOTO_EXTS:
+            raise HTTPException(400, "Format non supporté (JPG, PNG ou WEBP)")
+        sel_dir = ensure_photos_dirs(UPLOAD_DIR, client_id)["base"] / "selection"
+        (sel_dir / "thumbs").mkdir(parents=True, exist_ok=True)
+        used = {u["filename"].lower() for u in uploads}
+        fname = _safe_filename(file.filename or f"photo{ext}", used)
+        dst = sel_dir / fname
+        size = 0
+        with open(dst, "wb") as out:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > SELECTION_UPLOAD_FILE_MAX:
+                    out.close()
+                    dst.unlink(missing_ok=True)
+                    raise HTTPException(413, "Photo trop lourde (60 Mo max)")
+                out.write(chunk)
+        try:
+            await asyncio.to_thread(generate_thumbnail, dst, sel_dir / "thumbs" / fname)
+        except Exception as exc:
+            dst.unlink(missing_ok=True)
+            raise HTTPException(400, f"Image illisible : {exc}")
+        item = {"id": str(uuid.uuid4()), "filename": fname, "original_name": file.filename, "size": size,
+                "url": f"/api/uploads/photos/{client_id}/selection/{fname}",
+                "thumb_url": f"/api/uploads/photos/{client_id}/selection/thumbs/{fname}", "uploaded_at": _utcnow()}
+        uploads.append(item)
+        await _set_deliverable(client_id, "selection", {**sel, "uploads": uploads})
+        return {"ok": True, "upload": item, "count": len(uploads), "max": SELECTION_UPLOAD_MAX}
+
+    @api_router.delete("/projects/{client_id}/selection/upload/{upload_id}")
+    async def delete_selection_photo(client_id: str, upload_id: str, current: dict = Depends(get_current_user)):
+        p = await _get_project(client_id)
+        await _assert_owner(current, client_id, p)
+        sel = (p.get("deliverables") or {}).get("selection") or {}
+        uploads = list(sel.get("uploads") or [])
+        item = next((u for u in uploads if u["id"] == upload_id), None)
+        if not item:
+            raise HTTPException(404, "Photo introuvable")
+        sel_dir = ensure_photos_dirs(UPLOAD_DIR, client_id)["base"] / "selection"
+        (sel_dir / item["filename"]).unlink(missing_ok=True)
+        (sel_dir / "thumbs" / item["filename"]).unlink(missing_ok=True)
+        uploads = [u for u in uploads if u["id"] != upload_id]
+        await _set_deliverable(client_id, "selection", {**sel, "uploads": uploads, "count": len(uploads) if not sel.get("photo_ids") else sel.get("count")})
+        return {"ok": True, "count": len(uploads)}
 
     @api_router.post("/projects/{client_id}/music")
     async def submit_music(client_id: str, body: MusicBody, current: dict = Depends(get_current_user)):
@@ -516,18 +594,21 @@ def register_project_deliverables_routes(
     async def admin_set_links(client_id: str, body: DeliverableLinksBody, admin: dict = Depends(require_admin)):
         p = await _get_project(client_id)
         d = p.get("deliverables") or {}
-        if body.photos_link is not None:
-            link = _clean_link(body.photos_link)
+        if body.photos_links is not None:
+            links = _clean_links(body.photos_links, "Mes photos")
             photos = d.get("photos") or {}
-            if link:
-                await _set_deliverable(client_id, "photos", {**photos, "link": link, "mode": photos.get("mode") if photos.get("imported_count") else "link"})
+            first = links[0]["url"] if links else None
+            if links:
+                await _set_deliverable(client_id, "photos", {**photos, "links": links, "link": first,
+                                                             "mode": photos.get("mode") if photos.get("imported_count") else "link"})
                 await _set_step(client_id, "photos_delivery", STATUS_DONE, body.notify)
             else:
-                await _set_deliverable(client_id, "photos", {**photos, "link": None, "mode": "gallery" if photos.get("imported_count") else None})
-        if body.delivery_link is not None:
-            link = _clean_link(body.delivery_link)
-            await _set_deliverable(client_id, "delivery", {"link": link})
-            if link:
+                await _set_deliverable(client_id, "photos", {**photos, "links": [], "link": None,
+                                                             "mode": "gallery" if photos.get("imported_count") else None})
+        if body.delivery_links is not None:
+            links = _clean_links(body.delivery_links, "Mon film")
+            await _set_deliverable(client_id, "delivery", {"links": links, "link": links[0]["url"] if links else None})
+            if links:
                 await _set_step(client_id, "delivery", STATUS_DONE, body.notify)
         return _public(await _get_project(client_id))
 
@@ -590,20 +671,24 @@ def register_project_deliverables_routes(
         p = await _get_project(client_id)
         sel = (p.get("deliverables") or {}).get("selection") or {}
         ids = sel.get("photo_ids") or []
-        if not ids:
-            raise HTTPException(404, "Aucune photo cochée dans la sélection (sélection par liste de noms ?)")
-        photos = await db.wedding_photos.find({"wedding_id": client_id, "id": {"$in": ids}}, {"_id": 0}).to_list(SELECTION_MAX + 1)
+        uploads = sel.get("uploads") or []
+        if not ids and not uploads:
+            raise HTTPException(404, "Aucune photo dans la sélection des mariés")
+        photos = await db.wedding_photos.find({"wedding_id": client_id, "id": {"$in": ids}}, {"_id": 0}).to_list(SELECTION_MAX + 1) if ids else []
         dirs = ensure_photos_dirs(UPLOAD_DIR, client_id)
+        sel_dir = dirs["base"] / "selection"
         safe = re.sub(r"[^A-Za-z0-9_-]+", "_", p.get("wedding_name") or client_id)[:50]
+        files: list[tuple[Path, str]] = [(dirs["originals"] / ph["filename"], ph.get("original_name") or ph["filename"]) for ph in photos]
+        files += [(sel_dir / u["filename"], u.get("original_name") or u["filename"]) for u in uploads]
 
         def _iter():
             import io
             buf = io.BytesIO()
             with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as zf:
-                for ph in photos:
-                    src = dirs["originals"] / ph["filename"]
+                used: set[str] = set()
+                for src, name in files:
                     if src.exists():
-                        zf.write(str(src), arcname=ph.get("original_name") or ph["filename"])
+                        zf.write(str(src), arcname=_safe_filename(name, used))
             buf.seek(0)
             while True:
                 chunk = buf.read(64 * 1024)
@@ -612,7 +697,7 @@ def register_project_deliverables_routes(
                 yield chunk
 
         return StreamingResponse(_iter(), media_type="application/zip",
-                                 headers={"Content-Disposition": f'attachment; filename="SELECTION_{safe}_{len(photos)}photos.zip"'})
+                                 headers={"Content-Disposition": f'attachment; filename="SELECTION_{safe}_{len(files)}photos.zip"'})
 
     log.info("[project_deliverables] routes registered")
     return {"import_zip_to_gallery": import_zip_to_gallery}
