@@ -204,6 +204,12 @@ def _my_cid(user: dict) -> Optional[str]:
     return user.get("client_id") or user.get("claimed_client_id")
 
 
+def _is_cover_record(v: dict) -> bool:
+    """Fiche « couverture » d'un mariage : catégorie À l'affiche sans film complet.
+    Elle porte poster / hero / bande-annonce et ne doit pas apparaître comme une vidéo."""
+    return v.get("category") == "À l'affiche" and not (v.get("full_url") or "").strip()
+
+
 def _owns_wedding(user: Optional[dict], client_id: str) -> bool:
     """Le mariage appartient-il à ce compte (assigné par l'admin ou revendiqué) ?"""
     if not user or not client_id:
@@ -980,6 +986,10 @@ async def _sync_subscription_from_stripe(u: dict) -> Optional[dict]:
     await db.users.update_one({"id": u["id"]}, {"$set": update})
     u.update(update)
     logging.info(f"[StripeSync] Healed subscription for {email} (sub={active_sub.id}, status={active_sub.status})")
+    try:
+        await _send_welcome_premium_email(u["id"], plan_code=u.get("subscription_plan"))
+    except Exception as e:
+        logging.warning(f"[welcome] échec (heal): {e}")
     return u
 
 
@@ -1731,7 +1741,13 @@ async def get_wedding(client_id: str, code: Optional[str] = None, current: Optio
     wedding["unlocked"] = unlocked
     # Owner flag — premium clients see "Invite friends" button on their own wedding
     wedding["is_my_wedding"] = bool(current and _owns_wedding(current, client_id))
-    wedding["videos"] = [video_to_public(v, include_full=unlocked) for v in filtered]
+    # Bande-annonce du mariage : celle de la fiche principale (À l'affiche) sinon la première disponible
+    main_v = next((v for v in filtered if v.get("category") == "À l'affiche" and v.get("trailer_url")), None) \
+        or next((v for v in filtered if v.get("trailer_url")), None)
+    wedding["trailer_url"] = _abs_url(main_v.get("trailer_url")) if main_v else ""
+    # La fiche « couverture » (À l'affiche sans film) n'est pas une vidéo → masquée de la liste
+    films = [v for v in filtered if not _is_cover_record(v)] or filtered
+    wedding["videos"] = [video_to_public(v, include_full=unlocked) for v in films]
     # sort videos by category preferring chronological wedding day order
     cat_order = {"À l'affiche": 0, "Cérémonies": 1, "Soirées": 2, "Best Of": 3}
     wedding["videos"].sort(key=lambda x: cat_order.get(x.get("category", ""), 99))
@@ -2677,6 +2693,7 @@ async def billing_status(session_id: Optional[str] = None, current: dict = Depen
                 # 🔔 Notify admin (fallback path if webhook was missed)
                 try:
                     await _notify_admin_new_subscription(current["id"], plan_code=plan_code, source="billing_status")
+                    await _send_welcome_premium_email(current["id"], plan_code=plan_code)
                 except Exception as e:
                     logging.warning(f"Admin notif failed (billing_status): {e}")
         except Exception as e:
@@ -2875,6 +2892,48 @@ async def billing_portal(current: dict = Depends(get_current_user)):
         raise HTTPException(status_code=502, detail=f"Erreur Stripe: {str(e)}")
 
 
+async def _send_welcome_premium_email(user_id: str, plan_code: Optional[str] = None):
+    """Email de bienvenue au client dès que son abonnement Premium est actif.
+    Idempotent par abonnement Stripe (welcome_premium_sent_for = stripe_subscription_id)."""
+    u = await db.users.find_one({"id": user_id}, {"_id": 0})
+    if not u or not u.get("is_subscribed") or not u.get("email"):
+        return
+    sub_key = u.get("stripe_subscription_id") or "premium"
+    if u.get("welcome_premium_sent_for") == sub_key:
+        return
+    if not smtp_configured():
+        logging.info("[welcome] SMTP non configuré — email de bienvenue non envoyé")
+        return
+    plan = PLANS.get(plan_code or u.get("subscription_plan") or "", {})
+    plan_label = plan.get("label") or "Premium"
+    amount = plan.get("amount")
+    interval = "an" if plan.get("interval") == "year" else "mois"
+    price_txt = f"{amount / 100:.2f} € / {interval}".replace(".", ",") if amount else ""
+    wedding = u.get("claimed_client_name") or ""
+    tier = u.get("subscription_tier") or "basic"
+    codes_txt = "codes invités illimités" if tier == "unlimited" else f"jusqu'à {BASIC_MAX_CODES} codes invités"
+    first = (u.get("full_name") or "").split(" ")[0] or "Bonjour"
+    body = f"""
+      <p>Bonjour {first},</p>
+      <p>Votre abonnement <b>{plan_label}</b>{f" ({price_txt})" if price_txt else ""} est <b>actif</b>. Merci pour votre confiance 💛</p>
+      <p><b>Ce que vous pouvez faire dès maintenant :</b></p>
+      <ul style='line-height:1.8'>
+        <li>🎬 Regarder les films complets de votre mariage{f" <b>{wedding}</b>" if wedding else ""} en illimité</li>
+        <li>🔑 Créer des codes d'accès pour vos proches ({codes_txt}) depuis <b>Profil → Mes codes invités</b></li>
+        <li>📺 Profiter de l'application sur téléphone, tablette, ordinateur et TV (Chromecast)</li>
+        <li>💌 Découvrir les messages de votre livre d'or dans votre espace</li>
+      </ul>
+      <p>Vous pouvez gérer ou résilier votre abonnement à tout moment depuis <b>Profil → Abonnement</b>.</p>
+    """
+    html = render_email("💎 Bienvenue dans CINÉMARIÉS Premium", body, cta_label="Ouvrir mon espace", cta_url=f"{APP_PUBLIC_URL or 'https://cinemaries.fr'}/profile")
+    ok = await send_email(u["email"], "💎 Bienvenue dans CINÉMARIÉS Premium — votre abonnement est actif", html)
+    if ok:
+        await db.users.update_one({"id": user_id}, {"$set": {"welcome_premium_sent_for": sub_key, "welcome_premium_sent_at": utcnow()}})
+        logging.info(f"[welcome] Email de bienvenue Premium envoyé à {u['email']}")
+    else:
+        logging.warning(f"[welcome] Échec envoi email de bienvenue à {u['email']}")
+
+
 async def _notify_admin_new_subscription(user_id: str, plan_code: Optional[str] = None, source: str = "webhook"):
     """Send email + push notification to admin(s) about a new paid subscription.
 
@@ -3021,6 +3080,7 @@ async def stripe_webhook(request: Request, stripe_signature: Optional[str] = Hea
                 # 🔔 Notify admin (email + push)
                 try:
                     await _notify_admin_new_subscription(user_id, plan_code=meta.get("plan"), source="webhook")
+                    await _send_welcome_premium_email(user_id, plan_code=meta.get("plan"))
                 except Exception as e:
                     logging.warning(f"Admin notif failed: {e}")
         elif event_type in ("customer.subscription.updated", "customer.subscription.created"):
@@ -3153,7 +3213,12 @@ async def admin_stats(_: dict = Depends(require_admin)):
 @api_router.get("/admin/videos")
 async def admin_list_videos(_: dict = Depends(require_admin)):
     videos = await db.videos.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
-    return {"videos": [video_to_public(v, include_full=True) for v in videos]}
+    out = []
+    for v in videos:
+        pub = video_to_public(v, include_full=True)
+        pub["is_cover"] = _is_cover_record(v)
+        out.append(pub)
+    return {"videos": out}
 
 
 @api_router.post("/admin/test-email")
@@ -3385,7 +3450,16 @@ async def admin_update_video(video_id: str, body: VideoUpdate, _: dict = Depends
 
 
 @api_router.delete("/admin/videos/{video_id}")
-async def admin_delete_video(video_id: str, _: dict = Depends(require_admin)):
+async def admin_delete_video(video_id: str, force: bool = False, _: dict = Depends(require_admin)):
+    v = await db.videos.find_one({"id": video_id}, {"_id": 0})
+    if v and _is_cover_record(v) and not force:
+        cid = v.get("client_id") or slugify(v.get("title", ""))
+        others = await db.videos.count_documents({"client_id": cid, "id": {"$ne": video_id}})
+        if others:
+            raise HTTPException(
+                status_code=400,
+                detail="Cette fiche est la couverture du mariage (poster, hero, bande-annonce) : elle n'est pas une vidéo et ne peut pas être supprimée tant que le mariage a des prestations.",
+            )
     res = await db.videos.delete_one({"id": video_id})
     if res.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Vidéo introuvable")

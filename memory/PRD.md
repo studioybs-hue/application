@@ -150,3 +150,8 @@ User's primary language: **French** — always respond in French.
 - **Import** : `default_showcase=false` (prod aussi) ; forme « {mot-clé} {Mariés} » (« Bande anonce hanifa.mp4 », « Poster Yassina.jpg ») ; faute « anonce » tolérée ; prestation inconnue déduite si le début du nom correspond à un mariage existant (`_guess_new_prestation` : « Sarahline Kandou.mp4 » → Kandou) ; `_main_video` recrée la fiche principale « À l'affiche » si l'admin l'a supprimée.
 - Prod : fiche principale « Yassina & Bensaid » recréée (l'utilisateur l'avait supprimée) avec poster/hero/bande-annonce ; Kandou + Djaliko ajoutés à Sarhaline & Elarif ; bande-annonce Hanifa relancée.
 - ⚠️ L'utilisateur a supprimé/recréé des mariages dans l'admin (sarahaline-elarif → sarhaline). Ne pas supprimer la vidéo « À l'affiche » : c'est elle qui porte poster/hero/bande-annonce/film complet.
+
+### 2026-09-13 — Couverture de mariage + email de bienvenue Premium (déployé)
+- `_is_cover_record` (À l'affiche sans full_url) : masquée de `wedding.videos` côté client, `wedding.trailer_url` ajouté (page mariage l'utilise), flag `is_cover` dans `/admin/videos` (liste admin : ligne « Couverture du mariage », cadenas au lieu de la corbeille), DELETE refusé (400) tant que le mariage a d'autres vidéos (`?force=true` pour passer outre).
+- Couvertures yassina/sarhaline restaurées en prod à partir de `import_jobs` (l'utilisateur les avait supprimées en croyant à une « fiche démo »).
+- `_send_welcome_premium_email` (server.py) : appelé après activation (webhook checkout, billing/refresh heal, StripeSync heal) ; idempotent par `stripe_subscription_id` (`welcome_premium_sent_for`). ⚠️ Non délivré tant que le SMTP IONOS refuse l'auth (535) — proposer SMTP Brevo (Admin → Réglages email).

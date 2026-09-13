@@ -26,6 +26,8 @@ type V = {
   is_top_france?: boolean;
   is_featured?: boolean;
   is_showcase?: boolean;
+  is_cover?: boolean;
+  trailer_url?: string;
 };
 
 export default function AdminVideosList() {
@@ -138,7 +140,11 @@ export default function AdminVideosList() {
                 <Image source={{ uri: v.poster_url }} style={styles.poster} contentFit="cover" />
                 <View style={{ flex: 1 }}>
                   <Text style={styles.rowTitle} numberOfLines={1}>{v.title}</Text>
-                  <Text style={styles.rowMeta}>{v.category} · {v.duration_minutes} min</Text>
+                  {v.is_cover ? (
+                    <Text style={[styles.rowMeta, { color: colors.gold }]}>🖼 Couverture du mariage · poster, hero{v.trailer_url ? ", bande-annonce" : ""}</Text>
+                  ) : (
+                    <Text style={styles.rowMeta}>{v.category} · {v.duration_minutes} min</Text>
+                  )}
                   <View style={styles.badges}>
                     {v.is_top_france && <View style={[styles.badge, { backgroundColor: colors.wine }]}><Text style={styles.badgeTxt}>N°1</Text></View>}
                     {v.is_featured && <View style={[styles.badge, { backgroundColor: colors.gold }]}><Text style={[styles.badgeTxt, { color: "#0A0A0A" }]}>Featured</Text></View>}
@@ -149,9 +155,19 @@ export default function AdminVideosList() {
                   <TouchableOpacity onPress={() => router.push(`/admin/video-edit/${v.id}`)} style={styles.iconBtn} testID={`edit-${v.id}`}>
                     <Ionicons name="create-outline" size={20} color={colors.gold} />
                   </TouchableOpacity>
-                  <TouchableOpacity onPress={() => onDelete(v)} style={styles.iconBtn} testID={`delete-${v.id}`}>
-                    <Ionicons name="trash-outline" size={20} color={colors.error} />
-                  </TouchableOpacity>
+                  {v.is_cover ? (
+                    <TouchableOpacity
+                      onPress={() => showAlert("Couverture du mariage", "Cette fiche n'est pas une vidéo : elle porte le poster, le hero et la bande-annonce du mariage. Modifiez-la avec le crayon ; elle ne peut pas être supprimée tant que le mariage a des prestations.")}
+                      style={styles.iconBtn}
+                      testID={`cover-info-${v.id}`}
+                    >
+                      <Ionicons name="lock-closed-outline" size={20} color={colors.textSecondary} />
+                    </TouchableOpacity>
+                  ) : (
+                    <TouchableOpacity onPress={() => onDelete(v)} style={styles.iconBtn} testID={`delete-${v.id}`}>
+                      <Ionicons name="trash-outline" size={20} color={colors.error} />
+                    </TouchableOpacity>
+                  )}
                 </View>
               </View>
             ))

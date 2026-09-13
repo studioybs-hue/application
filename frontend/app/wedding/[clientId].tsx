@@ -221,7 +221,7 @@ export default function WeddingScreen() {
   }
   if (!wedding) return null;
 
-  const teaserUrl = wedding.videos[0]?.trailer_url;
+  const teaserUrl = (wedding as any).trailer_url || wedding.videos[0]?.trailer_url;
   const teaserHtml = teaserUrl ? `
     <html><head><meta name="viewport" content="width=device-width,initial-scale=1"/>
     <style>html,body{margin:0;padding:0;background:#0A0A0A;height:100%;}
