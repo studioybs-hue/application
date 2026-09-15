@@ -9,11 +9,8 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { colors } from "@/src/theme";
 import { CookieNotice } from "@/src/ui/CookieNotice";
+import { RootErrorBoundary } from "@/src/components/RootErrorBoundary";
 
-/**
- * Watches the auth state and redirects deactivated users to /account-deactivated.
- * Allowed routes for deactivated users: /account-deactivated, /auth/*, /legal/*
- */
 function DeactivationGuard() {
   const router = useRouter();
   const pathname = usePathname();
@@ -35,8 +32,6 @@ function DeactivationGuard() {
 
 export default function RootLayout() {
   const router = useRouter();
-  // Immersive mode on Android: hide the system navigation bar (Home / Back / Recent)
-  // The bar reappears with a swipe and auto-hides after a moment.
   useEffect(() => {
     if (Platform.OS === "android") {
       (async () => {
@@ -46,20 +41,18 @@ export default function RootLayout() {
           await NavigationBar.setBackgroundColorAsync(colors.bg);
           await NavigationBar.setButtonStyleAsync("light");
         } catch (e) {
-          // Silent fail if not supported (e.g. tablets with gesture nav only)
+          // Silent fail if not supported
         }
       })();
     }
   }, []);
 
-  // Handle push notification taps — navigate to deep link in `data.path`
   useEffect(() => {
     if (Platform.OS === "web") return;
     let sub: { remove?: () => void } | null = null;
     (async () => {
       try {
         const Notifications = await import("expo-notifications");
-        // App opened FROM notification (cold start)
         const last = await Notifications.getLastNotificationResponseAsync();
         const handle = (response: any) => {
           try {
@@ -81,23 +74,25 @@ export default function RootLayout() {
   }, [router]);
 
   return (
-    <GestureHandlerRootView style={{ flex: 1, backgroundColor: colors.bg }}>
-      <SafeAreaProvider>
-        <AuthProvider>
-          <ConfirmProvider>
-            <DeactivationGuard />
-            <StatusBar style="light" hidden={false} translucent />
-            <Stack
-              screenOptions={{
-                headerShown: false,
-                contentStyle: { backgroundColor: colors.bg },
-                animation: "fade",
-              }}
-            />
-            <CookieNotice />
-          </ConfirmProvider>
-        </AuthProvider>
-      </SafeAreaProvider>
-    </GestureHandlerRootView>
+    <RootErrorBoundary>
+      <GestureHandlerRootView style={{ flex: 1, backgroundColor: colors.bg }}>
+        <SafeAreaProvider>
+          <AuthProvider>
+            <ConfirmProvider>
+              <DeactivationGuard />
+              <StatusBar style="light" hidden={false} translucent />
+              <Stack
+                screenOptions={{
+                  headerShown: false,
+                  contentStyle: { backgroundColor: colors.bg },
+                  animation: "fade",
+                }}
+              />
+              <CookieNotice />
+            </ConfirmProvider>
+          </AuthProvider>
+        </SafeAreaProvider>
+      </GestureHandlerRootView>
+    </RootErrorBoundary>
   );
 }

@@ -1,0 +1,20 @@
+diff --git a/node_modules/react-native/ReactCommon/react/nativemodule/core/platform/ios/ReactCommon/RCTTurboModule.mm b/node_modules/react-native/ReactCommon/react/nativemodule/core/platform/ios/ReactCommon/RCTTurboModule.mm
+--- a/node_modules/react-native/ReactCommon/react/nativemodule/core/platform/ios/ReactCommon/RCTTurboModule.mm
++++ b/node_modules/react-native/ReactCommon/react/nativemodule/core/platform/ios/ReactCommon/RCTTurboModule.mm
+@@ -435,7 +435,15 @@ void ObjCTurboModule::performVoidMethodInvocation(
+     @try {
+       [inv invokeWithTarget:strongModule];
+     } @catch (NSException *exception) {
+-      throw convertNSExceptionToJSError(runtime, exception, std::string{moduleName}, methodNameStr);
++      // iOS 26 / RN 0.81 New Architecture crash fix — backport of facebook/react-native#56694.
++      // Void TurboModule methods run on a BACKGROUND native queue, so converting an NSException
++      // to a JSError here touches jsi::Runtime OFF the JS thread and aborts the process
++      // (SIGABRT in ObjCTurboModule::performVoidMethodInvocation). Log instead of throwing.
++      RCTLogError(
++          @"Exception thrown while invoking void method %s.%s: %@",
++          moduleName,
++          methodNameStr.c_str(),
++          exception);
+     } @finally {
+       [retainedObjectsForInvocation removeAllObjects];
+     }

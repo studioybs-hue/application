@@ -8,8 +8,14 @@ import * as SecureStore from "expo-secure-store";
 
 import { AssertNoExtras, StorageBase, StorageItemValue } from "./storage-base";
 
+// iOS 26 hardens the Keychain: expo-secure-store calls can raise a native
+// NSException at boot when no keychainService is given. Passing an explicit
+// service avoids that (and, with the RN patch, can never abort the process).
+const SECURE_OPTIONS: SecureStore.SecureStoreOptions = {
+  keychainService: "cinemaries",
+};
+
 export class Storage extends StorageBase {
-  // General KV — backed by AsyncStorage.
   async getItem<Fallback extends StorageItemValue>(
     key: string,
     fallback: Fallback,
@@ -46,13 +52,12 @@ export class Storage extends StorageBase {
     }
   }
 
-  // Sensitive values — Keychain (iOS) / EncryptedSharedPreferences (Android).
   async secureGet<Fallback extends StorageItemValue>(
     key: string,
     fallback: Fallback,
   ): Promise<Fallback | null> {
     try {
-      const raw = await SecureStore.getItemAsync(key);
+      const raw = await SecureStore.getItemAsync(key, SECURE_OPTIONS);
       return this.retrieve(raw, fallback);
     } catch (e) {
       this.warn("secureGet", key, e);
@@ -65,7 +70,7 @@ export class Storage extends StorageBase {
     value: Value,
   ): Promise<boolean> {
     try {
-      await SecureStore.setItemAsync(key, JSON.stringify(value));
+      await SecureStore.setItemAsync(key, JSON.stringify(value), SECURE_OPTIONS);
       return true;
     } catch (e) {
       this.warn("secureSet", key, e);
@@ -75,7 +80,7 @@ export class Storage extends StorageBase {
 
   async secureRemove(key: string): Promise<boolean> {
     try {
-      await SecureStore.deleteItemAsync(key);
+      await SecureStore.deleteItemAsync(key, SECURE_OPTIONS);
       return true;
     } catch (e) {
       this.warn("secureRemove", key, e);
@@ -86,5 +91,4 @@ export class Storage extends StorageBase {
 
 export const storage = new Storage();
 
-// Compile-time guard: any new method must be declared in storage-base.ts first.
 type _NoExtras = AssertNoExtras<Exclude<keyof Storage, keyof StorageBase>>;

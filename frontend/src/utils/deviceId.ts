@@ -3,9 +3,11 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Platform } from "react-native";
 
 const KEY = "cinemaries.device_id";
+const SECURE_OPTIONS: SecureStore.SecureStoreOptions = {
+  keychainService: "cinemaries",
+};
 
 function genUuid(): string {
-  // RFC4122-ish (good enough for client device tagging)
   return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
     const r = (Math.random() * 16) | 0;
     const v = c === "x" ? r : (r & 0x3) | 0x8;
@@ -29,12 +31,11 @@ export async function getDeviceId(): Promise<string> {
         return id;
       }
     } else {
-      // Native: try SecureStore first
       try {
-        let id = await SecureStore.getItemAsync(KEY);
+        let id = await SecureStore.getItemAsync(KEY, SECURE_OPTIONS);
         if (!id) {
           id = genUuid();
-          await SecureStore.setItemAsync(KEY, id);
+          await SecureStore.setItemAsync(KEY, id, SECURE_OPTIONS);
         }
         cached = id;
         return id;
